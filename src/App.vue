@@ -758,7 +758,9 @@ export default {
     },
 
     updateRecommendationStatus() {
-       this.hasRecommendations = true; // Placeholder
+      const tags = this.recommendationSystem.getRecommendedTags(10);
+      this.recommendedTags = tags;
+      this.hasRecommendations = tags.length > 0;
     },
     
     handleKeydown(e) {
