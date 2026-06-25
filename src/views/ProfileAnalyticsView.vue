@@ -334,6 +334,7 @@ export default {
         tagDislikes: {},
         videoTimes: []
       },
+      loadedTagScores: {},
       commonTagsInput: COMMON_TAGS.join(' ')
     };
   },
@@ -351,10 +352,8 @@ export default {
     },
 
     recommendationTagScores() {
-        // Get tag scores from the recommendation system
-        const scores = RecommendationSystem.summarizeTagScores(50);
         // Filter out hidden tags
-        const filtered = Object.entries(scores)
+        const filtered = Object.entries(this.loadedTagScores)
             .filter(([tag]) => this.isTagHidden(tag) === false)
             .slice(0, 50);
         return Object.fromEntries(filtered);
@@ -390,9 +389,8 @@ export default {
 
 
     pieData() {
-        // Use recommendation system scores for the pie chart (top 10 tags)
-        const scores = RecommendationSystem.summarizeTagScores(50);
-        const sorted = Object.entries(scores)
+        // Use loaded tag scores for the pie chart (top 10 tags)
+        const sorted = Object.entries(this.loadedTagScores)
              .filter(([tag]) => !this.isTagHidden(tag))
              .filter(([, score]) => score > 0)
             .sort((a, b) => b[1] - a[1]);
@@ -497,6 +495,8 @@ export default {
     },
     async calculateAnalytics() {
       this.loading = true;
+      
+      this.loadedTagScores = await RecommendationSystem.summarizeTagScores(50);
       
       // 1. Fetch Data
       // view history: { postId: { lastViewed, data: post } }

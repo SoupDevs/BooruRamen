@@ -59,6 +59,11 @@ db.version(2).stores({
 export async function migrateFromLocalStorage() {
     const MIGRATION_KEY = 'booruRamen_indexeddb_migrated';
 
+    // Check if environment supports localStorage
+    if (typeof localStorage === 'undefined') {
+        return;
+    }
+
     // Check if already migrated
     if (localStorage.getItem(MIGRATION_KEY)) {
         return;
