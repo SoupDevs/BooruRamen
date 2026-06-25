@@ -103,6 +103,10 @@
     <!-- Bandit Arms -->
     <div class="card">
       <h2>Bandit Strategy Arms</h2>
+      <p style="font-size:0.75rem;color:#9ca3af;margin-bottom:0.75rem">
+        Thompson Sampling learns which <strong>query strategies</strong> produce content you engage with.
+        Each arm represents a search strategy. They only update when you interact with content fetched in explore mode.
+      </p>
       <div id="bandit-arms"></div>
     </div>
 
@@ -200,7 +204,7 @@
       });
     }
 
-    function makePost(id, tagType = 'anime') {
+    function makePost(id, tagType = 'anime', strategy = null) {
       const tagSets = {
         anime: [
           'hatsune_miku vocaloid 1girl solo long_hair blue_hair twintails',
@@ -217,7 +221,7 @@
       };
       const tags = tagSets[tagType][id % tagSets[tagType].length];
       const ratings = ['g', 'g', 'g', 's', 'q'];
-      return {
+      const post = {
         id: 100000 + id,
         tag_string: tags,
         tag_string_general: tags,
@@ -232,6 +236,10 @@
         score: Math.floor(Math.random() * 500),
         source: 'https://danbooru.donmai.us',
       };
+      if (strategy) {
+        post._strategy = strategy;
+      }
+      return post;
     }
 
     async function refreshUI() {
@@ -281,11 +289,13 @@
     }
 
     async function simulateAndUpdate(count, type) {
-      log('info', `Simulating ${count} ${type} interactions...`);
+      log('info', 'Simulating ' + count + ' ' + type + ' interactions...');
 
+      const strategies = ['anchor', 'pivot', 'reach', 'wildcard'];
       for (let i = 0; i < count; i++) {
         const tagType = type === 'dislike' ? 'scenery' : 'anime';
-        const post = makePost(Date.now() % 100000 + i, tagType);
+        const strategy = strategies[i % strategies.length];
+        const post = makePost(Date.now() % 100000 + i, tagType, strategy);
         const interactionType = type === 'mixed'
           ? ['like', 'favorite', 'dislike', 'view', 'timeSpent'][i % 5]
           : type;
@@ -301,7 +311,7 @@
       }
 
       await workerCall('updateUserProfile');
-      log('ml', `Processed ${count} interactions`);
+      log('ml', 'Processed ' + count + ' interactions');
       await refreshUI();
     }
 
@@ -312,9 +322,13 @@
     }
 
     async function scoreSamplePost() {
-      const post = makePost(999, 'anime');
-      const details = await workerCall('getPostScoreDetails', post);
-      log('ml', `Score: heuristic=${details.totalScore.toFixed(3)}, ML=${details.mlScore?.toFixed(3) || 'N/A'}, confidence=${details.mlConfidence?.toFixed(2) || 'N/A'}`);
+      const strategies = ['anchor', 'pivot', 'reach', 'wildcard'];
+      log('info', 'Sample post scores by strategy:');
+      for (const strategy of strategies) {
+        const post = makePost(999, 'anime', strategy);
+        const details = await workerCall('getPostScoreDetails', post);
+        log('ml', '  ' + strategy + ': heuristic=' + details.totalScore.toFixed(3) + ', ML=' + (details.mlScore?.toFixed(3) || 'N/A'));
+      }
     }
 
     // Expose to window for button onclick handlers
