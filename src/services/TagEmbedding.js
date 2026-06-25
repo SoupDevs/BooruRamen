@@ -188,6 +188,16 @@ class TagEmbedding {
       }
     }
     this._updateEmbeddingsForTags(affectedTags);
+
+    // Trigger full rebuild once we have enough data
+    if (this.totalPosts >= this.buildThreshold && this.embeddings.size === 0) {
+      this._buildEmbeddings();
+    }
+
+    // Periodically ensure all tracked tags have embeddings
+    if (this.tagFrequency.size > this.embeddings.size && this.tagFrequency.size >= this.buildThreshold) {
+      this._buildEmbeddings();
+    }
   }
 
   _addCooccurrence(tagA, tagB) {
