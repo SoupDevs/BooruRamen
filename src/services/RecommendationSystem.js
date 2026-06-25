@@ -152,6 +152,10 @@ class RecommendationSystem {
     return this.callWorker('selectNextBestPost', postPool);
   }
 
+  async getMLStats() {
+    return this.callWorker('getMLStats');
+  }
+
   applyClientSideFilters(posts, { whitelist = [], blacklist = [] }) {
     if (!posts || posts.length === 0) return [];
 
