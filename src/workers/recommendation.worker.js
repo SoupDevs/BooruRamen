@@ -1,7 +1,7 @@
 import StorageService from '../services/StorageService';
-import tagEmbedding from '../services/TagEmbedding';
-import mlScorer from '../services/MLScorer';
-import banditExplorer from '../services/BanditExplorer';
+import TagEmbedding from '../services/TagEmbedding';
+import MLScorer from '../services/MLScorer';
+import BanditExplorer from '../services/BanditExplorer';
 
 // Constants for recommendation system
 const INTERACTION_WEIGHTS = {
@@ -77,22 +77,28 @@ class RecommendationWorkerCore {
     if (this.mlInitialized) return;
 
     try {
-      await tagEmbedding.init();
-      await mlScorer.init();
-      await banditExplorer.init(
+      this.tagEmbedding = new TagEmbedding();
+      this.mlScorer = new MLScorer();
+      this.banditExplorer = new BanditExplorer();
+
+      await this.tagEmbedding.init();
+      await this.mlScorer.init();
+      await this.banditExplorer.init(
         (await StorageService.getProfileSnapshot())?.banditState
       );
       this.mlInitialized = true;
+      console.log('[ML] Components initialized successfully');
     } catch (e) {
       console.error('[ML] Failed to initialize ML components:', e);
       // Non-fatal: system falls back to heuristics
+      this.mlInitialized = false;
     }
   }
 
   resetExploreSession() {
     this.strategyCursors = {};
     this.exhaustedStrategies = new Set();
-    banditExplorer.endSession();
+    this.banditExplorer.endSession();
   }
 
   applyDecay(hoursPassed) {
@@ -166,7 +172,7 @@ class RecommendationWorkerCore {
 
         // Feed interaction to ML components
         if (this.mlInitialized) {
-          tagEmbedding.addInteraction(interaction);
+          this.tagEmbedding.addInteraction(interaction);
 
           // Compute label for ML training
           let label = 0.5;
@@ -177,7 +183,7 @@ class RecommendationWorkerCore {
             label = Math.min(0.9, 0.3 + (interaction.value / 30000) * 0.6);
           }
 
-          mlScorer.addTrainingSample(
+          this.mlScorer.addTrainingSample(
             interaction.metadata.post,
             interaction.type,
             interaction.value,
@@ -191,7 +197,7 @@ class RecommendationWorkerCore {
           // Record reward for bandit based on strategy
           const strategy = interaction.metadata.post._strategy;
           if (strategy) {
-            banditExplorer.recordReward(strategy, label);
+            this.banditExplorer.recordReward(strategy, label);
           }
         }
       }
@@ -199,7 +205,7 @@ class RecommendationWorkerCore {
 
     // Flush any remaining training samples
     if (this.mlInitialized) {
-      mlScorer.flushTraining();
+      this.mlScorer.flushTraining();
     }
 
     this.lastUpdateTime = now;
@@ -221,9 +227,9 @@ class RecommendationWorkerCore {
 
     // Save ML model state
     if (this.mlInitialized) {
-      snapshot.tagEmbeddings = tagEmbedding.toSnapshot();
-      snapshot.mlModel = mlScorer.toSnapshot();
-      snapshot.banditState = banditExplorer.toSnapshot();
+      snapshot.tagEmbeddings = this.tagEmbedding.toSnapshot();
+      snapshot.mlModel = this.mlScorer.toSnapshot();
+      snapshot.banditState = this.banditExplorer.toSnapshot();
     }
 
     await StorageService.storeProfileSnapshot(snapshot);
@@ -338,8 +344,8 @@ class RecommendationWorkerCore {
 
     // Reset ML components
     if (this.mlInitialized) {
-      mlScorer.reset();
-      banditExplorer.reset();
+      this.mlScorer.reset();
+      this.banditExplorer.reset();
     }
 
     await StorageService.storeProfileSnapshot({
@@ -380,8 +386,8 @@ class RecommendationWorkerCore {
     let score;
 
     // Use ML scorer if trained
-    if (mlScorer.isTrained) {
-      score = mlScorer.scorePost(
+    if (this.mlScorer.isTrained) {
+      score = this.mlScorer.scorePost(
         post,
         this.tagScores,
         {
@@ -394,7 +400,7 @@ class RecommendationWorkerCore {
       if (score >= 0) {
         const heuristicScore = this._heuristicScorePost(post);
         // Weighted blend: as ML gets more training data, trust it more
-        const mlWeight = Math.min(0.8, mlScorer.interactionCount / 100);
+        const mlWeight = Math.min(0.8, this.mlScorer.interactionCount / 100);
         score = score * mlWeight + heuristicScore * (mlWeight > 0 ? (1 - mlWeight) : 1);
 
         // Add small random noise for discovery
@@ -586,8 +592,8 @@ class RecommendationWorkerCore {
     }
 
     // Add ML-specific details
-    if (mlScorer.isTrained) {
-      const mlScore = mlScorer.scorePost(
+    if (this.mlScorer.isTrained) {
+      const mlScore = this.mlScorer.scorePost(
         post,
         this.tagScores,
         {
@@ -597,7 +603,7 @@ class RecommendationWorkerCore {
       );
       if (mlScore >= 0) {
         details.mlScore = mlScore;
-        details.mlConfidence = Math.min(1, mlScorer.interactionCount / 50);
+        details.mlConfidence = Math.min(1, this.mlScorer.interactionCount / 50);
       }
     }
 
@@ -695,7 +701,7 @@ class RecommendationWorkerCore {
     const usedTags = new Set();
 
     // Use Thompson Sampling to select strategies
-    const banditSelections = banditExplorer.selectTopK(5);
+    const banditSelections = this.banditExplorer.selectTopK(5);
     const selectedStrategies = new Set(banditSelections.map(s => s.type));
 
     // Anchor strategy (always include if we have tags)
@@ -778,9 +784,9 @@ class RecommendationWorkerCore {
    */
   getMLStats() {
     return {
-      tagEmbeddings: tagEmbedding.getStats(),
-      mlScorer: mlScorer.getStats(),
-      bandit: banditExplorer.getStats(),
+      tagEmbeddings: this.tagEmbedding.getStats(),
+      mlScorer: this.mlScorer.getStats(),
+      bandit: this.banditExplorer.getStats(),
     };
   }
 }
@@ -861,7 +867,7 @@ self.onmessage = async (e) => {
         result = core.getMLStats();
         break;
       case 'findSimilarTags':
-        result = tagEmbedding.findSimilarTags(payload.query, payload.topK || 10, new Set(payload.exclude || []));
+        result = this.tagEmbedding.findSimilarTags(payload.query, payload.topK || 10, new Set(payload.exclude || []));
         break;
       default:
         throw new Error(`Unknown message type: ${type}`);

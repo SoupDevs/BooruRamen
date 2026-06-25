@@ -141,7 +141,12 @@
     function log(type, message) {
       const el = document.getElementById('event-log');
       const time = new Date().toLocaleTimeString();
-      el.innerHTML += `<span class="${type}">[${time}] ${message}</span>\n`;
+      const line = '[' + time + '] ' + message;
+      const span = document.createElement('span');
+      span.className = type;
+      span.textContent = line;
+      el.appendChild(span);
+      el.appendChild(document.createTextNode('\n'));
       el.scrollTop = el.scrollHeight;
     }
 
