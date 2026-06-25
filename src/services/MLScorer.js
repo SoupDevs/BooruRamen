@@ -219,14 +219,27 @@ class MLScorer {
     const features = new Float32Array(INPUT_DIM);
     const tagDim = tagEmbedding.dim;
 
+    // Normalize userTagScores to an entries array (handles both Map and plain objects)
+    let userEntries = [];
+    if (userTagScores) {
+      if (userTagScores instanceof Map) {
+        userEntries = Array.from(userTagScores.entries());
+      } else if (typeof userTagScores === 'object') {
+        userEntries = Object.entries(userTagScores);
+      }
+    }
+
     // Get user interest embedding (projected to 16d)
-    const userTags = userTagScores
-      ? Array.from(userTagScores.entries())
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 20)
-          .map(([tag]) => tag)
-      : [];
-    const userEmb = tagEmbedding.getAverageEmbedding(userTags, userTagScores);
+    const userTags = userEntries
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([tag]) => tag);
+
+    // Convert to Map for getAverageEmbedding if needed
+    const userTagWeights = userTagScores instanceof Map
+      ? userTagScores
+      : new Map(userEntries);
+    const userEmb = tagEmbedding.getAverageEmbedding(userTags, userTagWeights);
     const userProj = new Float32Array(16);
     if (userEmb) {
       for (let i = 0; i < 16; i++) {
