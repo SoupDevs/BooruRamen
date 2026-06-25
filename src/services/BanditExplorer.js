@@ -183,8 +183,18 @@ class BanditExplorer {
   init(snapshot) {
     if (snapshot && snapshot.arms) {
       this.arms = new Map();
+      const validTypes = new Set(STRATEGY_TYPES);
       for (const armData of snapshot.arms) {
-        this.arms.set(armData.type, BanditArm.fromSnapshot(armData));
+        // Only restore valid strategy arms (discard deprecated arms)
+        if (validTypes.has(armData.type)) {
+          this.arms.set(armData.type, BanditArm.fromSnapshot(armData));
+        }
+      }
+      // Ensure all valid arms exist (in case snapshot is missing newer ones)
+      for (const type of STRATEGY_TYPES) {
+        if (!this.arms.has(type)) {
+          this.arms.set(type, new BanditArm(type));
+        }
       }
     }
     this.sessionCount = snapshot?.sessionCount || 0;
