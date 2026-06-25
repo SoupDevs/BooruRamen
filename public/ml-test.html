@@ -207,20 +207,27 @@
 
     function makePost(id, tagType = 'anime', strategy = null) {
       const tagSets = {
-        anime: [
+        anchor: [
           'hatsune_miku vocaloid 1girl solo long_hair blue_hair twintails',
-          '1girl solo long_hair red_eyes looking_at_viewer',
-          'rem_(re:zero) 1girl solo long_hair maid_headdress blue_hair',
-          'ganyu_(genshin_impact) 1girl solo long_hair horns purple_eyes',
-          'saber_(fate) 1girl solo long_hair sword blonde_hair',
+          'hatsune_miku 1girl solo vocaloid headphones blue_hair',
         ],
-        scenery: [
+        pivot: [
+          'hatsune_miku 1girl solo long_hair blue_hair age:>3mo highres',
+          'vocaloid 1girl solo long_hair blue_hair order:rank',
+        ],
+        reach: [
+          'rem_(re:zero) 1girl solo long_hair maid_headdress',
+          'ganyu_(genshin_impact) 1girl solo long_hair horns',
+        ],
+        wildcard: [
           'scenery landscape sky clouds sunset',
-          'scenery mountain forest nature',
-          'scenery ocean beach sunset',
+          'original 1girl solo order:rank age:<1mo',
+        ],
+        fallback: [
+          '1girl solo',
         ],
       };
-      const tags = tagSets[tagType][id % tagSets[tagType].length];
+      const tags = tagSets[strategy] ? tagSets[strategy][id % tagSets[strategy].length] : tagSets.anchor[0];
       const ratings = ['g', 'g', 'g', 's', 'q'];
       const post = {
         id: 100000 + id,
@@ -297,9 +304,8 @@
 
       const strategies = ['anchor', 'pivot', 'reach', 'wildcard'];
       for (let i = 0; i < count; i++) {
-        const tagType = type === 'dislike' ? 'scenery' : 'anime';
         const strategy = strategies[i % strategies.length];
-        const post = makePost(Date.now() % 100000 + i, tagType, strategy);
+        const post = makePost(Date.now() % 100000 + i, null, strategy);
         const interactionType = type === 'mixed'
           ? ['like', 'favorite', 'dislike', 'view', 'timeSpent'][i % 5]
           : type;
