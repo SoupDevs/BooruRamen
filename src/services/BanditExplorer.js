@@ -19,7 +19,11 @@
  * its alpha is periodically down-weighted to allow re-exploration.
  */
 
-const STRATEGY_TYPES = ['anchor', 'pivot', 'reach', 'wildcard', 'fallback'];
+const STRATEGY_TYPES = [
+  'anchor', 'pivot', 'reach', 'wildcard', 'fallback',  // query strategies
+  'general',                                            // default arm
+  'cat_character', 'cat_copyright', 'cat_artist', 'cat_general'  // content categories
+];
 const PRIOR_ALPHA = 1.0;   // Beta prior
 const PRIOR_BETA = 1.0;
 const DECAY_RATE = 0.95;   // Per-session decay for alpha (engagement decay)
@@ -202,8 +206,8 @@ class BanditExplorer {
     let bestSample = -Infinity;
 
     for (const [type, arm] of this.arms) {
-      // Skip exhausted strategies
-      if (type === 'fallback') continue;
+      // Skip exhausted strategies and non-strategy arms
+      if (type === 'fallback' || type.startsWith('cat_')) continue;
 
       const sample = arm.sample();
       if (sample > bestSample) {
@@ -272,6 +276,7 @@ class BanditExplorer {
     let bestExpected = -1;
 
     for (const [type, arm] of this.arms) {
+      if (type.startsWith('cat_')) continue;
       const expected = arm.getExpectedReward();
       if (expected > bestExpected) {
         bestExpected = expected;

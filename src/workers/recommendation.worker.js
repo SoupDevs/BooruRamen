@@ -194,11 +194,26 @@ class RecommendationWorkerCore {
             }
           );
 
-          // Record reward for bandit based on strategy
-          const strategy = interaction.metadata.post._strategy;
-          if (strategy) {
-            this.banditExplorer.recordReward(strategy, label);
+          // Record reward for bandit based on content category
+          // The bandit learns which content categories the user engages with most.
+          // We use the post's dominant category as the arm identifier.
+          const strategy = interaction.metadata.post._strategy || 'general';
+          this.banditExplorer.recordReward(strategy, label);
+
+          // Also record by content category so the bandit learns user preferences
+          const post = interaction.metadata.post;
+          const categories = ['character', 'copyright', 'artist', 'general'];
+          let dominantCategory = 'general';
+          let maxCount = 0;
+          for (const cat of categories) {
+            const tagStr = post['tag_string_' + cat] || '';
+            const count = tagStr ? tagStr.split(' ').filter(Boolean).length : 0;
+            if (count > maxCount) {
+              maxCount = count;
+              dominantCategory = cat;
+            }
           }
+          this.banditExplorer.recordReward('cat_' + dominantCategory, label);
         }
       }
     });
