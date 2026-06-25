@@ -156,6 +156,10 @@ class RecommendationSystem {
     return this.callWorker('getMLStats');
   }
 
+  async findSimilarTags(query, topK = 10, exclude = []) {
+    return this.callWorker('findSimilarTags', { query, topK, exclude });
+  }
+
   applyClientSideFilters(posts, { whitelist = [], blacklist = [] }) {
     if (!posts || posts.length === 0) return [];
 

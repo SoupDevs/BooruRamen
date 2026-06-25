@@ -860,6 +860,9 @@ self.onmessage = async (e) => {
       case 'getMLStats':
         result = core.getMLStats();
         break;
+      case 'findSimilarTags':
+        result = tagEmbedding.findSimilarTags(payload.query, payload.topK || 10, new Set(payload.exclude || []));
+        break;
       default:
         throw new Error(`Unknown message type: ${type}`);
     }
