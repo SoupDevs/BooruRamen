@@ -39,7 +39,8 @@
     .progress-bar { height: 0.5rem; background: #374151; border-radius: 0.25rem; overflow: hidden; margin-top: 0.5rem; }
     .progress-fill { height: 100%; background: #ec4899; transition: width 0.3s; }
     .arm-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem; background: #374151; border-radius: 0.375rem; margin-bottom: 0.5rem; }
-    .arm-name { width: 5rem; font-size: 0.875rem; font-family: monospace; text-transform: capitalize; }
+    .arm-name { width: 4rem; font-size: 0.875rem; font-family: monospace; text-transform: capitalize; }
+    .arm-stats { width: 5rem; font-size: 0.7rem; color: #9ca3af; text-align: right; }
     .arm-bar { flex: 1; height: 1rem; background: #111827; border-radius: 0.25rem; overflow: hidden; }
     .arm-fill { height: 100%; background: #ec4899; transition: width 0.3s; }
     .arm-value { font-size: 0.75rem; font-family: monospace; width: 3rem; text-align: right; }
@@ -276,11 +277,14 @@
           const row = document.createElement('div');
           row.className = 'arm-row';
           const pct = (arm.expectedReward * 100).toFixed(0);
-          row.innerHTML = `
-            <span class="arm-name">${type}</span>
-            <div class="arm-bar"><div class="arm-fill" style="width:${pct}%"></div></div>
-            <span class="arm-value">${pct}%</span>
-          `;
+          const rate = arm.attempts > 0
+            ? (arm.successes / arm.attempts * 100).toFixed(0) + '%'
+            : '—';
+          row.innerHTML =
+            '<span class="arm-name">' + type + '</span>' +
+            '<span class="arm-stats">' + rate + ' (' + arm.attempts + ')</span>' +
+            '<div class="arm-bar"><div class="arm-fill" style="width:' + pct + '%"></div></div>' +
+            '<span class="arm-value">' + pct + '%</span>';
           armsEl.appendChild(row);
         }
       } catch (e) {
