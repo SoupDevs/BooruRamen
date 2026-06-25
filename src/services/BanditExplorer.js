@@ -334,5 +334,6 @@ class BanditExplorer {
   }
 }
 
+export { BanditExplorer };
 export const banditExplorer = new BanditExplorer();
 export default banditExplorer;

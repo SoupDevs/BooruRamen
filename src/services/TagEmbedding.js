@@ -489,5 +489,6 @@ class TagEmbedding {
   }
 }
 
+export { TagEmbedding };
 export const tagEmbedding = new TagEmbedding();
 export default tagEmbedding;

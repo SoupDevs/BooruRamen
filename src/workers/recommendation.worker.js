@@ -1,7 +1,7 @@
 import StorageService from '../services/StorageService';
-import TagEmbedding from '../services/TagEmbedding';
-import MLScorer from '../services/MLScorer';
-import BanditExplorer from '../services/BanditExplorer';
+import { TagEmbedding } from '../services/TagEmbedding';
+import { MLScorer } from '../services/MLScorer';
+import { BanditExplorer } from '../services/BanditExplorer';
 
 // Constants for recommendation system
 const INTERACTION_WEIGHTS = {

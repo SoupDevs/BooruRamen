@@ -601,5 +601,6 @@ class MLScorer {
   }
 }
 
+export { MLScorer };
 export const mlScorer = new MLScorer();
 export default mlScorer;
