@@ -470,10 +470,10 @@ export default {
       }
     },
 
-    updateDebugDetails() {
+    async updateDebugDetails() {
         if (!this.currentPost) return;
         // Calculate score breakdown using the recommendation system
-        this.debugDetails = this.recommendationSystem.getPostScoreDetails(this.currentPost);
+        this.debugDetails = await this.recommendationSystem.getPostScoreDetails(this.currentPost);
     },
     
     async handleResetRecommendations() {
@@ -757,8 +757,15 @@ export default {
         this.savePlayerPreferences(); // Save mute state to player store
     },
 
-    updateRecommendationStatus() {
-       this.hasRecommendations = true; // Placeholder
+    async updateRecommendationStatus() {
+       try {
+           const tags = await this.recommendationSystem.getRecommendedTags(5);
+           this.recommendedTags = tags || [];
+           this.hasRecommendations = this.recommendedTags.length > 0;
+       } catch (error) {
+           console.error("Error fetching recommended tags:", error);
+           this.hasRecommendations = false;
+       }
     },
     
     handleKeydown(e) {
