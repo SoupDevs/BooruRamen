@@ -604,9 +604,13 @@ class RecommendationWorkerCore {
         details.mlScore = mlScore;
         details.mlConfidence = Math.min(1, this.mlScorer.interactionCount / 50);
 
-        // Get ML feature breakdown
-        details.mlFeatures = this.mlScorer.getFeatureValues(post, this.tagScores, userProfile);
-        details.mlTagContributions = this.mlScorer.getTagContributions(post, this.tagScores, userProfile);
+        // Get ML feature breakdown (with error handling for edge cases)
+        try {
+          details.mlFeatures = this.mlScorer.getFeatureValues(post, this.tagScores, userProfile);
+          details.mlTagContributions = this.mlScorer.getTagContributions(post, this.tagScores, userProfile);
+        } catch (e) {
+          console.warn('[Worker] ML feature breakdown failed:', e);
+        }
       }
     }
 

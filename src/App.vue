@@ -524,8 +524,13 @@ export default {
 
     async updateDebugDetails() {
         if (!this.currentPost) return;
-        // Calculate score breakdown using the recommendation system
-        this.debugDetails = await this.recommendationSystem.getPostScoreDetails(this.currentPost);
+        try {
+          const details = await this.recommendationSystem.getPostScoreDetails(this.currentPost);
+          this.debugDetails = details;
+        } catch (e) {
+          console.error('[DebugOverlay] Failed to get score details:', e);
+          this.debugDetails = { error: e.message, totalScore: 0 };
+        }
     },
     
     async handleResetRecommendations() {
