@@ -650,6 +650,8 @@ export default {
     async executeRefreshFeed() {
       await RecommendationSystem.resetRecommendations();
       this.showRefreshModal = false;
+      // Navigate to trigger feed re-fetch (route watcher calls fetchPosts)
+      this.$router.replace({ name: 'Home', query: { ...this.$route.query, refresh: Date.now().toString() } });
     },
     async testAuth(source) {
         this.isTestingAuth = true;
