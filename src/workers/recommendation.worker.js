@@ -595,17 +595,18 @@ class RecommendationWorkerCore {
 
     // Add ML-specific details
     if (this.mlScorer.isTrained) {
-      const mlScore = this.mlScorer.scorePost(
-        post,
-        this.tagScores,
-        {
-          ratingPreferences: this.ratingPreferences,
-          mediaTypePreferences: this.mediaTypePreferences,
-        }
-      );
+      const userProfile = {
+        ratingPreferences: this.ratingPreferences,
+        mediaTypePreferences: this.mediaTypePreferences,
+      };
+      const mlScore = this.mlScorer.scorePost(post, this.tagScores, userProfile);
       if (mlScore >= 0) {
         details.mlScore = mlScore;
         details.mlConfidence = Math.min(1, this.mlScorer.interactionCount / 50);
+
+        // Get ML feature breakdown
+        details.mlFeatures = this.mlScorer.getFeatureValues(post, this.tagScores, userProfile);
+        details.mlTagContributions = this.mlScorer.getTagContributions(post, this.tagScores, userProfile);
       }
     }
 

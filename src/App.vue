@@ -37,8 +37,8 @@
         ></router-view>
         
         <!-- Debug Overlay -->
-        <div v-if="debugMode && currentPost" class="absolute top-0 left-1/2 transform -translate-x-1/2 p-4 bg-black bg-opacity-75 text-xs text-white z-40 max-w-xs pointer-events-none font-mono rounded shadow-lg"
-          style="margin-top: calc(1rem + env(safe-area-inset-top, 0));"
+        <div v-if="debugMode && currentPost" class="absolute top-0 left-1/2 transform -translate-x-1/2 p-4 bg-black bg-opacity-75 text-xs text-white z-40 max-w-xs font-mono rounded shadow-lg pointer-events-auto"
+          style="margin-top: calc(1rem + env(safe-area-inset-top, 0)); max-height: 80vh; overflow-y: auto;"
         >
           <h3 class="font-bold mb-1 text-pink-400">Recommendation Debug</h3>
           
@@ -60,28 +60,80 @@
           </div>
 
           <div v-if="debugDetails">
-            <p><span class="text-gray-400">Rec. Score:</span> {{ debugDetails.totalScore?.toFixed(2) }}</p>
-            
-            <div v-if="debugDetails.contributingTags && debugDetails.contributingTags.length > 0" class="mt-2">
-              <p class="font-semibold text-gray-300">Top Influencing Tags:</p>
-              <ul class="list-none pl-0 mt-1 space-y-0.5">
-                <li v-for="tag in debugDetails.contributingTags" :key="tag.tag" class="flex justify-between">
-                  <span class="truncate pr-2" :class="tag.score > 0 ? 'text-green-400' : 'text-red-400'">{{ tag.tag }}</span>
-                  <span>{{ (tag.score).toFixed(2) }}</span>
+            <!-- ML Score (primary) -->
+            <p v-if="debugDetails.mlScore !== null && debugDetails.mlScore !== undefined">
+              <span class="text-pink-400 font-bold">ML Score:</span> {{ debugDetails.mlScore?.toFixed(3) }}
+              <span class="text-gray-500 text-xs">(conf: {{ ((debugDetails.mlConfidence || 0) * 100).toFixed(0) }}%)</span>
+            </p>
+
+            <!-- Heuristic Score (secondary) -->
+            <p><span class="text-gray-400">Heuristic:</span> {{ debugDetails.totalScore?.toFixed(3) }}</p>
+
+            <!-- ML Feature Breakdown -->
+            <div v-if="debugDetails.mlFeatures" class="mt-2 border-t border-gray-700 pt-1">
+              <p class="text-pink-300 text-xs font-semibold mb-1">ML Features:</p>
+              <p class="text-xs">
+                <span class="text-gray-400">Embedding Similarity:</span>
+                <span :class="debugDetails.mlFeatures.embeddingSimilarity > 0 ? 'text-green-400' : 'text-red-400'">
+                  {{ debugDetails.mlFeatures.embeddingSimilarity?.toFixed(3) }}
+                </span>
+              </p>
+              <p class="text-xs">
+                <span class="text-gray-400">Tag Overlap:</span>
+                {{ (debugDetails.mlFeatures.tagOverlapRatio * 100).toFixed(0) }}%
+              </p>
+              <p class="text-xs">
+                <span class="text-gray-400">User Interest Strength:</span>
+                {{ debugDetails.mlFeatures.userEmbeddingStrength?.toFixed(3) }}
+              </p>
+              <p class="text-xs">
+                <span class="text-gray-400">Post Embedding Strength:</span>
+                {{ debugDetails.mlFeatures.postEmbeddingStrength?.toFixed(3) }}
+              </p>
+              <p class="text-xs">
+                <span class="text-gray-400">Tag Count:</span>
+                {{ debugDetails.mlFeatures.tagCount }}
+                <span v-if="debugDetails.mlFeatures.isVideo" class="text-blue-400 ml-1">video</span>
+              </p>
+            </div>
+
+            <!-- ML Top Contributing Tags -->
+            <div v-if="debugDetails.mlTagContributions && debugDetails.mlTagContributions.length > 0" class="mt-2 border-t border-gray-700 pt-1">
+              <p class="text-pink-300 text-xs font-semibold mb-1">Top ML Tag Contributions:</p>
+              <ul class="list-none pl-0 mt-0.5 space-y-0.5">
+                <li v-for="tag in debugDetails.mlTagContributions" :key="tag.tag" class="flex justify-between text-xs">
+                  <span class="truncate pr-2" :class="tag.direction === 'positive' ? 'text-green-400' : 'text-red-400'">{{ tag.tag }}</span>
+                  <span :class="tag.direction === 'positive' ? 'text-green-400' : 'text-red-400'">
+                    {{ tag.direction === 'positive' ? '+' : '-' }}{{ tag.delta.toFixed(4) }}
+                  </span>
                 </li>
               </ul>
             </div>
-            
-            <div v-if="debugDetails.ratingScore" class="mt-1 text-gray-400">
-               Rating Bonus: +{{ debugDetails.ratingScore.toFixed(2) }}
-            </div>
-             <div v-if="debugDetails.mediaScore" class="text-gray-400">
-               Media Bonus: +{{ debugDetails.mediaScore.toFixed(2) }}
-            </div>
-            <div v-if="debugDetails.discoveryBonus" class="text-purple-400 mt-1">
-               Discovery Bonus: +{{ debugDetails.discoveryBonus.toFixed(2) }}
-               <span class="text-gray-500 text-xs block">({{ debugDetails.familiarWeight?.toFixed(1) }} anchor weight, {{ debugDetails.novelTagCount }} novel tags)</span>
-            </div>
+
+            <!-- Heuristic breakdown (collapsed) -->
+            <details class="mt-1">
+              <summary class="text-gray-500 text-xs cursor-pointer hover:text-gray-300">Heuristic Breakdown</summary>
+              <div class="mt-1 pl-2 border-l border-gray-700">
+                <div v-if="debugDetails.contributingTags && debugDetails.contributingTags.length > 0" class="mt-1">
+                  <p class="text-xs text-gray-400">Top Tags (heuristic):</p>
+                  <ul class="list-none pl-0 space-y-0.5">
+                    <li v-for="tag in debugDetails.contributingTags" :key="tag.tag" class="flex justify-between text-xs">
+                      <span class="truncate pr-2" :class="tag.score > 0 ? 'text-green-400' : 'text-red-400'">{{ tag.tag }}</span>
+                      <span>{{ tag.score.toFixed(2) }}</span>
+                    </li>
+                  </ul>
+                </div>
+                <div v-if="debugDetails.ratingScore" class="mt-1 text-xs text-gray-400">
+                  Rating: +{{ debugDetails.ratingScore.toFixed(2) }}
+                </div>
+                <div v-if="debugDetails.mediaScore" class="text-xs text-gray-400">
+                  Media: +{{ debugDetails.mediaScore.toFixed(2) }}
+                </div>
+                <div v-if="debugDetails.discoveryBonus" class="text-xs text-purple-400 mt-0.5">
+                  Discovery: +{{ debugDetails.discoveryBonus.toFixed(2) }}
+                </div>
+              </div>
+            </details>
           </div>
           <div v-else>
              <p class="italic text-gray-500">Calculating score details...</p>

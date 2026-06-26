@@ -599,6 +599,85 @@ class MLScorer {
       tagEmbedding.dim * 16 * 8  // projection matrices (2x)
     );
   }
+
+  /**
+   * Get per-tag contribution to the ML score for a post.
+   * Measures how much each post tag shifts the score away from baseline.
+   */
+  getTagContributions(post, userTagScores, userProfile) {
+    if (!this.isTrained) return [];
+
+    const baseline = this.scorePost(post, userTagScores, userProfile);
+    if (baseline < 0) return [];
+
+    const postTags = (post.tag_string || '').split(' ').filter(t => t);
+    const contributions = [];
+
+    for (const tag of postTags) {
+      // Create a copy of the post without this tag
+      const postWithoutTag = { ...post, tag_string: postTags.filter(t => t !== tag).join(' ') };
+      const scoreWithout = this.scorePost(postWithoutTag, userTagScores, userProfile);
+      const delta = baseline - scoreWithout;
+      contributions.push({ tag, delta: Math.abs(delta), direction: delta > 0 ? 'positive' : 'negative' });
+    }
+
+    contributions.sort((a, b) => b.delta - a.delta);
+    return contributions.slice(0, 10);
+  }
+
+  /**
+   * Get the key ML features for a post with their values.
+   */
+  getFeatureValues(post, userTagScores, userProfile) {
+    const features = this.extractFeatures(post, userTagScores, userProfile);
+    const userEntries = userTagScores
+      ? (userTagScores instanceof Map
+        ? Array.from(userTagScores.entries())
+        : Object.entries(userTagScores))
+      : [];
+    const userTags = userEntries
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([tag]) => tag);
+    const userEmb = tagEmbedding.getAverageEmbedding(userTags);
+    const postTags = (post.tag_string || '').split(' ').filter(t => t);
+    const postEmb = tagEmbedding.getAverageEmbedding(postTags);
+
+    // Compute cosine similarity
+    let dot = 0, normU = 0, normP = 0;
+    if (userEmb && postEmb) {
+      for (let i = 0; i < tagEmbedding.dim; i++) {
+        dot += userEmb[i] * postEmb[i];
+        normU += userEmb[i] * userEmb[i];
+        normP += postEmb[i] * postEmb[i];
+      }
+    }
+    const similarity = (Math.sqrt(normU) * Math.sqrt(normP) > 0)
+      ? dot / (Math.sqrt(normU) * Math.sqrt(normP))
+      : 0;
+
+    // Tag overlap
+    let overlap = 0;
+    if (userTagScores && postTags.length > 0) {
+      const userTagSet = new Set(userTagScores.keys());
+      for (const tag of postTags) {
+        if (userTagSet.has(tag)) overlap++;
+      }
+    }
+    const overlapRatio = postTags.length > 0 ? overlap / postTags.length : 0;
+
+    return {
+      embeddingSimilarity: similarity,
+      tagOverlapRatio: overlapRatio,
+      userEmbeddingStrength: Math.sqrt(normU),
+      postEmbeddingStrength: Math.sqrt(normP),
+      ratingPreference: features[33] || 0,
+      mediaTypePreference: features[34] || 0,
+      postScore: features[36] || 0,
+      isVideo: post.file_ext ? ['mp4', 'webm'].includes(post.file_ext) : false,
+      tagCount: postTags.length,
+    };
+  }
 }
 
 export { MLScorer };
