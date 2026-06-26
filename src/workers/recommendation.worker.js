@@ -418,10 +418,10 @@ class RecommendationWorkerCore {
    * Uses cosine similarity between user interest embedding and post tag embedding.
    */
   _embeddingScore(post) {
-    if (!this.tagScores || this.tagScores.size === 0) return 0;
+    if (!this.tagScores || Object.keys(this.tagScores).length === 0) return 0;
 
     // Build user interest embedding from top tags
-    const userEntries = Array.from(this.tagScores.entries())
+    const userEntries = Object.entries(this.tagScores)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 20);
     const userTags = userEntries.map(([tag]) => tag);
