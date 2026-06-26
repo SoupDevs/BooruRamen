@@ -118,14 +118,14 @@
         Simulate user behavior to train the ML model. After 20 interactions, the ML scorer activates.
       </p>
       <div class="btn-row">
-        <button class="pink" onclick="simulateAndUpdate(5, 'like')">+5 Likes</button>
-        <button class="yellow" onclick="simulateAndUpdate(5, 'favorite')">+5 Favorites</button>
-        <button class="gray" onclick="simulateAndUpdate(5, 'dislike')">+5 Dislikes</button>
-        <button onclick="simulateAndUpdate(10, 'mixed')">+10 Mixed</button>
+        <button class="pink" data-action="simulate" data-type="like">+5 Likes</button>
+        <button class="yellow" data-action="simulate" data-type="favorite">+5 Favorites</button>
+        <button class="gray" data-action="simulate" data-type="dislike">+5 Dislikes</button>
+        <button data-action="simulate" data-type="mixed">+10 Mixed</button>
       </div>
       <div class="btn-row">
-        <button class="red" onclick="resetML()">Reset ML State</button>
-        <button class="gray" onclick="scoreSamplePost()">Score Sample Post</button>
+        <button class="red" data-action="reset">Reset ML State</button>
+        <button class="gray" data-action="score">Score Sample Post</button>
       </div>
     </div>
 
@@ -239,8 +239,8 @@
       const ratings = ['g', 'g', 'g', 's', 'q'];
       const post = {
         id: 100000 + id,
-        tag_string: tags,
-        tag_string_general: tags,
+        tag_string: tag,
+        tag_string_general: tag,
         tag_string_artist: '',
         tag_string_character: '',
         tag_string_copyright: '',
@@ -355,6 +355,25 @@
     window.simulateAndUpdate = simulateAndUpdate;
     window.resetML = resetML;
     window.scoreSamplePost = scoreSamplePost;
+    // Attach event listeners for buttons (more reliable than inline onclick)
+    document.querySelectorAll('[data-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const action = btn.dataset.action;
+        const type = btn.dataset.type;
+        try {
+          if (action === 'simulate') {
+            const count = type === 'mixed' ? 10 : 5;
+            await simulateAndUpdate(count, type);
+          } else if (action === 'reset') {
+            await resetML();
+          } else if (action === 'score') {
+            await scoreSamplePost();
+          }
+        } catch (e) {
+          log('error', 'Button action failed: ' + e.message);
+        }
+      });
+    });
 
     // Initialize
     (async () => {
