@@ -4,18 +4,10 @@ import { MLScorer } from '../services/MLScorer';
 import { BanditExplorer } from '../services/BanditExplorer';
 
 // Constants for recommendation system
-const INTERACTION_WEIGHTS = {
-  like: 1.0,
-  dislike: -1.0,
-  favorite: 2.0,
-  view: 0.2,
-  timeSpent: 0.1
-};
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
 
 // Heuristic scoring constants (fallback when ML is not trained)
-const CATEGORY_MULTIPLIERS = { character: 2.5, copyright: 2.0, artist: 2.0, general: 0.4, meta: 0.0 };
 
 export const COMMON_TAGS = [
   '1girl', '1boy', '2girls', '2boys', 'solo', 'comic', 'monochrome',
@@ -32,14 +24,6 @@ export const COMMON_TAGS = [
 class RecommendationWorkerCore {
   constructor() {
     this.userEmbedding = null;
-    this.rawTagScores = {};
-    this.rawRatingPreferences = { general: 0, sensitive: 0, questionable: 0, explicit: 0 };
-    this.rawMediaTypePreferences = { image: 0, video: 0 };
-    this.tagScores = {};
-    this.tagEngagement = {};
-    this.tagCategories = {};
-    this.ratingPreferences = null;
-    this.mediaTypePreferences = null;
     this.avoidedTags = [...COMMON_TAGS];
     this.lastUpdateTime = 0;
     this.postScoreCache = new Map();
@@ -101,19 +85,6 @@ class RecommendationWorkerCore {
     this.banditExplorer.endSession();
   }
 
-  applyDecay(hoursPassed) {
-    const decayFactor = Math.exp(-0.05 * hoursPassed);
-    for (const tag in this.rawTagScores) {
-      this.rawTagScores[tag] *= decayFactor;
-      if (Math.abs(this.rawTagScores[tag]) < 0.01) delete this.rawTagScores[tag];
-    }
-    for (const rating in this.rawRatingPreferences) {
-      this.rawRatingPreferences[rating] *= decayFactor;
-    }
-    for (const type in this.rawMediaTypePreferences) {
-      this.rawMediaTypePreferences[type] *= decayFactor;
-    }
-  }
 
   async updateUserProfile() {
     const preferences = await StorageService.getPreferences();
@@ -131,20 +102,13 @@ class RecommendationWorkerCore {
     const snapshot = await StorageService.getProfileSnapshot();
 
     if (snapshot && (!resetTimestamp || snapshot.timestamp > resetTimestamp)) {
-      this.rawTagScores = snapshot.rawTagScores || snapshot.tagScores || {};
-      this.tagEngagement = snapshot.tagEngagement || {};
-      this.tagCategories = snapshot.tagCategories || {};
-      this.rawRatingPreferences = snapshot.ratingPreferences || { general: 0, sensitive: 0, questionable: 0, explicit: 0 };
-      this.rawMediaTypePreferences = snapshot.mediaTypePreferences || { image: 0, video: 0 };
       this.lastUpdateTime = snapshot.timestamp || 0;
 
       const hoursSinceSnapshot = (now - this.lastUpdateTime) / (1000 * 60 * 60);
-      if (hoursSinceSnapshot > 0) this.applyDecay(hoursSinceSnapshot);
 
       interactions = await StorageService.getRecentInteractions(this.lastUpdateTime);
       isIncremental = true;
     } else {
-      this.initializeDefaultProfile();
       interactions = await StorageService.getInteractions();
       if (resetTimestamp > 0) {
         interactions = interactions.filter(i => i.timestamp > resetTimestamp);
@@ -152,7 +116,6 @@ class RecommendationWorkerCore {
     }
 
     if (interactions.length === 0 && !isIncremental) {
-      this.normalizeScores();
       return;
     }
 
@@ -160,7 +123,6 @@ class RecommendationWorkerCore {
     interactions.forEach(interaction => {
       const ageInHours = (now - interaction.timestamp) / (1000 * 60 * 60);
       const recencyWeight = Math.exp(-0.05 * ageInHours);
-      let weight = INTERACTION_WEIGHTS[interaction.type] || 0;
       weight *= recencyWeight;
 
       if (interaction.type === 'timeSpent') {
@@ -168,7 +130,6 @@ class RecommendationWorkerCore {
       }
 
       if (interaction.metadata && interaction.metadata.post) {
-        this.updateProfileWithPost(interaction.metadata.post, weight);
 
         // Feed interaction to ML components
         if (this.mlInitialized) {
@@ -187,11 +148,8 @@ class RecommendationWorkerCore {
             interaction.metadata.post,
             interaction.type,
             interaction.value,
-            this.tagScores,
-            {
-              ratingPreferences: this.ratingPreferences,
-              mediaTypePreferences: this.mediaTypePreferences,
-            }
+            null,
+            null
           );
 
           // Record reward for bandit ONLY when the post was fetched via a strategy
@@ -220,114 +178,20 @@ class RecommendationWorkerCore {
   async _saveProfileSnapshot() {
     const snapshot = {
       timestamp: this.lastUpdateTime,
-      rawTagScores: this.rawTagScores,
-      tagEngagement: this.tagEngagement,
-      tagCategories: this.tagCategories,
-      ratingPreferences: this.rawRatingPreferences,
-      mediaTypePreferences: this.rawMediaTypePreferences,
     };
 
     // Save ML model state
     if (this.mlInitialized) {
-      snapshot.tagEmbeddings = this.tagEmbedding.toSnapshot();
+      snapshot.tagEmbeddings = tagEmbedding.toSnapshot();
       snapshot.mlModel = this.mlScorer.toSnapshot();
       snapshot.banditState = this.banditExplorer.toSnapshot();
     }
 
     await StorageService.storeProfileSnapshot(snapshot);
-    this.normalizeScores();
   }
 
-  updateProfileWithPost(post, weight) {
-    const avoidedSet = new Set(this.avoidedTags || []);
-    const processTag = (tag, category) => {
-      if (!tag || avoidedSet.has(tag)) return;
-      if (this.rawTagScores[tag] === undefined) {
-        this.rawTagScores[tag] = 0;
-        this.tagCategories[tag] = category;
-      }
-      if (this.tagEngagement[tag] === undefined) {
-        this.tagEngagement[tag] = 0;
-      }
-      this.rawTagScores[tag] += weight;
-      this.tagEngagement[tag] += Math.abs(weight);
-    };
 
-    TAG_CATEGORIES.forEach(category => {
-      const tagString = post[`tag_string_${category}`] || '';
-      if (tagString) tagString.split(' ').forEach(tag => processTag(tag, category));
-    });
 
-    const generalTags = post.tag_string || '';
-    if (generalTags) {
-      generalTags.split(' ').forEach(tag => {
-        if (avoidedSet.has(tag)) return;
-        if (tag && this.tagCategories[tag] === undefined) {
-          processTag(tag, 'general');
-        } else if (tag && this.tagCategories[tag] === 'general') {
-          this.rawTagScores[tag] += weight;
-          this.tagEngagement[tag] += Math.abs(weight);
-        }
-      });
-    }
-
-    if (post.rating) {
-      if (this.rawRatingPreferences[post.rating] === undefined) this.rawRatingPreferences[post.rating] = 0;
-      this.rawRatingPreferences[post.rating] += weight;
-    }
-
-    if (post.file_ext) {
-      const isVideo = ['mp4', 'webm'].includes(post.file_ext);
-      const type = isVideo ? 'video' : 'image';
-      this.rawMediaTypePreferences[type] += weight;
-    }
-  }
-
-  normalizeScores() {
-    this.tagScores = {};
-    const tagScoreValues = Object.values(this.rawTagScores);
-    if (tagScoreValues.length > 0) {
-      const maxTagScore = Math.max(...tagScoreValues.map(Math.abs));
-      if (maxTagScore > 0) {
-        for (const tag in this.rawTagScores) {
-          this.tagScores[tag] = this.rawTagScores[tag] / maxTagScore;
-        }
-      } else {
-        this.tagScores = { ...this.rawTagScores };
-      }
-    }
-
-    this.ratingPreferences = {};
-    const totalRatingScore = Object.values(this.rawRatingPreferences).reduce((sum, val) => sum + Math.max(0, val), 0);
-    if (totalRatingScore > 0) {
-      for (const rating in this.rawRatingPreferences) {
-        this.ratingPreferences[rating] = Math.max(0, this.rawRatingPreferences[rating]) / totalRatingScore;
-      }
-    } else {
-      const ratings = Object.keys(this.rawRatingPreferences);
-      ratings.forEach(rating => this.ratingPreferences[rating] = 1 / ratings.length);
-    }
-
-    this.mediaTypePreferences = {};
-    const totalMediaScore = Math.max(0.001, this.rawMediaTypePreferences.image + this.rawMediaTypePreferences.video);
-    this.mediaTypePreferences.image = this.rawMediaTypePreferences.image / totalMediaScore;
-    this.mediaTypePreferences.video = this.rawMediaTypePreferences.video / totalMediaScore;
-  }
-
-  initializeDefaultProfile() {
-    this.rawTagScores = {};
-    this.tagScores = {};
-    this.tagEngagement = {};
-    this.tagCategories = {};
-
-    this.rawRatingPreferences = { general: 1.0, sensitive: 0.0, questionable: 0, explicit: 0 };
-    this.ratingPreferences = { ...this.rawRatingPreferences };
-
-    this.rawMediaTypePreferences = { image: 0.8, video: 0.2 };
-    this.mediaTypePreferences = { ...this.rawMediaTypePreferences };
-
-    this.lastUpdateTime = Date.now();
-  }
 
   async resetRecommendations() {
     const resetTime = Date.now();
@@ -340,7 +204,6 @@ class RecommendationWorkerCore {
       this.avoidedTags = [...COMMON_TAGS];
     }
 
-    this.initializeDefaultProfile();
     this.postScoreCache.clear();
     this.resetExploreSession();
 
@@ -352,11 +215,6 @@ class RecommendationWorkerCore {
 
     await StorageService.storeProfileSnapshot({
       timestamp: resetTime,
-      rawTagScores: this.rawTagScores,
-      tagEngagement: this.tagEngagement,
-      tagCategories: this.tagCategories,
-      ratingPreferences: this.rawRatingPreferences,
-      mediaTypePreferences: this.rawMediaTypePreferences,
     });
   }
 
@@ -391,21 +249,13 @@ class RecommendationWorkerCore {
     if (this.mlScorer.isTrained) {
       score = this.mlScorer.scorePost(
         post,
-        this.tagScores,
-        {
-          ratingPreferences: this.ratingPreferences,
-          mediaTypePreferences: this.mediaTypePreferences,
-        }
+        null,
+        null
       );
 
-      // If ML returns valid score, blend with heuristic for stability
+      // If ML returns valid score
       if (score >= 0) {
-        const heuristicScore = this._heuristicScorePost(post);
-        // Weighted blend: as ML gets more training data, trust it more
-        const mlWeight = Math.min(0.8, this.mlScorer.interactionCount / 100);
-        score = score * mlWeight + heuristicScore * (mlWeight > 0 ? (1 - mlWeight) : 1);
-
-        // Add small random noise for discovery
+        // Add small random noise for tiebreaking (preserves some diversity)
         score += Math.random() * 0.05;
 
         this.postScoreCache.set(post.id, score);
@@ -413,103 +263,9 @@ class RecommendationWorkerCore {
       }
     }
 
-    // Fallback to heuristic
-    score = this._heuristicScorePost(post);
+    // Cold start: no ML model yet, use post's community score as default
+    score = post.score || 0;
     this.postScoreCache.set(post.id, score);
-    return score;
-  }
-
-  /**
-   * Heuristic scoring (original algorithm, preserved as fallback).
-   */
-  _heuristicScorePost(post) {
-    if (!this.tagScores) {
-      this.updateUserProfile();
-    }
-
-    let score = 0;
-    score += 0.1;
-
-    const categoryScores = {
-      character: { sum: 0, count: 0 },
-      copyright: { sum: 0, count: 0 },
-      artist: { sum: 0, count: 0 },
-      general: { sum: 0, count: 0 },
-      meta: { sum: 0, count: 0 }
-    };
-
-    let familiarWeight = 0;
-    let novelCount = 0;
-    const noiseTags = new Set(this.avoidedTags || []);
-
-    const processTag = (tag, category) => {
-      if (!tag || noiseTags.has(tag)) return;
-
-      const tagScoreVal = this.tagScores?.[tag] || 0;
-      const engagement = this.tagEngagement?.[tag] || 0;
-      const resolvedCategory = this.tagCategories?.[tag] || category || 'general';
-
-      if (categoryScores[resolvedCategory]) {
-        categoryScores[resolvedCategory].sum += tagScoreVal;
-        categoryScores[resolvedCategory].count++;
-      }
-
-      if (engagement > 0) {
-        if (tagScoreVal > 0.3) {
-          if (['character', 'copyright', 'artist'].includes(resolvedCategory)) {
-            familiarWeight += 1.0;
-          } else {
-            familiarWeight += 0.2;
-          }
-        }
-      } else {
-        novelCount++;
-      }
-    };
-
-    TAG_CATEGORIES.forEach(category => {
-      const tagString = post[`tag_string_${category}`] || '';
-      if (tagString) tagString.split(' ').forEach(tag => processTag(tag, category));
-    });
-
-    const generalTags = post.tag_string || '';
-    if (generalTags) {
-      generalTags.split(' ').forEach(tag => {
-        if (!TAG_CATEGORIES.some(cat => post[`tag_string_${cat}`]?.includes(tag))) {
-          processTag(tag, 'general');
-        }
-      });
-    }
-
-    let weightedTagScore = 0;
-    let totalTagCount = 0;
-    for (const [category, data] of Object.entries(categoryScores)) {
-      if (data.count > 0) {
-        const multiplier = CATEGORY_MULTIPLIERS[category] || 0;
-        const avgCategoryScore = data.sum / data.count;
-        weightedTagScore += avgCategoryScore * multiplier * data.count;
-        totalTagCount += data.count;
-      }
-    }
-
-    if (totalTagCount > 0) {
-      score += (weightedTagScore / totalTagCount) * 3.0;
-    }
-
-    if (familiarWeight >= 1.0 && novelCount >= 5) {
-      score += 0.25;
-    }
-
-    if (post.rating && this.ratingPreferences[post.rating]) {
-      score += this.ratingPreferences[post.rating] * 2.0;
-    }
-
-    if (post.file_ext) {
-      const isVideo = ['mp4', 'webm'].includes(post.file_ext);
-      score += this.mediaTypePreferences[isVideo ? 'video' : 'image'] * 1.5;
-    }
-
-    score += Math.random() * 0.2;
     return score;
   }
 
@@ -518,96 +274,66 @@ class RecommendationWorkerCore {
   }
 
   getPostScoreDetails(post) {
-    if (!this.tagScores) this.initializeDefaultProfile();
-
     const details = {
-      totalScore: 0, baseScore: 0.1, ratingScore: 0, mediaScore: 0,
-      tagScore: 0, discoveryBonus: 0, familiarWeight: 0, novelTagCount: 0,
+      totalScore: 0, ratingScore: 0, mediaScore: 0,
+      tagScore: 0, strategyBonus: 0, strategy: post._strategy || 'none',
       contributingTags: [], mlScore: null, mlConfidence: 0
     };
 
-    details.totalScore += details.baseScore;
-    let tagScoreSum = 0;
-    let tagCount = 0;
-    const contributors = [];
-    const noiseTags = new Set(this.avoidedTags || []);
+    // Get the actual score used for ranking
+    details.totalScore = this.scorePost(post);
 
-    const processTag = (tag, category) => {
-      if (!tag || noiseTags.has(tag)) return;
-      const tagScoreValue = this.tagScores[tag] || 0;
-      const tagEngagementValue = this.tagEngagement?.[tag] || 0;
-      const storedCategory = this.tagCategories?.[tag] || category || 'general';
-
-      if (this.tagScores[tag] !== undefined) {
-        tagCount++;
-        tagScoreSum += tagScoreValue;
-        contributors.push({ tag, score: tagScoreValue, category: storedCategory });
-      }
-
-      if (tagEngagementValue > 0) {
-        if (tagScoreValue > 0.3) {
-          if (['character', 'copyright', 'artist'].includes(storedCategory)) {
-            details.familiarWeight += 1.0;
-          } else {
-            details.familiarWeight += 0.2;
-          }
-        }
-      } else {
-        details.novelTagCount++;
-      }
-    };
-
-    TAG_CATEGORIES.forEach(category => {
-      const tagString = post[`tag_string_${category}`] || '';
-      if (tagString) tagString.split(' ').forEach(tag => processTag(tag, category));
-    });
-
-    const generalTags = post.tag_string || '';
-    if (generalTags) {
-      generalTags.split(' ').forEach(tag => {
-        if (!TAG_CATEGORIES.some(cat => post[`tag_string_${cat}`]?.includes(tag))) {
-          processTag(tag, 'general');
-        }
-      });
-    }
-
-    if (tagCount > 0) {
-      details.tagScore = (tagScoreSum / tagCount) * 3.0;
-      details.totalScore += details.tagScore;
-    }
-    details.contributingTags = contributors.sort((a, b) => b.score - a.score).slice(0, 10);
-
-    if (details.familiarWeight >= 1.0 && details.novelTagCount >= 5) {
-      details.discoveryBonus = 0.25;
-      details.totalScore += details.discoveryBonus;
-    }
-
-    if (post.rating && this.ratingPreferences[post.rating]) {
-      details.ratingScore = this.ratingPreferences[post.rating] * 2.0;
-      details.totalScore += details.ratingScore;
-    }
-
-    if (post.file_ext) {
-      const isVideo = ['mp4', 'webm'].includes(post.file_ext);
-      details.mediaScore = this.mediaTypePreferences[isVideo ? 'video' : 'image'] * 1.5;
-      details.totalScore += details.mediaScore;
-    }
-
-    // Add ML-specific details
-    if (this.mlScorer.isTrained) {
-      const mlScore = this.mlScorer.scorePost(
-        post,
-        this.tagScores,
-        {
-          ratingPreferences: this.ratingPreferences,
-          mediaTypePreferences: this.mediaTypePreferences,
-        }
-      );
+    // ML score breakdown
+    if (this.mlScorer && this.mlScorer.isTrained) {
+      const mlScore = this.mlScorer.scorePost(post, null, null);
       if (mlScore >= 0) {
         details.mlScore = mlScore;
         details.mlConfidence = Math.min(1, this.mlScorer.interactionCount / 50);
       }
     }
+
+    // Strategy bonus applied during ranking (from rankPosts)
+    if (post._strategy) {
+      switch (post._strategy) {
+        case 'pivot': details.strategyBonus = 0.3; break;
+        case 'reach': details.strategyBonus = 0.5; break;
+        case 'wildcard': details.strategyBonus = 0.4; break;
+        case 'duo': details.strategyBonus = 0.5; break;
+      }
+    }
+
+    // Contributing tags: compute user-tag affinity via embedding similarity
+    const postTags = (post.tag_string || '').split(' ').filter(Boolean);
+    const contributors = [];
+
+    // Build user interest embedding from historically engaged tags
+    if (this.mlInitialized && tagEmbedding && tagEmbedding.tagFrequency.size > 0) {
+      const topTags = Array.from(tagEmbedding.tagFrequency.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 20)
+        .map(([tag]) => tag);
+      this.userEmbedding = tagEmbedding.getAverageEmbedding(topTags);
+    }
+    const userEmb = this.userEmbedding;
+
+    for (const tag of postTags.slice(0, 15)) {
+      const tagEmb = tagEmbedding.getEmbedding(tag);
+      if (tagEmb && userEmb) {
+        let dot = 0, normU = 0, normT = 0;
+        for (let i = 0; i < tagEmb.length; i++) {
+          dot += userEmb[i] * tagEmb[i];
+          normU += userEmb[i] * userEmb[i];
+          normT += tagEmb[i] * tagEmb[i];
+        }
+        const denom = Math.sqrt(normU) * Math.sqrt(normT);
+        const score = denom > 1e-8 ? dot / denom : 0;
+        if (score > 0) {
+          contributors.push({ tag, score, category: 'similarity' });
+        }
+      }
+    }
+    contributors.sort((a, b) => b.score - a.score);
+    details.contributingTags = contributors.slice(0, 10);
 
     return details;
   }
@@ -629,31 +355,37 @@ class RecommendationWorkerCore {
   }
 
   summarizeTagScores(limit = 10) {
-    const sortedTags = Object.entries(this.tagScores || {})
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit);
-    return Object.fromEntries(sortedTags);
+    // Return top tags by embedding norm (strength of learned representation)
+    if (!this.mlInitialized) return {};
+    const tagScores = [];
+    for (const [tag, emb] of tagEmbedding.embeddings) {
+      const norm = Math.sqrt(emb.reduce((s, v) => s + v * v, 0));
+      tagScores.push({ tag, score: norm });
+    }
+    tagScores.sort((a, b) => b.score - a.score);
+    return Object.fromEntries(tagScores.slice(0, limit).map(t => [t.tag, t.score]));
   }
 
   getRecommendedTags(limit = 5) {
-    if (!this.tagScores) return [];
-    return Object.entries(this.tagScores)
-      .filter(([tag, score]) => score > 0 && this.tagCategories[tag] !== 'meta')
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, limit)
-      .map(([tag]) => tag);
+    // Return tags with strongest embedding representations
+    if (!this.mlInitialized) return [];
+    const tagScores = [];
+    for (const [tag, emb] of tagEmbedding.embeddings) {
+      const norm = Math.sqrt(emb.reduce((s, v) => s + v * v, 0));
+      tagScores.push({ tag, score: norm });
+    }
+    tagScores.sort((a, b) => b.score - a.score);
+    return tagScores.slice(0, limit).map(t => t.tag);
   }
 
   getRecommendedRatings() {
-    if (!this.ratingPreferences) return ['general'];
-    return Object.entries(this.ratingPreferences)
-      .filter(([_, pref]) => pref > 0.15)
-      .map(([rating]) => rating);
+    // Simplified — return general as default
+    return ['general'];
   }
 
   buildRecommendedQueryParams(includeUserTags = true, exploreMode = false) {
     let tags = [];
-    if (includeUserTags && this.tagScores) {
+    if (includeUserTags && this.mlInitialized) {
       const recommendedTags = this.getRecommendedTags(1);
       if (recommendedTags.length > 0) tags.push(recommendedTags[0]);
     }
@@ -669,19 +401,15 @@ class RecommendationWorkerCore {
   }
 
   getQueryableTagsWithScores() {
-    if (!this.tagScores) return [];
-    const QUERY_CATEGORY_WEIGHTS = { character: 1.0, copyright: 1.0, artist: 1.0, general: 0.5, meta: 0.0 };
-    return Object.entries(this.tagScores)
-      .filter(([tag, score]) => score > 0)
-      .filter(([tag]) => this.tagCategories[tag] !== 'meta')
-      .filter(([tag]) => !this.avoidedTags.includes(tag))
-      .filter(([tag]) => tag !== 'video')
-      .map(([tag, score]) => {
-        const category = this.tagCategories?.[tag] || 'general';
-        const weight = QUERY_CATEGORY_WEIGHTS[category] ?? 0.15;
-        return { tag, score: score * weight };
-      })
-      .sort((a, b) => b.score - a.score);
+    if (!this.mlInitialized) return [];
+    // Use tag embedding norms as query weights
+    const tagScores = [];
+    for (const [tag, emb] of tagEmbedding.embeddings) {
+      if (this.avoidedTags.includes(tag)) continue;
+      const norm = Math.sqrt(emb.reduce((s, v) => s + v * v, 0));
+      tagScores.push({ tag, score: norm });
+    }
+    return tagScores.sort((a, b) => b.score - a.score);
   }
 
   /**
