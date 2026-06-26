@@ -205,29 +205,37 @@
       });
     }
 
+    // Expanded tag pool to exercise incremental embedding growth.
+    // Each strategy draws from a larger, distinct set so the count climbs.
+    const TAG_POOL = [
+      // anchor - vocaloid characters
+      'hatsune_miku vocaloid 1girl solo long_hair blue_hair twintails',
+      'hatsune_miku 1girl solo vocaloid headphones blue_hair',
+      'kagamine_rin 1girl solo long_hair blonde_hair',
+      'megurine_luka 1girl solo long_hair pink_hair',
+      // pivot - broader anime
+      'hatsune_miku 1girl solo long_hair blue_hair age:>3mo highres',
+      'vocaloid 1girl solo long_hair blue_hair order:rank',
+      'saber_(fate) 1girl solo sword armor',
+      'gokou_roubei 1girl solo long_hair red_eyes',
+      // reach - specific characters
+      'rem_(re:zero) 1girl solo long_hair maid_headdress',
+      'ganyu_(genshin_impact) 1girl solo long_hair horns',
+      'megumin_(konoSuba) 1girl solo witch_hat crimson_eyes',
+      'nessa_(pokémon) 1girl solo long_hair blue_eyes',
+      // wildcard - settings and original
+      'scenery landscape sky clouds sunset',
+      'original 1girl solo order:rank age:<1mo',
+      'fantasy forest trees magic',
+      'cyberpunk city night neon_lights',
+      'seaside beach sea waves',
+      // fallback - simple
+      '1girl solo',
+    ];
+
     function makePost(id, tagType = 'anime', strategy = null) {
-      const tagSets = {
-        anchor: [
-          'hatsune_miku vocaloid 1girl solo long_hair blue_hair twintails',
-          'hatsune_miku 1girl solo vocaloid headphones blue_hair',
-        ],
-        pivot: [
-          'hatsune_miku 1girl solo long_hair blue_hair age:>3mo highres',
-          'vocaloid 1girl solo long_hair blue_hair order:rank',
-        ],
-        reach: [
-          'rem_(re:zero) 1girl solo long_hair maid_headdress',
-          'ganyu_(genshin_impact) 1girl solo long_hair horns',
-        ],
-        wildcard: [
-          'scenery landscape sky clouds sunset',
-          'original 1girl solo order:rank age:<1mo',
-        ],
-        fallback: [
-          '1girl solo',
-        ],
-      };
-      const tags = tagSets[strategy] ? tagSets[strategy][id % tagSets[strategy].length] : tagSets.anchor[0];
+      // Deterministic pick: use id to cycle through the full pool
+      const tag = TAG_POOL[id % TAG_POOL.length];
       const ratings = ['g', 'g', 'g', 's', 'q'];
       const post = {
         id: 100000 + id,
