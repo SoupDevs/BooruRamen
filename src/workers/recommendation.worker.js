@@ -14,8 +14,7 @@ const INTERACTION_WEIGHTS = {
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
 
-// Heuristic scoring constants (fallback when ML is not trained)
-const CATEGORY_MULTIPLIERS = { character: 2.5, copyright: 2.0, artist: 2.0, general: 0.4, meta: 0.0 };
+
 
 export const COMMON_TAGS = [
   '1girl', '1boy', '2girls', '2boys', 'solo', 'comic', 'monochrome',
@@ -387,7 +386,7 @@ class RecommendationWorkerCore {
 
     let score;
 
-    // Use ML scorer if trained
+    // Use ML scorer when trained
     if (this.mlScorer.isTrained) {
       score = this.mlScorer.scorePost(
         post,
@@ -398,119 +397,55 @@ class RecommendationWorkerCore {
         }
       );
 
-      // If ML returns valid score, blend with heuristic for stability
+      // ML returns valid score — use it directly
       if (score >= 0) {
-        const heuristicScore = this._heuristicScorePost(post);
-        // Weighted blend: as ML gets more training data, trust it more
-        const mlWeight = Math.min(0.8, this.mlScorer.interactionCount / 100);
-        score = score * mlWeight + heuristicScore * (mlWeight > 0 ? (1 - mlWeight) : 1);
-
         // Add small random noise for discovery
         score += Math.random() * 0.05;
-
         this.postScoreCache.set(post.id, score);
         return score;
       }
     }
 
-    // Fallback to heuristic
-    score = this._heuristicScorePost(post);
+    // Cold start: use embedding-based similarity (no heuristic)
+    score = this._embeddingScore(post);
+    score += Math.random() * 0.1; // more noise during cold start for exploration
     this.postScoreCache.set(post.id, score);
     return score;
   }
 
   /**
-   * Heuristic scoring (original algorithm, preserved as fallback).
+   * Embedding-based score for cold start (no heuristic).
+   * Uses cosine similarity between user interest embedding and post tag embedding.
    */
-  _heuristicScorePost(post) {
-    if (!this.tagScores) {
-      this.updateUserProfile();
+  _embeddingScore(post) {
+    if (!this.tagScores || this.tagScores.size === 0) return 0;
+
+    // Build user interest embedding from top tags
+    const userEntries = Array.from(this.tagScores.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20);
+    const userTags = userEntries.map(([tag]) => tag);
+    const userTagWeights = new Map(userEntries);
+    const userEmb = tagEmbedding.getAverageEmbedding(userTags, userTagWeights);
+
+    // Build post tag embedding
+    const postTags = (post.tag_string || '').split(' ').filter(t => t);
+    const postEmb = tagEmbedding.getAverageEmbedding(postTags);
+
+    if (!userEmb || !postEmb) return 0.1;
+
+    // Cosine similarity
+    let dot = 0, normU = 0, normP = 0;
+    for (let i = 0; i < tagEmbedding.dim; i++) {
+      dot += userEmb[i] * postEmb[i];
+      normU += userEmb[i] * userEmb[i];
+      normP += postEmb[i] * postEmb[i];
     }
+    const denom = Math.sqrt(normU) * Math.sqrt(normP);
+    if (denom < 1e-8) return 0.1;
 
-    let score = 0;
-    score += 0.1;
-
-    const categoryScores = {
-      character: { sum: 0, count: 0 },
-      copyright: { sum: 0, count: 0 },
-      artist: { sum: 0, count: 0 },
-      general: { sum: 0, count: 0 },
-      meta: { sum: 0, count: 0 }
-    };
-
-    let familiarWeight = 0;
-    let novelCount = 0;
-    const noiseTags = new Set(this.avoidedTags || []);
-
-    const processTag = (tag, category) => {
-      if (!tag || noiseTags.has(tag)) return;
-
-      const tagScoreVal = this.tagScores?.[tag] || 0;
-      const engagement = this.tagEngagement?.[tag] || 0;
-      const resolvedCategory = this.tagCategories?.[tag] || category || 'general';
-
-      if (categoryScores[resolvedCategory]) {
-        categoryScores[resolvedCategory].sum += tagScoreVal;
-        categoryScores[resolvedCategory].count++;
-      }
-
-      if (engagement > 0) {
-        if (tagScoreVal > 0.3) {
-          if (['character', 'copyright', 'artist'].includes(resolvedCategory)) {
-            familiarWeight += 1.0;
-          } else {
-            familiarWeight += 0.2;
-          }
-        }
-      } else {
-        novelCount++;
-      }
-    };
-
-    TAG_CATEGORIES.forEach(category => {
-      const tagString = post[`tag_string_${category}`] || '';
-      if (tagString) tagString.split(' ').forEach(tag => processTag(tag, category));
-    });
-
-    const generalTags = post.tag_string || '';
-    if (generalTags) {
-      generalTags.split(' ').forEach(tag => {
-        if (!TAG_CATEGORIES.some(cat => post[`tag_string_${cat}`]?.includes(tag))) {
-          processTag(tag, 'general');
-        }
-      });
-    }
-
-    let weightedTagScore = 0;
-    let totalTagCount = 0;
-    for (const [category, data] of Object.entries(categoryScores)) {
-      if (data.count > 0) {
-        const multiplier = CATEGORY_MULTIPLIERS[category] || 0;
-        const avgCategoryScore = data.sum / data.count;
-        weightedTagScore += avgCategoryScore * multiplier * data.count;
-        totalTagCount += data.count;
-      }
-    }
-
-    if (totalTagCount > 0) {
-      score += (weightedTagScore / totalTagCount) * 3.0;
-    }
-
-    if (familiarWeight >= 1.0 && novelCount >= 5) {
-      score += 0.25;
-    }
-
-    if (post.rating && this.ratingPreferences[post.rating]) {
-      score += this.ratingPreferences[post.rating] * 2.0;
-    }
-
-    if (post.file_ext) {
-      const isVideo = ['mp4', 'webm'].includes(post.file_ext);
-      score += this.mediaTypePreferences[isVideo ? 'video' : 'image'] * 1.5;
-    }
-
-    score += Math.random() * 0.2;
-    return score;
+    // Map from [-1, 1] to [0, 1]
+    return (dot / denom + 1) * 0.5;
   }
 
   scorePosts(posts) {
@@ -520,80 +455,30 @@ class RecommendationWorkerCore {
   getPostScoreDetails(post) {
     if (!this.tagScores) this.initializeDefaultProfile();
 
+    // Get the actual score used for ranking
+    const totalScore = this.scorePost(post);
+
     const details = {
-      totalScore: 0, baseScore: 0.1, ratingScore: 0, mediaScore: 0,
-      tagScore: 0, discoveryBonus: 0, familiarWeight: 0, novelTagCount: 0,
-      contributingTags: [], mlScore: null, mlConfidence: 0
+      totalScore,
+      mlScore: null,
+      mlConfidence: 0,
+      mlFeatures: null,
+      mlTagContributions: null,
+      contributingTags: [],
     };
 
-    details.totalScore += details.baseScore;
-    let tagScoreSum = 0;
-    let tagCount = 0;
+    // Get per-tag heuristic scores for reference (sorted by tag affinity)
+    const postTags = (post.tag_string || '').split(' ').filter(t => t);
     const contributors = [];
-    const noiseTags = new Set(this.avoidedTags || []);
-
-    const processTag = (tag, category) => {
-      if (!tag || noiseTags.has(tag)) return;
-      const tagScoreValue = this.tagScores[tag] || 0;
-      const tagEngagementValue = this.tagEngagement?.[tag] || 0;
-      const storedCategory = this.tagCategories?.[tag] || category || 'general';
-
+    for (const tag of postTags) {
       if (this.tagScores[tag] !== undefined) {
-        tagCount++;
-        tagScoreSum += tagScoreValue;
-        contributors.push({ tag, score: tagScoreValue, category: storedCategory });
+        contributors.push({ tag, score: this.tagScores[tag] });
       }
-
-      if (tagEngagementValue > 0) {
-        if (tagScoreValue > 0.3) {
-          if (['character', 'copyright', 'artist'].includes(storedCategory)) {
-            details.familiarWeight += 1.0;
-          } else {
-            details.familiarWeight += 0.2;
-          }
-        }
-      } else {
-        details.novelTagCount++;
-      }
-    };
-
-    TAG_CATEGORIES.forEach(category => {
-      const tagString = post[`tag_string_${category}`] || '';
-      if (tagString) tagString.split(' ').forEach(tag => processTag(tag, category));
-    });
-
-    const generalTags = post.tag_string || '';
-    if (generalTags) {
-      generalTags.split(' ').forEach(tag => {
-        if (!TAG_CATEGORIES.some(cat => post[`tag_string_${cat}`]?.includes(tag))) {
-          processTag(tag, 'general');
-        }
-      });
     }
+    contributors.sort((a, b) => b.score - a.score);
+    details.contributingTags = contributors.slice(0, 10);
 
-    if (tagCount > 0) {
-      details.tagScore = (tagScoreSum / tagCount) * 3.0;
-      details.totalScore += details.tagScore;
-    }
-    details.contributingTags = contributors.sort((a, b) => b.score - a.score).slice(0, 10);
-
-    if (details.familiarWeight >= 1.0 && details.novelTagCount >= 5) {
-      details.discoveryBonus = 0.25;
-      details.totalScore += details.discoveryBonus;
-    }
-
-    if (post.rating && this.ratingPreferences[post.rating]) {
-      details.ratingScore = this.ratingPreferences[post.rating] * 2.0;
-      details.totalScore += details.ratingScore;
-    }
-
-    if (post.file_ext) {
-      const isVideo = ['mp4', 'webm'].includes(post.file_ext);
-      details.mediaScore = this.mediaTypePreferences[isVideo ? 'video' : 'image'] * 1.5;
-      details.totalScore += details.mediaScore;
-    }
-
-    // Add ML-specific details
+    // Add ML-specific breakdown when trained
     if (this.mlScorer.isTrained) {
       const userProfile = {
         ratingPreferences: this.ratingPreferences,
@@ -604,7 +489,6 @@ class RecommendationWorkerCore {
         details.mlScore = mlScore;
         details.mlConfidence = Math.min(1, this.mlScorer.interactionCount / 50);
 
-        // Get ML feature breakdown (with error handling for edge cases)
         try {
           details.mlFeatures = this.mlScorer.getFeatureValues(post, this.tagScores, userProfile);
           details.mlTagContributions = this.mlScorer.getTagContributions(post, this.tagScores, userProfile);
