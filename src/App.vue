@@ -60,14 +60,14 @@
           </div>
 
           <div v-if="debugDetails">
-            <!-- ML Score (primary) -->
+            <!-- Primary Score -->
             <p v-if="debugDetails.mlScore !== null && debugDetails.mlScore !== undefined">
               <span class="text-pink-400 font-bold">ML Score:</span> {{ debugDetails.mlScore?.toFixed(3) }}
               <span class="text-gray-500 text-xs">(conf: {{ ((debugDetails.mlConfidence || 0) * 100).toFixed(0) }}%)</span>
             </p>
-
-            <!-- Heuristic Score (secondary) -->
-            <p><span class="text-gray-400">Heuristic:</span> {{ debugDetails.totalScore?.toFixed(3) }}</p>
+            <p v-else>
+              <span class="text-pink-400 font-bold">Score:</span> {{ debugDetails.totalScore?.toFixed(3) }}
+            </p>
 
             <!-- ML Feature Breakdown -->
             <div v-if="debugDetails.mlFeatures" class="mt-2 border-t border-gray-700 pt-1">
@@ -110,30 +110,16 @@
               </ul>
             </div>
 
-            <!-- Heuristic breakdown (collapsed) -->
-            <details class="mt-1">
-              <summary class="text-gray-500 text-xs cursor-pointer hover:text-gray-300">Heuristic Breakdown</summary>
-              <div class="mt-1 pl-2 border-l border-gray-700">
-                <div v-if="debugDetails.contributingTags && debugDetails.contributingTags.length > 0" class="mt-1">
-                  <p class="text-xs text-gray-400">Top Tags (heuristic):</p>
-                  <ul class="list-none pl-0 space-y-0.5">
-                    <li v-for="tag in debugDetails.contributingTags" :key="tag.tag" class="flex justify-between text-xs">
-                      <span class="truncate pr-2" :class="tag.score > 0 ? 'text-green-400' : 'text-red-400'">{{ tag.tag }}</span>
-                      <span>{{ tag.score.toFixed(2) }}</span>
-                    </li>
-                  </ul>
-                </div>
-                <div v-if="debugDetails.ratingScore" class="mt-1 text-xs text-gray-400">
-                  Rating: +{{ debugDetails.ratingScore.toFixed(2) }}
-                </div>
-                <div v-if="debugDetails.mediaScore" class="text-xs text-gray-400">
-                  Media: +{{ debugDetails.mediaScore.toFixed(2) }}
-                </div>
-                <div v-if="debugDetails.discoveryBonus" class="text-xs text-purple-400 mt-0.5">
-                  Discovery: +{{ debugDetails.discoveryBonus.toFixed(2) }}
-                </div>
-              </div>
-            </details>
+            <!-- User Tag Affinities (what user likes that match this post) -->
+            <div v-if="debugDetails.contributingTags && debugDetails.contributingTags.length > 0" class="mt-2 border-t border-gray-700 pt-1">
+              <p class="text-gray-300 text-xs font-semibold mb-1">Your Tag Affinities:</p>
+              <ul class="list-none pl-0 mt-0.5 space-y-0.5">
+                <li v-for="tag in debugDetails.contributingTags" :key="tag.tag" class="flex justify-between text-xs">
+                  <span class="truncate pr-2" :class="tag.score > 0 ? 'text-green-400' : 'text-red-400'">{{ tag.tag }}</span>
+                  <span>{{ tag.score.toFixed(3) }}</span>
+                </li>
+              </ul>
+            </div>
           </div>
           <div v-else>
              <p class="italic text-gray-500">Calculating score details...</p>
