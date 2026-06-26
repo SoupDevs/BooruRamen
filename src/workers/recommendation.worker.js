@@ -1,5 +1,6 @@
 import StorageService from '../services/StorageService';
 import { TagEmbedding } from '../services/TagEmbedding';
+import tagEmbedding from '../services/TagEmbedding';
 import { MLScorer } from '../services/MLScorer';
 import { BanditExplorer } from '../services/BanditExplorer';
 
