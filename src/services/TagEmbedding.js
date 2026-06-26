@@ -43,6 +43,7 @@ class TagEmbedding {
   constructor() {
     this.dim = EMBEDDING_DIM;
     this.embeddings = new Map();      // tag -> Float32Array
+    this.pendingTags = new Set();    // tags seen but not yet PMI-embedded
     this.tagCooccurrence = new Map();  // tag -> Map(tag -> count)
     this.tagFrequency = new Map();      // tag -> count
     this.totalPosts = 0;
@@ -77,6 +78,14 @@ class TagEmbedding {
       this.tagCooccurrence.set(tag, new Map(Object.entries(coocs)));
     }
     this.totalPosts = data.totalPosts || 0;
+    // If snapshot has more frequency entries than embeddings, mark the diff as pending
+    if (this.tagFrequency.size > this.embeddings.size) {
+      for (const tag of this.tagFrequency.keys()) {
+        if (!this.embeddings.has(tag)) {
+          this.pendingTags.add(tag);
+        }
+      }
+    }
   }
 
   /**
@@ -96,6 +105,7 @@ class TagEmbedding {
       embeddings,
       tagCooccurrence,
       tagFrequency,
+      pendingTags: Array.from(this.pendingTags),
       totalPosts: this.totalPosts,
     };
   }
@@ -159,7 +169,11 @@ class TagEmbedding {
 
     this.totalPosts++;
 
+    const newTags = new Set();
     for (const tag of tags) {
+      if (!this.tagFrequency.has(tag)) {
+        newTags.add(tag);
+      }
       this.tagFrequency.set(tag, (this.tagFrequency.get(tag) || 0) + 1);
     }
 
@@ -175,6 +189,11 @@ class TagEmbedding {
           this._addCooccurrence(tags[j], tags[i]);
         }
       }
+    }
+
+    // Mark new tags as pending PMI rebuild
+    for (const tag of newTags) {
+      this.pendingTags.add(tag);
     }
 
     // Incrementally update embeddings for affected tags only
@@ -194,8 +213,8 @@ class TagEmbedding {
       this._buildEmbeddings();
     }
 
-    // Periodically ensure all tracked tags have embeddings
-    if (this.tagFrequency.size > this.embeddings.size && this.tagFrequency.size >= this.buildThreshold) {
+    // Rebuild PMI embeddings when there are pending tags (new tags or restored from snapshot)
+    if (this.pendingTags.size > 0 && this.tagFrequency.size >= this.buildThreshold) {
       this._buildEmbeddings();
     }
   }
@@ -221,6 +240,9 @@ class TagEmbedding {
     const tags = Array.from(this.tagFrequency.keys());
     const n = tags.length;
     if (n === 0) return;
+
+    // Clear pending set before rebuild so we don't re-trigger on every interaction
+    this.pendingTags.clear();
 
     // If very few tags, just use random embeddings
     if (n < 10) {
@@ -481,6 +503,8 @@ class TagEmbedding {
   getStats() {
     return {
       totalTags: this.embeddings.size,
+      pendingTags: this.pendingTags.size,
+      totalTagsSeen: this.tagFrequency.size,
       totalPostsProcessed: this.totalPosts,
       cooccurrencePairs: Array.from(this.tagCooccurrence.values())
         .reduce((sum, m) => sum + m.size, 0),

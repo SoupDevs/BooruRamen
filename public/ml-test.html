@@ -67,7 +67,7 @@
         <h2>Tag Embeddings</h2>
         <div class="stat">
           <div class="stat-value" id="tag-count">0</div>
-          <div class="stat-label">tags with embeddings</div>
+          <div class="stat-label">tags with embeddings (<span id="tag-pending">0</span> pending, <span id="tag-seen">0</span> seen)</div>
         </div>
       </div>
       <div class="card">
@@ -266,6 +266,8 @@
         }
         document.getElementById('interaction-count').textContent = stats.mlScorer.interactionCount;
         document.getElementById('tag-count').textContent = stats.tagEmbeddings.totalTags;
+        document.getElementById('tag-pending').textContent = stats.tagEmbeddings.pendingTags;
+        document.getElementById('tag-seen').textContent = stats.tagEmbeddings.totalTagsSeen;
         document.getElementById('best-strategy').textContent = stats.bandit.bestStrategy.type;
 
         // Loss

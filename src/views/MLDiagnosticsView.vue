@@ -33,6 +33,10 @@
           <p class="text-lg font-mono">{{ mlStats?.tagEmbeddings?.totalTags || 0 }}</p>
           <p class="text-xs text-gray-500">tags with embeddings</p>
           <p class="text-xs text-gray-500">
+            {{ mlStats?.tagEmbeddings?.totalTagsSeen || 0 }} seen,
+            {{ mlStats?.tagEmbeddings?.pendingTags || 0 }} pending rebuild
+          </p>
+          <p class="text-xs text-gray-500">
             {{ mlStats?.tagEmbeddings?.cooccurrencePairs || 0 }} co-occurrence pairs
           </p>
         </div>
