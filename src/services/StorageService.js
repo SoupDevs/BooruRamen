@@ -277,7 +277,6 @@ const clearAllData = async () => {
     await db.viewHistory.clear();
     await db.appSettings.clear();
     await db.tagCache.clear();
-    await db.profileSnapshot.clear();
     return true;
   } catch (error) {
     console.error('Error clearing all data:', error);
