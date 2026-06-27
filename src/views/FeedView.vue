@@ -322,16 +322,6 @@ export default {
         tags.push(...this.blacklistTags.map(t => `-${t}`));
       }
 
-      // Inject top recommended tags from recommendation engine
-      // when no explicit whitelist is set
-      if ((!query.whitelist && !this.whitelistTags?.length) && this.recommendationSystem) {
-        const topTags = this.recommendationSystem.getQueryableTags();
-        if (topTags.length > 0) {
-          // Use top 3 tags to keep query focused (max 2 expensive tags for API limits)
-          tags.push(...topTags.slice(0, 2));
-        }
-      }
-
       return tags.join(' ');
     },
 
@@ -429,51 +419,73 @@ export default {
           }
 
         } else {
-          // Normal mode with deduplication
-          const tagsForApi = this.buildTagsFromRouteQuery();
+          // Normal mode: use recommendation engine's multi-strategy queries
+          // for balanced exploitation (anchor/pivot) + exploration (reach/wildcard)
           const targetCount = 10;
-          let fetchedCount = 0;
-          let attempts = 0;
-          const maxAttempts = 5; // Prevent infinite loops
-          
-          while (newPosts.length < targetCount && attempts < maxAttempts) {
-            attempts++;
-            
-            // Fetch a batch of posts
+
+          if (!this.recommendationSystem) {
+            // Fallback to simple tags if recommendation system not available
+            const tagsForApi = this.buildTagsFromRouteQuery();
             const rawPosts = await BooruService.getPosts({
               tags: tagsForApi,
               page: this.page,
-              limit: 20, // Fetch more than needed to account for filtering
+              limit: 20,
               sort: this.sort,
               sortOrder: this.sortOrder,
             });
-            
-            if (!rawPosts || rawPosts.length === 0) {
-              break; // No more posts available
-            }
-            
-            // Filter out blocked posts
+            if (!rawPosts || rawPosts.length === 0) break;
             const filteredBatch = rawPosts.filter(p => !blockedKeys.has(this.getCompositeKey(p)));
-            
-            // Add unique posts to our result
             for (const post of filteredBatch) {
               if (newPosts.length < targetCount) {
-                // Attach search criteria for debug mode
                 post._searchCriteria = tagsForApi;
                 newPosts.push(post);
-                blockedKeys.add(this.getCompositeKey(post)); 
+                blockedKeys.add(this.getCompositeKey(post));
               }
             }
-            
-            // Always increment page to move forward in the API
             this.page++;
-            
-            // If we got fewer posts than requested from API (ignoring filter), we reached the end
-            if (rawPosts.length < 20) {
-              break;
+            if (rawPosts.length < 20) break;
+          } else {
+            // Use recommendation engine multi-strategy queries
+            let attempts = 0;
+            const maxAttempts = 5;
+
+            while (newPosts.length < targetCount && attempts < maxAttempts) {
+              attempts++;
+
+              const queries = await this.recommendationSystem.generateMultiStrategyQueries(
+                ['general'], this.whitelistTags || []
+              );
+
+              // Fetch from first available query
+              let fetched = false;
+              for (const query of queries) {
+                if (newPosts.length >= targetCount) break;
+
+                const rawPosts = await BooruService.getPosts({
+                  tags: query.tags,
+                  limit: 10,
+                  sort: this.sort,
+                  sortOrder: this.sortOrder,
+                });
+
+                if (rawPosts && rawPosts.length > 0) {
+                  for (const post of rawPosts) {
+                    if (newPosts.length >= targetCount) break;
+                    if (!blockedKeys.has(this.getCompositeKey(post))) {
+                      post._searchCriteria = query.tags;
+                      post._strategy = query.type;
+                      newPosts.push(post);
+                      blockedKeys.add(this.getCompositeKey(post));
+                    }
+                  }
+                  fetched = true;
+                  break; // Only use the first successful query per attempt
+                }
+              }
+
+              if (!fetched) break;
             }
           }
-        }
         
         if (newPosts && newPosts.length > 0) {
           this.posts = [...this.posts, ...newPosts];
