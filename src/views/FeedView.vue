@@ -315,13 +315,23 @@ export default {
       } else if (this.whitelistTags && this.whitelistTags.length > 0) {
         tags.push(...this.whitelistTags);
       }
-      
+
       if (query.blacklist) {
         tags.push(...query.blacklist.split(',').map(t => `-${t}`));
       } else if (this.blacklistTags && this.blacklistTags.length > 0) {
         tags.push(...this.blacklistTags.map(t => `-${t}`));
       }
-      
+
+      // Inject top recommended tags from recommendation engine
+      // when no explicit whitelist is set
+      if ((!query.whitelist && !this.whitelistTags?.length) && this.recommendationSystem) {
+        const topTags = this.recommendationSystem.getQueryableTags();
+        if (topTags.length > 0) {
+          // Use top 3 tags to keep query focused (max 2 expensive tags for API limits)
+          tags.push(...topTags.slice(0, 2));
+        }
+      }
+
       return tags.join(' ');
     },
 

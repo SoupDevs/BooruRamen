@@ -207,7 +207,14 @@ class RecommendationWorkerCore {
 
     // Flush any remaining training samples
     if (this.mlInitialized) {
+      const wasTrained = this.mlScorer.isTrained;
       this.mlScorer.flushTraining();
+
+      // Clear post cache when ML transitions to trained state
+      // so posts are re-scored with the new ML model
+      if (!wasTrained && this.mlScorer.isTrained) {
+        this.postScoreCache.clear();
+      }
     }
 
     this.lastUpdateTime = now;
