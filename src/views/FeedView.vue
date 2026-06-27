@@ -426,24 +426,35 @@ export default {
           if (!this.recommendationSystem) {
             // Fallback to simple tags if recommendation system not available
             const tagsForApi = this.buildTagsFromRouteQuery();
-            const rawPosts = await BooruService.getPosts({
-              tags: tagsForApi,
-              page: this.page,
-              limit: 20,
-              sort: this.sort,
-              sortOrder: this.sortOrder,
-            });
-            if (!rawPosts || rawPosts.length === 0) break;
-            const filteredBatch = rawPosts.filter(p => !blockedKeys.has(this.getCompositeKey(p)));
-            for (const post of filteredBatch) {
-              if (newPosts.length < targetCount) {
-                post._searchCriteria = tagsForApi;
-                newPosts.push(post);
-                blockedKeys.add(this.getCompositeKey(post));
+            const targetCount = 10;
+            let attempts = 0;
+            const maxAttempts = 5;
+
+            while (newPosts.length < targetCount && attempts < maxAttempts) {
+              attempts++;
+
+              const rawPosts = await BooruService.getPosts({
+                tags: tagsForApi,
+                page: this.page,
+                limit: 20,
+                sort: this.sort,
+                sortOrder: this.sortOrder,
+              });
+
+              if (!rawPosts || rawPosts.length === 0) break;
+
+              const filteredBatch = rawPosts.filter(p => !blockedKeys.has(this.getCompositeKey(p)));
+              for (const post of filteredBatch) {
+                if (newPosts.length < targetCount) {
+                  post._searchCriteria = tagsForApi;
+                  newPosts.push(post);
+                  blockedKeys.add(this.getCompositeKey(post));
+                }
               }
+
+              this.page++;
+              if (rawPosts.length < 20) break;
             }
-            this.page++;
-            if (rawPosts.length < 20) break;
           } else {
             // Use recommendation engine multi-strategy queries
             let attempts = 0;
