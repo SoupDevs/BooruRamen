@@ -422,10 +422,13 @@ class TagEmbedding {
     let totalWeight = 0;
 
     for (const tag of tags) {
-      const emb = this.embeddings.get(tag);
-      if (!emb) continue;
+      let emb = this.embeddings.get(tag);
+      if (!emb) {
+        // Generate deterministic fallback embedding for unknown tags
+        emb = this._getFallbackEmbedding(tag);
+      }
 
-      const w = weights ? (weights.get(tag) || 1) : 1;
+      const w = weights ? (weights.get(tag) || weights[tag] || 1) : 1;
       for (let i = 0; i < this.dim; i++) {
         result[i] += emb[i] * w;
       }
@@ -439,6 +442,24 @@ class TagEmbedding {
       return result;
     }
     return null;
+  }
+
+  /**
+   * Generate a deterministic fallback embedding for a tag not yet in the PMI model.
+   * Uses a seeded RNG so the same tag always gets the same vector.
+   * The vector is sparse (25% non-zero) with small magnitude to avoid
+   * overwhelming learned PMI embeddings.
+   * @param {string} tag
+   * @returns {Float32Array}
+   */
+  _getFallbackEmbedding(tag) {
+    const seed = hashString(tag);
+    const rng = mulberry32(seed);
+    const vec = new Float32Array(this.dim);
+    for (let i = 0; i < this.dim; i++) {
+      vec[i] = rng() < 0.25 ? (rng() * 2 - 1) * 0.1 : 0;
+    }
+    return vec;
   }
 
   /**
