@@ -147,6 +147,15 @@ class MLScorer {
     if (snapshot && snapshot.mlModel) {
       this.loadFromSnapshot(snapshot.mlModel);
     }
+    // If weights exist but have wrong dimension, re-initialize
+    if (this.weights1 && this.weights1.length !== INPUT_DIM) {
+      console.log(`[MLScorer] Weight dim mismatch (${this.weights1.length} != ${INPUT_DIM}), re-initializing model`);
+      this._initializeWeights();
+      this.interactionCount = 0;
+      this.trainingHistory = [];
+      this.pendingBatch = [];
+    }
+
     this.isTrained = this.interactionCount >= TRAIN_THRESHOLD;
   }
 
