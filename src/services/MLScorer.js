@@ -289,8 +289,8 @@ class MLScorer {
       : (userProfile?.mediaTypePreferences?.image || 0);
 
     // Tag overlap ratio
-    if (userTagScores && userTagScores.size > 0 && postTags.length > 0) {
-      const userTagSet = new Set(userTagScores.keys());
+    if (userTags.length > 0 && postTags.length > 0) {
+      const userTagSet = new Set(userTags);
       let overlap = 0;
       for (const tag of postTags) {
         if (userTagSet.has(tag)) overlap++;
@@ -659,7 +659,10 @@ class MLScorer {
     // Tag overlap
     let overlap = 0;
     if (userTagScores && postTags.length > 0) {
-      const userTagSet = new Set(userTagScores.keys());
+      const userTagKeys = userTagScores instanceof Map
+        ? Array.from(userTagScores.keys())
+        : Object.keys(userTagScores);
+      const userTagSet = new Set(userTagKeys);
       for (const tag of postTags) {
         if (userTagSet.has(tag)) overlap++;
       }
