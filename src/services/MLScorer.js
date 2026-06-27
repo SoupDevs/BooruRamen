@@ -342,7 +342,7 @@ class MLScorer {
 
     // Top-tag affinity features (indices 40..49): direct per-tag preference signal
     // For each of the user's top-N tags, if the post contains it, set the affinity score
-    // This lets the model learn explicit tag preferences (e.g., "tentacles=0.88")
+    // This lets the model learn explicit tag preferences from the user's top tags
     const topTagEntries = userEntries
       .filter(([tag, score]) => score > 0)
       .sort((a, b) => b[1] - a[1])
