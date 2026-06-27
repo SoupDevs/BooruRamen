@@ -24,7 +24,7 @@
 import StorageService from '../services/StorageService';
 import tagEmbedding from './TagEmbedding';
 
-const INPUT_DIM = 40;
+const INPUT_DIM = 50;  // 40 original + 10 top-tag affinity features
 const HIDDEN1 = 32;
 const HIDDEN2 = 16;
 const OUTPUT_DIM = 1;
@@ -33,6 +33,7 @@ const LEARNING_RATE = 0.01;
 const MOMENTUM = 0.9;
 const L2_LAMBDA = 0.0001;
 const BATCH_SIZE = 16;
+const TOP_TAG_FEATURES = 10;      // number of top user tag affinities to expose as features
 const MIN_LOSS = 0.05;           // early stopping threshold
 
 // Interaction type to label mapping (engagement score in [0, 1])
@@ -166,6 +167,30 @@ class MLScorer {
     this.featureStds = this._deserializeVector(data.featureStds);
     this.interactionCount = data.interactionCount || 0;
     this.trainingHistory = data.trainingHistory || [];
+
+    // Migrate weights1 if input dimension changed (e.g., 40 -> 50 features)
+    if (this.weights1 && this.weights1.length < INPUT_DIM) {
+      const oldDim = this.weights1.length;
+      const newRows = [];
+      for (let i = oldDim; i < INPUT_DIM; i++) {
+        const row = new Float32Array(HIDDEN1);
+        const scale = Math.sqrt(2.0 / (INPUT_DIM + HIDDEN1));
+        for (let j = 0; j < HIDDEN1; j++) {
+          row[j] = (Math.random() * 2 - 1) * scale;
+        }
+        newRows.push(row);
+      }
+      this.weights1 = [...this.weights1, ...newRows];
+      // Pad feature stats
+      if (this.featureMeans && this.featureMeans.length < INPUT_DIM) {
+        const extra = new Float32Array(INPUT_DIM - this.featureMeans.length);
+        this.featureMeans = new Float32Array([...this.featureMeans, ...extra]);
+      }
+      if (this.featureStds && this.featureStds.length < INPUT_DIM) {
+        const extra = new Float32Array(INPUT_DIM - this.featureStds.length).fill(1);
+        this.featureStds = new Float32Array([...this.featureStds, ...extra]);
+      }
+    }
   }
 
   _deserializeMatrix(data) {
@@ -305,6 +330,23 @@ class MLScorer {
     features[37] = isVideo ? 1 : 0;                        // is video
     features[38] = Math.min(1, ((post.width || 0) * (post.height || 0)) / (1920 * 1080));  // resolution
     features[39] = post.tag_string ? Math.min(1, post.tag_string.split(' ').length / 50) : 0;  // tag count
+
+    // Top-tag affinity features (indices 40..49): direct per-tag preference signal
+    // For each of the user's top-N tags, if the post contains it, set the affinity score
+    // This lets the model learn explicit tag preferences (e.g., "tentacles=0.88")
+    const topTagEntries = userEntries
+      .filter(([tag, score]) => score > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, TOP_TAG_FEATURES);
+    const postTagSet = new Set(postTags);
+    for (let i = 0; i < TOP_TAG_FEATURES; i++) {
+      if (i < topTagEntries.length) {
+        const [tag] = topTagEntries[i];
+        features[40 + i] = postTagSet.has(tag) ? topTagEntries[i][1] : 0;
+      } else {
+        features[40 + i] = 0;
+      }
+    }
 
     return features;
   }
@@ -679,6 +721,10 @@ class MLScorer {
       postScore: features[36] || 0,
       isVideo: post.file_ext ? ['mp4', 'webm'].includes(post.file_ext) : false,
       tagCount: postTags.length,
+      topTagAffinities: Array.from({ length: TOP_TAG_FEATURES }, (_, i) => ({
+        featureIndex: 40 + i,
+        value: features[40 + i] || 0,
+      })).filter(t => t.value > 0),
     };
   }
 }
