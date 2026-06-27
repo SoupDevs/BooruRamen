@@ -200,6 +200,13 @@ class RecommendationWorkerCore {
           const strategy = interaction.metadata.post._strategy;
           if (strategy) {
             this.banditExplorer.recordReward(strategy, label);
+          } else {
+            // Normal mode: record reward under the bandit's current best strategy
+            // so the bandit learns from normal-mode interactions too
+            const bestStrat = this.banditExplorer.getBestStrategy();
+            if (bestStrat && bestStrat.type && bestStrat.type !== 'fallback') {
+              this.banditExplorer.recordReward(bestStrat.type, label);
+            }
           }
         }
       }
@@ -599,33 +606,38 @@ class RecommendationWorkerCore {
     const tier2Pool = topTagsWithScores.slice(10, 25);
     const usedTags = new Set();
 
-    // Use Thompson Sampling to select strategies
+    // Use Thompson Sampling to select which strategies to deploy
     const banditSelections = this.banditExplorer.selectTopK(5);
     const selectedStrategies = new Set(banditSelections.map(s => s.type));
 
-    // Anchor strategy (always include if we have tags)
-    const anchorTag = this.weightedRandomSelect(tier1Pool, usedTags);
-    if (anchorTag && !this.exhaustedStrategies.has(anchorTag.tag)) {
-      queries.push({ tags: anchorTag.tag, type: 'anchor', intent: 'Core interest - highest affinity content' });
-      usedTags.add(anchorTag.tag);
+    // Anchor strategy (always include if we have tags and bandit selected it)
+    if (selectedStrategies.has('anchor')) {
+      const anchorTag = this.weightedRandomSelect(tier1Pool, usedTags);
+      if (anchorTag && !this.exhaustedStrategies.has(anchorTag.tag)) {
+        queries.push({ tags: anchorTag.tag, type: 'anchor', intent: 'Core interest - highest affinity content' });
+        usedTags.add(anchorTag.tag);
+      }
     }
 
     // Pivot strategy (use bandit-selected strategy if available)
-    const pivotModifiers = ['age:>3mo', 'age:>1y', 'order:rank age:<1mo', 'order:favcount age:<1mo'];
-    for (let i = 0; i < 2; i++) {
-      const pivotTag = this.weightedRandomSelect(tier1Pool, usedTags);
-      if (pivotTag) {
-        const modifier = pivotModifiers[Math.floor(Math.random() * pivotModifiers.length)];
-        const pivotQuery = `${pivotTag.tag} ${modifier}`;
-        if (!this.exhaustedStrategies.has(pivotQuery)) {
-          queries.push({ tags: pivotQuery, type: 'pivot', intent: `Core interest "${pivotTag.tag}" + modifier` });
-          usedTags.add(pivotTag.tag);
+    if (selectedStrategies.has('pivot')) {
+      const pivotModifiers = ['age:>3mo', 'age:>1y', 'order:rank age:<1mo', 'order:favcount age:<1mo'];
+      const numPivots = Math.min(2, Math.max(1, banditSelections.find(s => s.type === 'pivot') ? 2 : 1));
+      for (let i = 0; i < numPivots; i++) {
+        const pivotTag = this.weightedRandomSelect(tier1Pool, usedTags);
+        if (pivotTag) {
+          const modifier = pivotModifiers[Math.floor(Math.random() * pivotModifiers.length)];
+          const pivotQuery = `${pivotTag.tag} ${modifier}`;
+          if (!this.exhaustedStrategies.has(pivotQuery)) {
+            queries.push({ tags: pivotQuery, type: 'pivot', intent: `Core interest "${pivotTag.tag}" + modifier` });
+            usedTags.add(pivotTag.tag);
+          }
         }
       }
     }
 
     // Reach strategy
-    if (tier2Pool.length > 0) {
+    if (selectedStrategies.has('reach') && tier2Pool.length > 0) {
       const reachTag = this.weightedRandomSelect(tier2Pool, usedTags);
       if (reachTag && !this.exhaustedStrategies.has(reachTag.tag)) {
         queries.push({ tags: reachTag.tag, type: 'reach', intent: 'Secondary interest - expanding horizons' });
@@ -634,13 +646,15 @@ class RecommendationWorkerCore {
     }
 
     // Wildcard strategy
-    const wildcardOptions = ['order:rank age:<1mo', 'order:popular age:<1mo'];
-    const wildcardQuery = wildcardOptions[Math.floor(Math.random() * wildcardOptions.length)];
-    if (!this.exhaustedStrategies.has(wildcardQuery)) {
-      queries.push({ tags: wildcardQuery, type: 'wildcard', intent: 'Global discovery - trending content' });
+    if (selectedStrategies.has('wildcard')) {
+      const wildcardOptions = ['order:rank age:<1mo', 'order:popular age:<1mo'];
+      const wildcardQuery = wildcardOptions[Math.floor(Math.random() * wildcardOptions.length)];
+      if (!this.exhaustedStrategies.has(wildcardQuery)) {
+        queries.push({ tags: wildcardQuery, type: 'wildcard', intent: 'Global discovery - trending content' });
+      }
     }
 
-    // Fallback if no queries generated
+    // Fallback if no queries generated (bandit may have excluded all arms)
     if (queries.length === 0) {
       const fallbacks = ['order:rank age:<1mo', 'order:popular age:<1mo', 'age:<1w'];
       for (const fb of fallbacks) {
@@ -681,6 +695,59 @@ class RecommendationWorkerCore {
   /**
    * Get comprehensive stats including ML components.
    */
+  /**
+   * Use the bandit to select the next query tag for normal (non-explore) mode.
+   * The bandit picks a strategy arm; that strategy determines the tag pool and modifier.
+   * Returns { tag, strategy, modifier } — the tag to append to the query.
+   */
+  selectBanditTag() {
+    const topTagsWithScores = this.getQueryableTagsWithScores();
+    if (topTagsWithScores.length === 0) {
+      return { tag: null, strategy: 'fallback', modifier: null };
+    }
+
+    const filtered = topTagsWithScores.filter(t => t.tag !== 'video');
+    const tier1Pool = filtered.slice(0, 10);
+    const tier2Pool = filtered.slice(10, 25);
+
+    // Pick arm via Thompson Sampling (single best)
+    const selection = this.banditExplorer.selectArm();
+    const strategy = selection.type;
+
+    const pivotModifiers = ['age:>3mo', 'age:>1y', 'order:rank age:<1mo', 'order:favcount age:<1mo'];
+
+    switch (strategy) {
+      case 'anchor': {
+        const pick = this.weightedRandomSelect(tier1Pool);
+        return pick ? { tag: pick.tag, strategy, modifier: null } : { tag: null, strategy: 'fallback', modifier: null };
+      }
+      case 'pivot': {
+        const pick = this.weightedRandomSelect(tier1Pool);
+        const modifier = pivotModifiers[Math.floor(Math.random() * pivotModifiers.length)];
+        return pick ? { tag: pick.tag, strategy, modifier } : { tag: null, strategy: 'fallback', modifier: null };
+      }
+      case 'reach': {
+        if (tier2Pool.length === 0) {
+          // Fallback to tier1 if tier2 empty
+          const pick = this.weightedRandomSelect(tier1Pool);
+          return pick ? { tag: pick.tag, strategy: 'reach', modifier: null } : { tag: null, strategy: 'fallback', modifier: null };
+        }
+        const pick = this.weightedRandomSelect(tier2Pool);
+        return pick ? { tag: pick.tag, strategy, modifier: null } : { tag: null, strategy: 'fallback', modifier: null };
+      }
+      case 'wildcard': {
+        // Wildcard returns a trending/popular query modifier, no specific tag
+        return { tag: null, strategy: 'wildcard', modifier: 'order:rank age:<1mo' };
+      }
+      case 'fallback':
+      default: {
+        // Fallback: pick from top of tier1 (highest score) as safe default
+        const pick = tier1Pool[0] || filtered[0];
+        return { tag: pick ? pick.tag : null, strategy: 'fallback', modifier: null };
+      }
+    }
+  }
+
   getMLStats() {
     return {
       tagEmbeddings: this.tagEmbedding.getStats(),
@@ -761,6 +828,9 @@ self.onmessage = async (e) => {
         break;
       case 'getExhaustedStrategies':
         result = Array.from(core.exhaustedStrategies);
+        break;
+      case 'selectBanditTag':
+        result = core.selectBanditTag();
         break;
       case 'getMLStats':
         result = core.getMLStats();

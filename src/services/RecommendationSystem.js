@@ -152,6 +152,10 @@ class RecommendationSystem {
     return this.callWorker('selectNextBestPost', postPool);
   }
 
+  async selectBanditTag() {
+    return this.callWorker('selectBanditTag');
+  }
+
   async getMLStats() {
     return this.callWorker('getMLStats');
   }
