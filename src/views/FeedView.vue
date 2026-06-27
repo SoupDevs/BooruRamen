@@ -702,6 +702,7 @@ export default {
       this.videoLoadingStates[key] = false;
     },
   },
+  },
   mounted() {
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
 
