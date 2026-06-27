@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BooruRamen - ML Recommendation Test</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #111827; color: #f3f4f6; padding: 2rem; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    .subtitle { color: #9ca3af; margin-bottom: 2rem; font-size: 0.875rem; }
+    .card { background: #1f2937; border-radius: 0.5rem; padding: 1.5rem; margin-bottom: 1.5rem; }
+    .card h2 { font-size: 1.125rem; margin-bottom: 1rem; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    .stat { text-align: center; }
+    .stat-value { font-size: 1.5rem; font-weight: bold; font-family: monospace; }
+    .stat-label { font-size: 0.75rem; color: #9ca3af; margin-top: 0.25rem; }
+    .status-dot { display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 50%; margin-right: 0.5rem; }
+    .status-dot.green { background: #22c55e; }
+    .status-dot.yellow { background: #eab308; }
+    .status-dot.red { background: #ef4444; }
+    button { background: #4f46e5; color: white; border: none; padding: 0.5rem 1rem; border-radius: 0.375rem; cursor: pointer; font-size: 0.875rem; margin-right: 0.5rem; margin-bottom: 0.5rem; }
+    button:hover { background: #4338ca; }
+    button.pink { background: #db2777; }
+    button.pink:hover { background: #be185d; }
+    button.yellow { background: #ca8a04; }
+    button.yellow:hover { background: #a16207; }
+    button.gray { background: #4b5563; }
+    button.gray:hover { background: #374151; }
+    button.red { background: #b91c1c; }
+    button.red:hover { background: #991b1b; }
+    .log { background: #000; border-radius: 0.375rem; padding: 1rem; font-family: monospace; font-size: 0.75rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
+    .log .success { color: #22c55e; }
+    .log .error { color: #ef4444; }
+    .log .info { color: #eab308; }
+    .log .ml { color: #ec4899; }
+    .btn-row { margin-top: 1rem; }
+    .progress-bar { height: 0.5rem; background: #374151; border-radius: 0.25rem; overflow: hidden; margin-top: 0.5rem; }
+    .progress-fill { height: 100%; background: #ec4899; transition: width 0.3s; }
+    .arm-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem; background: #374151; border-radius: 0.375rem; margin-bottom: 0.5rem; }
+    .arm-name { width: 4rem; font-size: 0.875rem; font-family: monospace; text-transform: capitalize; }
+    .arm-stats { width: 5rem; font-size: 0.7rem; color: #9ca3af; text-align: right; }
+    .arm-bar { flex: 1; height: 1rem; background: #111827; border-radius: 0.25rem; overflow: hidden; }
+    .arm-fill { height: 100%; background: #ec4899; transition: width 0.3s; }
+    .arm-value { font-size: 0.75rem; font-family: monospace; width: 3rem; text-align: right; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>BooruRamen - ML Recommendation Engine Test</h1>
+    <p class="subtitle">Test the ML-powered recommendation system with tag embeddings, MLP scorer, and Thompson Sampling bandit.</p>
+
+    <!-- Status Cards -->
+    <div class="grid">
+      <div class="card">
+        <h2>ML Model</h2>
+        <div class="stat">
+          <div class="stat-value" id="ml-status">
+            <span class="status-dot yellow" id="ml-dot"></span>
+            <span id="ml-label">Cold Start</span>
+          </div>
+          <div class="stat-label">Interactions: <span id="interaction-count">0</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Tag Embeddings</h2>
+        <div class="stat">
+          <div class="stat-value" id="tag-count">0</div>
+          <div class="stat-label">tags with embeddings (<span id="tag-pending">0</span> pending, <span id="tag-seen">0</span> seen)</div>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Bandit</h2>
+        <div class="stat">
+          <div class="stat-value" id="best-strategy">—</div>
+          <div class="stat-label">best strategy</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Training Progress -->
+    <div class="card">
+      <h2>Training Progress</h2>
+      <div class="grid">
+        <div>
+          <p style="font-size:0.75rem;color:#9ca3af">Last Loss</p>
+          <p style="font-size:1.5rem;font-family:monospace" id="last-loss">N/A</p>
+        </div>
+        <div>
+          <p style="font-size:0.75rem;color:#9ca3af">Avg Loss</p>
+          <p style="font-size:1.5rem;font-family:monospace" id="avg-loss">N/A</p>
+        </div>
+        <div>
+          <p style="font-size:0.75rem;color:#9ca3af">Model Size</p>
+          <p style="font-size:1.5rem;font-family:monospace" id="model-size">0 KB</p>
+        </div>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-fill" id="training-progress" style="width: 0%"></div>
+      </div>
+    </div>
+
+    <!-- Bandit Arms -->
+    <div class="card">
+      <h2>Bandit Strategy Arms</h2>
+      <p style="font-size:0.75rem;color:#9ca3af;margin-bottom:0.75rem">
+        Thompson Sampling learns which <strong>query strategies</strong> produce content you engage with.
+        Each arm represents a search strategy. They only update when you interact with content fetched in explore mode.
+      </p>
+      <div id="bandit-arms"></div>
+    </div>
+
+    <!-- Simulation Controls -->
+    <div class="card">
+      <h2>Simulate Interactions</h2>
+      <p style="font-size:0.875rem;color:#9ca3af;margin-bottom:1rem">
+        Simulate user behavior to train the ML model. After 20 interactions, the ML scorer activates.
+      </p>
+      <div class="btn-row">
+        <button class="pink" data-action="simulate" data-type="like">+5 Likes</button>
+        <button class="yellow" data-action="simulate" data-type="favorite">+5 Favorites</button>
+        <button class="gray" data-action="simulate" data-type="dislike">+5 Dislikes</button>
+        <button data-action="simulate" data-type="mixed">+10 Mixed</button>
+      </div>
+      <div class="btn-row">
+        <button class="red" data-action="reset">Reset ML State</button>
+        <button class="gray" data-action="score">Score Sample Post</button>
+      </div>
+    </div>
+
+    <!-- Event Log -->
+    <div class="card">
+      <h2>Event Log</h2>
+      <div class="log" id="event-log"></div>
+    </div>
+  </div>
+
+  <script type="module">
+    // This test runs standalone - it creates its own worker
+    // For testing within the main app, use the browser console instead
+
+    let worker = null;
+    let msgId = 0;
+
+    function log(type, message) {
+      const el = document.getElementById('event-log');
+      const time = new Date().toLocaleTimeString();
+      const line = '[' + time + '] ' + message;
+      const span = document.createElement('span');
+      span.className = type;
+      span.textContent = line;
+      el.appendChild(span);
+      el.appendChild(document.createTextNode('\n'));
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function assert(condition, message) {
+      if (condition) {
+        log('success', `✓ ${message}`);
+      } else {
+        log('error', `✗ ${message}`);
+      }
+      return condition;
+    }
+
+    async function initWorker() {
+      if (worker) return;
+
+      // We need to create the worker from the main app
+      // This standalone test assumes the app is running
+      worker = new Worker('/src/workers/recommendation.worker.js', { type: 'module' });
+
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Worker init timeout')), 10000);
+
+        worker.onmessage = (e) => {
+          if (e.data.type === 'success' && e.data.id === 1) {
+            clearTimeout(timeout);
+            resolve();
+          }
+        };
+
+        worker.onerror = (e) => {
+          clearTimeout(timeout);
+          reject(new Error('Worker error: ' + e.message));
+        };
+
+        worker.postMessage({ id: 1, type: 'initialize' });
+      });
+    }
+
+    function workerCall(type, payload = null) {
+      return new Promise((resolve, reject) => {
+        const id = ++msgId;
+        const handler = (e) => {
+          if (e.data.id === id) {
+            worker.removeEventListener('message', handler);
+            if (e.data.type === 'error') reject(new Error(e.data.error));
+            else resolve(e.data.result);
+          }
+        };
+        worker.addEventListener('message', handler);
+        worker.postMessage({ id, type, payload });
+      });
+    }
+
+    // Expanded tag pool to exercise incremental embedding growth.
+    // Each strategy draws from a distinct set so scores differ.
+    const TAG_POOLS = {
+      anchor: [
+        'hatsune_miku vocaloid 1girl solo long_hair blue_hair twintails',
+        'hatsune_miku 1girl solo vocaloid headphones blue_hair',
+        'kagamine_rin 1girl solo long_hair blonde_hair',
+        'megurine_luka 1girl solo long_hair pink_hair',
+      ],
+      pivot: [
+        'hatsune_miku 1girl solo long_hair blue_hair age:>3mo highres',
+        'vocaloid 1girl solo long_hair blue_hair order:rank',
+        'saber_(fate) 1girl solo sword armor',
+        'gokou_roubei 1girl solo long_hair red_eyes',
+      ],
+      reach: [
+        'rem_(re:zero) 1girl solo long_hair maid_headdress',
+        'ganyu_(genshin_impact) 1girl solo long_hair horns',
+        'megumin_(konoSuba) 1girl solo witch_hat crimson_eyes',
+        'nessa_(pokémon) 1girl solo long_hair blue_eyes',
+      ],
+      wildcard: [
+        'scenery landscape sky clouds sunset',
+        'original 1girl solo order:rank age:<1mo',
+        'fantasy forest trees magic',
+        'cyberpunk city night neon_lights',
+        'seaside beach sea waves',
+      ],
+      fallback: [
+        '1girl solo',
+      ],
+    };
+
+    function makePost(id, tagType = 'anime', strategy = null) {
+      const pool = TAG_POOLS[strategy] || TAG_POOLS.anchor;
+      const tag = pool[id % pool.length];
+      const ratings = ['g', 'g', 'g', 's', 'q'];
+      const post = {
+        id: 100000 + id,
+        tag_string: tag,
+        tag_string_general: tag,
+        tag_string_artist: '',
+        tag_string_character: '',
+        tag_string_copyright: '',
+        tag_string_meta: '',
+        rating: ratings[id % ratings.length],
+        file_ext: id % 5 === 0 ? 'mp4' : 'jpg',
+        width: 1920,
+        height: 1080,
+        score: Math.floor(Math.random() * 500),
+        source: 'https://danbooru.donmai.us',
+      };
+      if (strategy) {
+        post._strategy = strategy;
+      }
+      return post;
+    }
+
+    async function refreshUI() {
+      try {
+        const stats = await workerCall('getMLStats');
+
+        // ML Status
+        const dot = document.getElementById('ml-dot');
+        const label = document.getElementById('ml-label');
+        if (stats.mlScorer.isTrained) {
+          dot.className = 'status-dot green';
+          label.textContent = 'Trained';
+        } else {
+          dot.className = 'status-dot yellow';
+          label.textContent = 'Cold Start';
+        }
+        document.getElementById('interaction-count').textContent = stats.mlScorer.interactionCount;
+        document.getElementById('tag-count').textContent = stats.tagEmbeddings.totalTags;
+        document.getElementById('tag-pending').textContent = stats.tagEmbeddings.pendingTags;
+        document.getElementById('tag-seen').textContent = stats.tagEmbeddings.totalTagsSeen;
+        document.getElementById('best-strategy').textContent = stats.bandit.bestStrategy.type;
+
+        // Loss
+        document.getElementById('last-loss').textContent = stats.mlScorer.lastLoss?.toFixed(4) || 'N/A';
+        document.getElementById('avg-loss').textContent = stats.mlScorer.avgLoss?.toFixed(4) || 'N/A';
+        document.getElementById('model-size').textContent = (stats.mlScorer.modelSize / 1024).toFixed(1) + ' KB';
+
+        // Training progress
+        const progress = Math.min(100, (stats.mlScorer.interactionCount / 20) * 100);
+        document.getElementById('training-progress').style.width = progress + '%';
+
+        // Bandit arms
+        const armsEl = document.getElementById('bandit-arms');
+        armsEl.innerHTML = '';
+        for (const [type, arm] of Object.entries(stats.bandit.arms)) {
+          const row = document.createElement('div');
+          row.className = 'arm-row';
+          const pct = (arm.expectedReward * 100).toFixed(0);
+          const rate = arm.attempts > 0
+            ? (arm.successes / arm.attempts * 100).toFixed(0) + '%'
+            : '—';
+          row.innerHTML =
+            '<span class="arm-name">' + type + '</span>' +
+            '<span class="arm-stats">' + rate + ' (' + arm.attempts + ')</span>' +
+            '<div class="arm-bar"><div class="arm-fill" style="width:' + pct + '%"></div></div>' +
+            '<span class="arm-value">' + pct + '%</span>';
+          armsEl.appendChild(row);
+        }
+      } catch (e) {
+        log('error', 'UI refresh failed: ' + e.message);
+      }
+    }
+
+    async function simulateAndUpdate(count, type) {
+      log('info', 'Simulating ' + count + ' ' + type + ' interactions...');
+
+      const strategies = ['anchor', 'pivot', 'reach', 'wildcard'];
+      for (let i = 0; i < count; i++) {
+        const strategy = strategies[i % strategies.length];
+        const post = makePost(Date.now() % 100000 + i, null, strategy);
+        const interactionType = type === 'mixed'
+          ? ['like', 'favorite', 'dislike', 'view', 'timeSpent'][i % 5]
+          : type;
+        const value = interactionType === 'timeSpent' ? 5000 + Math.random() * 25000 : 1;
+
+        await workerCall('trackInteraction', {
+          postId: post.id,
+          interactionType,
+          value,
+          postData: post,
+          updateImmediately: false,
+        });
+      }
+
+      await workerCall('updateUserProfile');
+      log('ml', 'Processed ' + count + ' interactions');
+      await refreshUI();
+    }
+
+    async function resetML() {
+      await workerCall('resetRecommendations');
+      log('info', 'ML state reset');
+      await refreshUI();
+    }
+
+    async function scoreSamplePost() {
+      const strategies = ['anchor', 'pivot', 'reach', 'wildcard'];
+      log('info', 'Sample post scores by strategy:');
+      for (const strategy of strategies) {
+        const post = makePost(999, 'anime', strategy);
+        const details = await workerCall('getPostScoreDetails', post);
+        log('ml', '  ' + strategy + ': heuristic=' + details.totalScore.toFixed(3) + ', ML=' + (details.mlScore?.toFixed(3) || 'N/A'));
+      }
+    }
+
+    // Expose to window for button onclick handlers
+    window.simulateAndUpdate = simulateAndUpdate;
+    window.resetML = resetML;
+    window.scoreSamplePost = scoreSamplePost;
+    // Attach event listeners for buttons (more reliable than inline onclick)
+    document.querySelectorAll('[data-action]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const action = btn.dataset.action;
+        const type = btn.dataset.type;
+        try {
+          if (action === 'simulate') {
+            const count = type === 'mixed' ? 10 : 5;
+            await simulateAndUpdate(count, type);
+          } else if (action === 'reset') {
+            await resetML();
+          } else if (action === 'score') {
+            await scoreSamplePost();
+          }
+        } catch (e) {
+          log('error', 'Button action failed: ' + e.message);
+        }
+      });
+    });
+
+    // Initialize
+    (async () => {
+      try {
+        await initWorker();
+        log('success', 'Worker initialized');
+        await refreshUI();
+        log('info', 'Ready! Click buttons to train the ML model.');
+      } catch (e) {
+        log('error', 'Init failed: ' + e.message);
+      }
+    })();
+  </script>
+</body>
+</html>

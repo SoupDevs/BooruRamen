@@ -289,7 +289,7 @@ export default {
         }
       }
     },
-    buildTagsFromRouteQuery(overrideQuery = null) {
+    async buildTagsFromRouteQuery(overrideQuery = null) {
       const query = overrideQuery || this.$route.query;
       const tags = [];
 
@@ -315,13 +315,34 @@ export default {
       } else if (this.whitelistTags && this.whitelistTags.length > 0) {
         tags.push(...this.whitelistTags);
       }
-      
+
       if (query.blacklist) {
         tags.push(...query.blacklist.split(',').map(t => `-${t}`));
       } else if (this.blacklistTags && this.blacklistTags.length > 0) {
         tags.push(...this.blacklistTags.map(t => `-${t}`));
       }
-      
+
+      // Inject top recommended tags from recommendation engine
+      // when no explicit whitelist is set
+      if ((!query.whitelist && !this.whitelistTags?.length) && this.recommendationSystem) {
+        const banditSelection = await this.recommendationSystem.selectBanditTag();
+        if (banditSelection && (banditSelection.tag || banditSelection.modifier)) {
+          let tagQuery = banditSelection.tag || '';
+          if (banditSelection.modifier) {
+            tagQuery = tagQuery ? `${tagQuery} ${banditSelection.modifier}` : banditSelection.modifier;
+          }
+          if (tagQuery.trim()) {
+            tags.push(tagQuery.trim());
+          }
+        } else {
+          // Fallback to top tag if bandit returns nothing useful
+          const topTags = await this.recommendationSystem.getQueryableTags();
+          if (topTags.length > 0) {
+            tags.push(...topTags.slice(0, 2));
+          }
+        }
+      }
+
       return tags.join(' ');
     },
 
@@ -420,7 +441,7 @@ export default {
 
         } else {
           // Normal mode with deduplication
-          const tagsForApi = this.buildTagsFromRouteQuery();
+          const tagsForApi = await this.buildTagsFromRouteQuery();
           const targetCount = 10;
           let fetchedCount = 0;
           let attempts = 0;

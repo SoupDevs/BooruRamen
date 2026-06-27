@@ -143,12 +143,21 @@ export default {
     },
     scrollToInitialPost() {
         const startIndex = parseInt(this.$route.query.start || 0, 10);
+        const postId = this.$route.query.postId;
         const container = this.$refs.viewerContainer;
         if (container) {
+            let targetIndex = startIndex;
+            // If postId is provided, find the matching index in our loaded posts
+            if (postId != null && this.posts.length > 0) {
+                const foundIndex = this.posts.findIndex(p => String(p.id) === String(postId));
+                if (foundIndex >= 0) {
+                    targetIndex = foundIndex;
+                }
+            }
             const postElements = container.querySelectorAll('.snap-start');
-            if (postElements[startIndex]) {
-                container.scrollTop = postElements[startIndex].offsetTop;
-                this.currentPostIndex = startIndex;
+            if (postElements[targetIndex]) {
+                container.scrollTop = postElements[targetIndex].offsetTop;
+                this.currentPostIndex = targetIndex;
                 this.$emit('current-post-changed', this.posts[this.currentPostIndex], this.$refs.videoPlayer?.[this.currentPostIndex]);
             }
         }

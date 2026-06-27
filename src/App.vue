@@ -37,8 +37,8 @@
         ></router-view>
         
         <!-- Debug Overlay -->
-        <div v-if="debugMode && currentPost" class="absolute top-0 left-1/2 transform -translate-x-1/2 p-4 bg-black bg-opacity-75 text-xs text-white z-40 max-w-xs pointer-events-none font-mono rounded shadow-lg"
-          style="margin-top: calc(1rem + env(safe-area-inset-top, 0));"
+        <div v-if="debugMode && currentPost" class="absolute top-0 left-1/2 transform -translate-x-1/2 p-4 bg-black bg-opacity-75 text-xs text-white z-40 max-w-xs font-mono rounded shadow-lg pointer-events-auto"
+          style="margin-top: calc(1rem + env(safe-area-inset-top, 0)); max-height: 80vh; overflow-y: auto;"
         >
           <h3 class="font-bold mb-1 text-pink-400">Recommendation Debug</h3>
           
@@ -60,27 +60,65 @@
           </div>
 
           <div v-if="debugDetails">
-            <p><span class="text-gray-400">Rec. Score:</span> {{ debugDetails.totalScore?.toFixed(2) }}</p>
-            
-            <div v-if="debugDetails.contributingTags && debugDetails.contributingTags.length > 0" class="mt-2">
-              <p class="font-semibold text-gray-300">Top Influencing Tags:</p>
-              <ul class="list-none pl-0 mt-1 space-y-0.5">
-                <li v-for="tag in debugDetails.contributingTags" :key="tag.tag" class="flex justify-between">
-                  <span class="truncate pr-2" :class="tag.score > 0 ? 'text-green-400' : 'text-red-400'">{{ tag.tag }}</span>
-                  <span>{{ (tag.score).toFixed(2) }}</span>
+            <!-- Primary Score -->
+            <p v-if="debugDetails.mlScore !== null && debugDetails.mlScore !== undefined">
+              <span class="text-pink-400 font-bold">ML Score:</span> {{ debugDetails.mlScore?.toFixed(3) }}
+              <span class="text-gray-500 text-xs">(conf: {{ ((debugDetails.mlConfidence || 0) * 100).toFixed(0) }}%)</span>
+            </p>
+            <p v-else>
+              <span class="text-pink-400 font-bold">Score:</span> {{ debugDetails.totalScore?.toFixed(3) }}
+            </p>
+
+            <!-- ML Feature Breakdown -->
+            <div v-if="debugDetails.mlFeatures" class="mt-2 border-t border-gray-700 pt-1">
+              <p class="text-pink-300 text-xs font-semibold mb-1">ML Features:</p>
+              <p class="text-xs">
+                <span class="text-gray-400">Embedding Similarity:</span>
+                <span :class="debugDetails.mlFeatures.embeddingSimilarity > 0 ? 'text-green-400' : 'text-red-400'">
+                  {{ debugDetails.mlFeatures.embeddingSimilarity?.toFixed(3) }}
+                </span>
+              </p>
+              <p class="text-xs">
+                <span class="text-gray-400">Tag Overlap:</span>
+                {{ (debugDetails.mlFeatures.tagOverlapRatio * 100).toFixed(0) }}%
+              </p>
+              <p class="text-xs">
+                <span class="text-gray-400">User Interest Strength:</span>
+                {{ debugDetails.mlFeatures.userEmbeddingStrength?.toFixed(3) }}
+              </p>
+              <p class="text-xs">
+                <span class="text-gray-400">Post Embedding Strength:</span>
+                {{ debugDetails.mlFeatures.postEmbeddingStrength?.toFixed(3) }}
+              </p>
+              <p class="text-xs">
+                <span class="text-gray-400">Tag Count:</span>
+                {{ debugDetails.mlFeatures.tagCount }}
+                <span v-if="debugDetails.mlFeatures.isVideo" class="text-blue-400 ml-1">video</span>
+              </p>
+            </div>
+
+            <!-- ML Top Contributing Tags -->
+            <div v-if="debugDetails.mlTagContributions && debugDetails.mlTagContributions.length > 0" class="mt-2 border-t border-gray-700 pt-1">
+              <p class="text-pink-300 text-xs font-semibold mb-1">Top ML Tag Contributions:</p>
+              <ul class="list-none pl-0 mt-0.5 space-y-0.5">
+                <li v-for="tag in debugDetails.mlTagContributions" :key="tag.tag" class="flex justify-between text-xs">
+                  <span class="truncate pr-2" :class="tag.direction === 'positive' ? 'text-green-400' : 'text-red-400'">{{ tag.tag }}</span>
+                  <span :class="tag.direction === 'positive' ? 'text-green-400' : 'text-red-400'">
+                    {{ tag.direction === 'positive' ? '+' : '-' }}{{ tag.delta.toFixed(4) }}
+                  </span>
                 </li>
               </ul>
             </div>
-            
-            <div v-if="debugDetails.ratingScore" class="mt-1 text-gray-400">
-               Rating Bonus: +{{ debugDetails.ratingScore.toFixed(2) }}
-            </div>
-             <div v-if="debugDetails.mediaScore" class="text-gray-400">
-               Media Bonus: +{{ debugDetails.mediaScore.toFixed(2) }}
-            </div>
-            <div v-if="debugDetails.discoveryBonus" class="text-purple-400 mt-1">
-               Discovery Bonus: +{{ debugDetails.discoveryBonus.toFixed(2) }}
-               <span class="text-gray-500 text-xs block">({{ debugDetails.familiarWeight?.toFixed(1) }} anchor weight, {{ debugDetails.novelTagCount }} novel tags)</span>
+
+            <!-- User Tag Affinities (what user likes that match this post) -->
+            <div v-if="debugDetails.contributingTags && debugDetails.contributingTags.length > 0" class="mt-2 border-t border-gray-700 pt-1">
+              <p class="text-gray-300 text-xs font-semibold mb-1">Your Tag Affinities:</p>
+              <ul class="list-none pl-0 mt-0.5 space-y-0.5">
+                <li v-for="tag in debugDetails.contributingTags" :key="tag.tag" class="flex justify-between text-xs">
+                  <span class="truncate pr-2" :class="tag.score > 0 ? 'text-green-400' : 'text-red-400'">{{ tag.tag }}</span>
+                  <span>{{ tag.score.toFixed(3) }}</span>
+                </li>
+              </ul>
             </div>
           </div>
           <div v-else>
@@ -472,8 +510,13 @@ export default {
 
     async updateDebugDetails() {
         if (!this.currentPost) return;
-        // Calculate score breakdown using the recommendation system
-        this.debugDetails = await this.recommendationSystem.getPostScoreDetails(this.currentPost);
+        try {
+          const details = await this.recommendationSystem.getPostScoreDetails(this.currentPost);
+          this.debugDetails = details;
+        } catch (e) {
+          console.error('[DebugOverlay] Failed to get score details:', e);
+          this.debugDetails = { error: e.message, totalScore: 0 };
+        }
     },
     
     async handleResetRecommendations() {

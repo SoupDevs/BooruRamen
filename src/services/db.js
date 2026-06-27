@@ -47,7 +47,7 @@ db.version(2).stores({
     preferences: 'id',
     appSettings: 'id',
     tagCache: 'tag',
-    // Snapshot of the user profile for incremental updates
+    // Snapshot of the user profile including ML model, embeddings, and bandit state
     // key: 'singleton'
     profileSnapshot: 'id'
 });
