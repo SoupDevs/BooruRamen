@@ -10,7 +10,7 @@
 <template>
   <div class="w-full relative overflow-hidden" :style="feedContainerStyle">
     <!-- Post feed -->
-    <div class="h-full overflow-y-auto snap-y snap-mandatory" ref="feedContainer" :style="disableScrollAnimation ? 'scroll-behavior: auto' : ''">
+    <div class="h-full overflow-y-auto snap-y snap-mandatory" ref="feedContainer" :style="containerStyle">
       <div v-if="loading" class="h-full flex items-center justify-center">
         <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-600"></div>
       </div>
@@ -139,6 +139,7 @@ export default {
       isResizing: false, // Flag to suspend scroll tracking during CSS animation
       videoLoadingStates: {}, // Map of composite key -> loading boolean
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
+      _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
     }
   },
   directives: {
@@ -206,6 +207,12 @@ export default {
       return {
         transition: this.isResizing ? 'height 0.35s cubic-bezier(0.32, 0.72, 0, 1)' : 'none'
       };
+    },
+    containerStyle() {
+      if (this.disableScrollAnimation) {
+        return 'scroll-behavior: auto; scroll-snap-stop: always';
+      }
+      return '';
     },
     // Alias to match template if needed, or just updated template to use 'muted'
     // The template uses 'isMuted' prop, so we alias it or change template.
@@ -396,6 +403,9 @@ export default {
     },
     handleScroll() {
       if (this.isResizing) return;
+      if (this.disableScrollAnimation && !this._isAutoScrolling) {
+        this._snapToNearestPost();
+      }
       this.determineCurrentPost();
       const container = this.$refs.feedContainer;
       // Fetch more posts when we are 1 page away from the bottom (pre-fetching)
@@ -534,7 +544,20 @@ export default {
         this.autoScrollInterval = null;
       }
     },
+    _snapToNearestPost() {
+      const container = this.$refs.feedContainer;
+      if (!container) return;
+      const itemHeight = container.clientHeight;
+      if (itemHeight === 0) return;
+      const targetIndex = Math.round(container.scrollTop / itemHeight);
+      const clampedIndex = Math.max(0, Math.min(targetIndex, this.posts.length - 1));
+      container.scrollTo({
+        top: clampedIndex * itemHeight,
+        behavior: 'auto'
+      });
+    },
     _doAutoScroll() {
+      this._isAutoScrolling = true;
       const container = this.$refs.feedContainer;
       if (container) {
         const nextScrollTop = container.scrollTop + container.clientHeight;
@@ -543,6 +566,7 @@ export default {
           behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
         });
       }
+      setTimeout(() => { this._isAutoScrolling = false; }, 100);
     },
     _setupVideoEndedListener() {
       if (!this.$refs.feedContainer) return;
