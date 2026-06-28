@@ -29,8 +29,8 @@
             :src="post.file_url" 
             ref="videoPlayer"
             :autoplay="autoplayVideos"
-            :muted="isMuted"
-            loop 
+            muted
+            loop
             class="max-h-[calc(100vh-0px)] max-w-full"
             @click="togglePlayPause"
             @play="handleVideoStateUpdate($event, index)"
@@ -105,9 +105,7 @@ export default {
             const video = entry.target.querySelector('video');
             if (entry.isIntersecting) {
               if (this.autoplayVideos && video) {
-                video.volume = this.volume;
-                video.muted = this.muted;
-                video.play().catch(e => console.warn("Autoplay was prevented in viewer.", e));
+                this._playVideo(video);
               }
             } else {
               video?.pause();
@@ -225,13 +223,23 @@ export default {
         if (Math.abs(containerMidY - postMidY) < rect.height * 0.5) {
           const video = postEl.querySelector('video');
           if (video) {
-            video.volume = this.volume;
-            video.muted = this.muted;
-            video.play().catch(e => console.warn("Autoplay prevented.", e));
+            this._playVideo(video);
           }
           break;
         }
       }
+    },
+    _playVideo(video) {
+      // Always start muted for autoplay compliance, then apply user preference
+      video.muted = true;
+      video.volume = this.volume;
+      video.play().then(() => {
+        // After playback starts successfully, try to honor user's mute preference
+        // This may fail in browsers without user gesture - that's OK, stays muted
+        if (!this.muted) {
+          video.muted = false;
+        }
+      }).catch(e => console.warn("Autoplay was prevented in viewer.", e));
     },
     handleVideoStateUpdate(event, index) {
       if (index !== this.currentPostIndex) return;
