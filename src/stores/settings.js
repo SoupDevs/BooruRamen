@@ -14,7 +14,7 @@ export const useSettingsStore = defineStore('settings', {
         loopVideos: true,
         mediaType: { images: false, videos: true },
         ratings: ['general'],
-        whitelistTags: [],
+        whitelistTags: ['meme'],
         blacklistTags: [],
         activeSource: { type: 'danbooru', url: 'https://danbooru.donmai.us', name: 'Danbooru' },
         customSources: [],
