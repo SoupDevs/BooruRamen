@@ -67,6 +67,17 @@
             @canplay="onVideoCanPlay(post)"
             @error="onVideoError(post)"
           ></video>
+          <!-- Fallback for videos that fail to load (e.g. Cloudflare-protected CDN) -->
+          <div
+            v-if="videoErrorStates[getCompositeKey(post)]"
+            class="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-70 text-white p-4"
+          >
+            <p class="text-sm text-gray-300 mb-2">Video unavailable (CDN restricted)</p>
+            <a :href="post.file_url" target="_blank" rel="noopener"
+               class="px-3 py-1 bg-pink-600 hover:bg-pink-500 rounded text-sm">
+              Open in new tab
+            </a>
+          </div>
           <div 
             v-else
             class="flex items-center justify-center bg-gray-900 p-4 rounded"
@@ -138,6 +149,7 @@ export default {
       isProgrammaticVolumeChange: false, // Flag to ignore volumechange events during programmatic updates
       isResizing: false, // Flag to suspend scroll tracking during CSS animation
       videoLoadingStates: {}, // Map of composite key -> loading boolean
+      videoErrorStates: {}, // Map of composite key -> error boolean (CDN blocked)
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
       _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
       _accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
@@ -668,6 +680,7 @@ export default {
         delete this.videoLoadingTimeouts[key];
       }
       this.videoLoadingStates[key] = false;
+      this.videoErrorStates[key] = true;
     },
   },
   mounted() {

@@ -59,6 +59,13 @@ export async function getPlayableVideoUrl(url) {
             return url; // Fall back to original URL
         }
 
+        // Verify we got actual video content, not an HTML error page
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.startsWith('video/') && !contentType.startsWith('application/octet-stream')) {
+            console.error('[VideoProxy] Unexpected content type:', contentType);
+            return url; // Fall back to original URL (will show error UI)
+        }
+
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
 
