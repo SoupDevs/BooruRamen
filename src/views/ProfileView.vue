@@ -39,7 +39,7 @@
   </div>
 </template>
 
-<script>
+<script>/* global __APP_VERSION__ */
 export default {
   name: 'ProfileView',
   computed: {

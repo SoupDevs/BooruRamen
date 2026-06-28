@@ -298,7 +298,7 @@
   </div>
 </template>
 
-<script>
+<script>/* global __APP_VERSION__ */
 import { mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { useInteractionsStore } from '../stores/interactions';
