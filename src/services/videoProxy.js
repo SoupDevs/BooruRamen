@@ -24,10 +24,11 @@ const isTauri = () => {
 const blobUrlCache = new Map();
 
 /**
- * Get a playable video URL. In Tauri production, fetches the video and creates a blob URL.
- * In development (browser), returns the original URL (Vite proxy handles CORS).
+ * Get a playable video URL. In dev mode, fetches the video through Vite proxy
+ * and creates a blob URL to bypass CORP restrictions. In Tauri production,
+ * uses Tauri HTTP to fetch as blob.
  * @param {string} url - The original video URL
- * @returns {Promise<string>} - A playable URL (blob URL in Tauri, original in dev)
+ * @returns {Promise<string>} - A playable URL (blob URL or proxied URL)
  */
 export async function getPlayableVideoUrl(url) {
     if (!url) return url;
@@ -36,9 +37,12 @@ export async function getPlayableVideoUrl(url) {
     const isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(url);
     if (!isVideo) return url;
 
-    // In development, use proxy URLs (already handled by Vite)
+    // Rewrite CDN URLs to use Vite proxy in dev mode
+    let proxiedUrl = url;
     if (import.meta.env && import.meta.env.DEV) {
-        return url;
+        proxiedUrl = url
+            .replace('https://cdn.donmai.us/', '/danbooru-cdn/')
+            .replace('https://video-cdn4.gelbooru.com/', '/gelbooru-video/');
     }
 
     // In Tauri production, fetch as blob
@@ -56,7 +60,7 @@ export async function getPlayableVideoUrl(url) {
 
             if (!response.ok) {
                 console.error('[VideoProxy] Failed to fetch video:', response.status);
-                return url; // Fall back to original URL
+                return proxiedUrl; // Fall back to proxied URL
             }
 
             const blob = await response.blob();
@@ -69,11 +73,11 @@ export async function getPlayableVideoUrl(url) {
             return blobUrl;
         } catch (error) {
             console.error('[VideoProxy] Error proxying video:', error);
-            return url; // Fall back to original URL
+            return proxiedUrl; // Fall back to proxied URL
         }
     }
 
-    return url;
+    return proxiedUrl;
 }
 
 /**

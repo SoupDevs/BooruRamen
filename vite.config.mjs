@@ -76,18 +76,28 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/danbooru-cdn/, ''),
         secure: false,
+        followRedirects: true,
         configure: (proxy, _options) => {
           proxy.on('proxyReq', (proxyReq, req, _res) => {
             // Danbooru CDN requires a valid referer
             proxyReq.setHeader('Referer', 'https://danbooru.donmai.us/');
             proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+            proxyReq.setHeader('Accept', '*/*');
+            // Remove headers that might trigger CDN rejection
             proxyReq.removeHeader('cookie');
+            proxyReq.removeHeader('origin');
+            proxyReq.removeHeader('x-requested-with');
           });
           proxy.on('proxyRes', (proxyRes, req, res) => {
             // Add CORS headers for video playback
             proxyRes.headers['Access-Control-Allow-Origin'] = '*';
             proxyRes.headers['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS';
-            proxyRes.headers['Access-Control-Allow-Headers'] = 'Range';
+            proxyRes.headers['Access-Control-Allow-Headers'] = 'Range, Content-Type';
+            proxyRes.headers['Access-Control-Expose-Headers'] = 'Content-Length, Content-Range, Accept-Ranges';
+            // Remove headers that block cross-origin playback
+            delete proxyRes.headers['cross-origin-resource-policy'];
+            delete proxyRes.headers['cross-origin-opener-policy'];
+            delete proxyRes.headers['x-frame-options'];
           });
         }
       },
