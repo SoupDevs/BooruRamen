@@ -400,7 +400,6 @@ export default {
       'blacklistTags',
       'activeSource',
       'customSources',
-      'exploreMode',
       'debugMode'
     ]),
     // Map player store state
@@ -435,7 +434,6 @@ export default {
         removeWhitelistTag: 'removeWhitelistTag',
         addBlacklistTagAction: 'addBlacklistTag',
         removeBlacklistTag: 'removeBlacklistTag', 
-        toggleExploreMode: 'toggleExploreMode',
         saveSettings: 'saveSettings',
         initializeSettings: 'initialize'
     }),
@@ -671,8 +669,7 @@ export default {
         images: this.mediaType.images ? '1' : '0',
         videos: this.mediaType.videos ? '1' : '0',
         whitelist: this.whitelistTags.join(','),
-        blacklist: this.blacklistTags.join(','),
-        explore: this.exploreMode ? '1' : '0'
+        blacklist: this.blacklistTags.join(',')
       };
       return query;
     },
@@ -683,7 +680,6 @@ export default {
       if (query.videos !== undefined) this.mediaType.videos = query.videos !== '0';
       if (query.whitelist) this.whitelistTags = query.whitelist.split(',');
       if (query.blacklist) this.blacklistTags = query.blacklist.split(',');
-      if (query.explore !== undefined) this.exploreMode = query.explore === '1';
     },
     
     // Video Controls

@@ -204,21 +204,7 @@
       <div class="mb-4 border-t border-gray-700 pt-4">
         <h3 class="text-sm font-medium block mb-2">Recommendations</h3>
         
-        <!-- Explore Mode Toggle -->
-        <div class="flex items-center justify-between mb-2">
-          <label class="text-sm">Explore Mode</label>
-          <button 
-            @click="toggleExploreMode" 
-            class="relative inline-flex h-6 w-11 items-center rounded-full"
-            :class="exploreMode ? 'bg-pink-600' : 'bg-gray-600'"
-          >
-            <span 
-              class="inline-block h-4 w-4 transform rounded-full bg-white transition"
-              :class="exploreMode ? 'translate-x-6' : 'translate-x-1'"
-            ></span>
-          </button>
-        </div>
-        <p class="text-xs text-gray-400 mb-3">Explore mode shows more diverse content to help improve recommendations</p>
+
         
         <!-- Recommended Tags Section -->
         <div v-if="hasRecommendations" class="mb-3">
@@ -289,14 +275,14 @@ export default {
   computed: {
     ...mapWritableState(useSettingsStore, [
       'autoScroll', 'autoScrollSeconds', 'disableScrollAnimation', 'autoplayVideos',
-      'mediaType', 'ratings', 'whitelistTags', 'blacklistTags', 'exploreMode'
+      'mediaType', 'ratings', 'whitelistTags', 'blacklistTags'
     ]),
     ...mapWritableState(usePlayerStore, ['defaultMuted']),
   },
   methods: {
     ...mapActions(useSettingsStore, [
-      'toggleRating', 'addWhitelistTag', 'removeWhitelistTag', 
-      'addBlacklistTag', 'removeBlacklistTag', 'toggleExploreMode'
+      'toggleRating', 'addWhitelistTag', 'removeWhitelistTag',
+      'addBlacklistTag', 'removeBlacklistTag'
     ]),
     toggleRatingAction(rating) {
       this.toggleRating(rating);

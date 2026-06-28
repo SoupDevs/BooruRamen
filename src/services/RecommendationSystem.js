@@ -39,7 +39,7 @@ class RecommendationSystem {
     this.messageId = 0;
     this.resolvers = new Map();
 
-    // Local session state for explore mode pagination only
+    // Local session state for strategy pagination cursors
     this.strategyCursors = {};
 
     // Set up message listener from worker
@@ -132,8 +132,8 @@ class RecommendationSystem {
     return this.callWorker('getRecommendedRatings');
   }
 
-  async buildRecommendedQueryParams(includeUserTags = true, exploreMode = false) {
-    return this.callWorker('buildRecommendedQueryParams', { includeUserTags, exploreMode });
+  async buildRecommendedQueryParams(includeUserTags = true) {
+    return this.callWorker('buildRecommendedQueryParams', { includeUserTags });
   }
 
   async getQueryableTags() {

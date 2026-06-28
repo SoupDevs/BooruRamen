@@ -289,63 +289,6 @@ export default {
         }
       }
     },
-    async buildTagsFromRouteQuery(overrideQuery = null) {
-      const query = overrideQuery || this.$route.query;
-      const tags = [];
-
-      const ratings = query.ratings ? query.ratings.split(',') : ['general'];
-      if (ratings.length > 0) {
-        const ratingMap = { 'general': 'g', 'sensitive': 's', 'questionable': 'q', 'explicit': 'e' };
-        const shortRatings = ratings.map(r => ratingMap[r] || r);
-        tags.push(`rating:${shortRatings.join(',')}`);
-      }
-
-      const wantsImages = 'images' in query ? query.images === '1' : true;
-      const wantsVideos = 'videos' in query ? query.videos === '1' : true;
-
-      if (wantsVideos && !wantsImages) {
-        tags.push('filetype:mp4,webm');
-      } else if (!wantsVideos && wantsImages) {
-        tags.push('-filetype:mp4,webm');
-      }
-
-      // Use query param if present, otherwise fall back to global settings
-      if (query.whitelist) {
-        tags.push(...query.whitelist.split(','));
-      } else if (this.whitelistTags && this.whitelistTags.length > 0) {
-        tags.push(...this.whitelistTags);
-      }
-
-      if (query.blacklist) {
-        tags.push(...query.blacklist.split(',').map(t => `-${t}`));
-      } else if (this.blacklistTags && this.blacklistTags.length > 0) {
-        tags.push(...this.blacklistTags.map(t => `-${t}`));
-      }
-
-      // Inject top recommended tags from recommendation engine
-      // when no explicit whitelist is set
-      if ((!query.whitelist && !this.whitelistTags?.length) && this.recommendationSystem) {
-        const banditSelection = await this.recommendationSystem.selectBanditTag();
-        if (banditSelection && (banditSelection.tag || banditSelection.modifier)) {
-          let tagQuery = banditSelection.tag || '';
-          if (banditSelection.modifier) {
-            tagQuery = tagQuery ? `${tagQuery} ${banditSelection.modifier}` : banditSelection.modifier;
-          }
-          if (tagQuery.trim()) {
-            tags.push(tagQuery.trim());
-          }
-        } else {
-          // Fallback to top tag if bandit returns nothing useful
-          const topTags = await this.recommendationSystem.getQueryableTags();
-          if (topTags.length > 0) {
-            tags.push(...topTags.slice(0, 2));
-          }
-        }
-      }
-
-      return tags.join(' ');
-    },
-
     async fetchPosts(newSearch = false) {
       if (this.isFetching) return;
       this.isFetching = true;
@@ -383,106 +326,52 @@ export default {
           return;
       }
 
-      const exploreMode = this.$route.query.explore === '1';
-
       try {
         let newPosts = [];
-        
-        if (exploreMode) {
-          // Guard: if recommendationSystem not yet initialized (watcher fires before created), skip
-          if (!this.recommendationSystem) {
-            console.log('Skipping explore mode - recommendationSystem not yet initialized');
-            this.isFetching = false;
-            this.loading = false;
-            return;
-          }
-          const targetCount = 5; // Relaxed target for explore mode
-          let attempts = 0;
-          const maxAttempts = 15;
 
-          const fetchFunction = (queryParams, limit) => {
-            return BooruService.getPosts({ 
-              tags: queryParams.tags || '', 
-              limit, 
-              // Use specific page from recommendation system if provided (for smart cursors), 
-              // otherwise fall back to global page (though global page is now static in explore mode)
-              page: queryParams.page || this.page, 
-              sort: this.sort, 
-              sortOrder: this.sortOrder,
-              skipSort: true // RecommendationSystem handles order
-            });
-          };
+        // Guard: if recommendationSystem not yet initialized (watcher fires before created), skip
+        if (!this.recommendationSystem) {
+          console.log('Skipping fetch - recommendationSystem not yet initialized');
+          this.isFetching = false;
+          this.loading = false;
+          return;
+        }
+        const targetCount = 5;
+        let attempts = 0;
+        const maxAttempts = 15;
 
-          const { ratings, whitelist, blacklist } = this.$route.query;
+        const fetchFunction = (queryParams, limit) => {
+          return BooruService.getPosts({ 
+            tags: queryParams.tags || '', 
+            limit, 
+            page: queryParams.page || this.page, 
+            sort: this.sort, 
+            sortOrder: this.sortOrder,
+            skipSort: true
+          });
+        };
 
-          // Resolve whitelist/blacklist: use query first, then global settings
-          const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
-          const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
+        const { ratings, whitelist, blacklist } = this.$route.query;
 
-          // Loop until we find news posts or hit max attempts
-          while (newPosts.length < targetCount && attempts < maxAttempts) {
-            attempts++;
-            
-            const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
-              postsPerFetch: 20,
-              selectedRatings: ratings ? ratings.split(',') : ['general'],
-              whitelist: activeWhitelist,
-              blacklist: activeBlacklist,
-              existingPostIds: blockedKeys, 
-              wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : true,
-              wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : true,
-            });
-            
-            if (batch.length > 0) {
-              newPosts = [...newPosts, ...batch];
-              batch.forEach(p => blockedKeys.add(this.getCompositeKey(p)));
-            }
-          }
+        const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
+        const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
 
-        } else {
-          // Normal mode with deduplication
-          const tagsForApi = await this.buildTagsFromRouteQuery();
-          const targetCount = 10;
-          let fetchedCount = 0;
-          let attempts = 0;
-          const maxAttempts = 5; // Prevent infinite loops
+        while (newPosts.length < targetCount && attempts < maxAttempts) {
+          attempts++;
           
-          while (newPosts.length < targetCount && attempts < maxAttempts) {
-            attempts++;
-            
-            // Fetch a batch of posts
-            const rawPosts = await BooruService.getPosts({
-              tags: tagsForApi,
-              page: this.page,
-              limit: 20, // Fetch more than needed to account for filtering
-              sort: this.sort,
-              sortOrder: this.sortOrder,
-            });
-            
-            if (!rawPosts || rawPosts.length === 0) {
-              break; // No more posts available
-            }
-            
-            // Filter out blocked posts
-            const filteredBatch = rawPosts.filter(p => !blockedKeys.has(this.getCompositeKey(p)));
-            
-            // Add unique posts to our result
-            for (const post of filteredBatch) {
-              if (newPosts.length < targetCount) {
-                // Attach search criteria for debug mode
-                post._searchCriteria = tagsForApi;
-                newPosts.push(post);
-                blockedKeys.add(this.getCompositeKey(post)); 
-              }
-            }
-            
-            // Always increment page to move forward in the API
-            this.page++;
-            
-            // If we got fewer posts than requested from API (ignoring filter), we reached the end
-            if (rawPosts.length < 20) {
-              break;
-            }
+          const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
+            postsPerFetch: 20,
+            selectedRatings: ratings ? ratings.split(',') : ['general'],
+            whitelist: activeWhitelist,
+            blacklist: activeBlacklist,
+            existingPostIds: blockedKeys, 
+            wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : true,
+            wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : true,
+          });
+          
+          if (batch.length > 0) {
+            newPosts = [...newPosts, ...batch];
+            batch.forEach(p => blockedKeys.add(this.getCompositeKey(p)));
           }
         }
         
@@ -491,11 +380,8 @@ export default {
           console.log(`Added ${newPosts.length} new posts. Total: ${this.posts.length}`);
           // Pre-fetch video URLs as blobs for Tauri production (non-blocking)
           this.processVideoUrls(newPosts);
-        } else if (!exploreMode && newPosts.length === 0 && this.posts.length > 0) {
-            console.log("No new unique posts found in this batch (normal mode).");
-            this.hasMorePosts = false;
-        } else if (exploreMode && newPosts.length === 0) {
-            console.log("No new posts found in explore mode batch.");
+        } else if (newPosts.length === 0) {
+            console.log("No new posts found in batch.");
         }
       } catch (error) {
         console.error('Failed to fetch posts:', error);
