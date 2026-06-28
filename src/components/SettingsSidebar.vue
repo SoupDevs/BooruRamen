@@ -31,6 +31,21 @@
             class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-pink-600"
           />
         </div>
+        <div v-if="autoScroll" class="mt-2">
+          <div class="flex items-center justify-between">
+            <label class="text-sm text-gray-400">Wait for video to finish</label>
+            <button 
+              @click="autoScrollWaitForVideo = !autoScrollWaitForVideo" 
+              class="relative inline-flex h-6 w-11 items-center rounded-full"
+              :class="autoScrollWaitForVideo ? 'bg-pink-600' : 'bg-gray-600'"
+            >
+              <span 
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                :class="autoScrollWaitForVideo ? 'translate-x-6' : 'translate-x-1'"
+              ></span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Disable scroll animation toggle -->
@@ -230,7 +245,7 @@ export default {
   },
   computed: {
     ...mapWritableState(useSettingsStore, [
-      'autoScroll', 'autoScrollSeconds', 'disableScrollAnimation', 'autoplayVideos',
+      'autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos',
       'mediaType', 'ratings', 'whitelistTags', 'blacklistTags'
     ]),
     ...mapWritableState(usePlayerStore, ['defaultMuted']),

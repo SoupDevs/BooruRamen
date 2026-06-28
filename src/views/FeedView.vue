@@ -50,7 +50,7 @@
             :ref="(el) => setVideoRef(el, post)"
             :poster="post.preview_url || post.sample_url"
             autoplay
-            loop
+            :loop="!autoScrollWaitForVideo"
             playsinline
             muted
             class="max-w-full transition-[max-height] duration-300"
@@ -170,7 +170,7 @@ export default {
     }
   },
   computed: {
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'disableScrollAnimation', 'autoplayVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Calculate max height for media based on comments sheet
@@ -512,25 +512,55 @@ export default {
       this.$emit('video-state-change', { volume, muted });
     },
     startAutoScroll() {
-      if (this.autoScrollInterval) {
-        clearInterval(this.autoScrollInterval);
-      }
+      this.stopAutoScroll();
+      this._setupVideoEndedListener();
+      this._startAutoScrollTimer();
+    },
+    _isCurrentPostVideo() {
+      const post = this.posts[this.currentPostIndex];
+      if (!post) return false;
+      return this.isVideoPost(post);
+    },
+    _startAutoScrollTimer() {
+      if (this.autoScrollInterval) return;
       this.autoScrollInterval = setInterval(() => {
-        const container = this.$refs.feedContainer;
-        if (container) {
-          const nextScrollTop = container.scrollTop + container.clientHeight;
-          container.scrollTo({
-            top: nextScrollTop,
-            behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
-          });
-        }
+        if (this.autoScrollWaitForVideo && this._isCurrentPostVideo()) return;
+        this._doAutoScroll();
       }, this.autoScrollSeconds * 1000);
     },
-    stopAutoScroll() {
+    _stopAutoScrollTimer() {
       if (this.autoScrollInterval) {
         clearInterval(this.autoScrollInterval);
         this.autoScrollInterval = null;
       }
+    },
+    _doAutoScroll() {
+      const container = this.$refs.feedContainer;
+      if (container) {
+        const nextScrollTop = container.scrollTop + container.clientHeight;
+        container.scrollTo({
+          top: nextScrollTop,
+          behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
+        });
+      }
+    },
+    _setupVideoEndedListener() {
+      this.$refs.feedContainer.addEventListener('ended', this._onVideoEnded, true);
+    },
+    _removeVideoEndedListener() {
+      this.$refs.feedContainer.removeEventListener('ended', this._onVideoEnded, true);
+    },
+    _onVideoEnded(event) {
+      if (!this.autoScroll || !this.autoScrollWaitForVideo) return;
+      const currentPost = this.posts[this.currentPostIndex];
+      if (!currentPost) return;
+      const videoEl = this.videoElements[this.getCompositeKey(currentPost)];
+      if (!videoEl || event.target !== videoEl) return;
+      this._doAutoScroll();
+    },
+    stopAutoScroll() {
+      this._stopAutoScrollTimer();
+      this._removeVideoEndedListener();
     },
     onVideoLoadStart(post) {
       const key = this.getCompositeKey(post);
@@ -673,6 +703,11 @@ export default {
         }
       },
       immediate: true
+    },
+    autoScrollWaitForVideo() {
+      if (this.autoScroll) {
+        this.startAutoScroll();
+      }
     },
     posts() {
       this.$nextTick(() => {

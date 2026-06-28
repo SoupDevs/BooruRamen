@@ -6,6 +6,7 @@ export const useSettingsStore = defineStore('settings', {
         // Default values - will be overwritten by initialize()
         autoScroll: false,
         autoScrollSeconds: 5,
+        autoScrollWaitForVideo: true,
         autoScrollSpeed: 'medium',
         disableHistory: false,
         autoplayVideos: true,
@@ -90,6 +91,7 @@ export const useSettingsStore = defineStore('settings', {
                 settings: {
                     autoScroll: this.autoScroll,
                     autoScrollSeconds: this.autoScrollSeconds,
+                    autoScrollWaitForVideo: this.autoScrollWaitForVideo,
                     autoScrollSpeed: this.autoScrollSpeed,
                     disableHistory: this.disableHistory,
                     autoplayVideos: this.autoplayVideos,
