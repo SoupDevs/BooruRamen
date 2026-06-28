@@ -10,7 +10,7 @@
 <template>
   <div class="w-full relative overflow-hidden" :style="feedContainerStyle">
     <!-- Post feed -->
-    <div class="h-full overflow-y-auto snap-y snap-mandatory" ref="feedContainer">
+    <div class="h-full overflow-y-auto snap-y snap-mandatory" ref="feedContainer" :style="disableScrollAnimation ? 'scroll-behavior: auto' : ''">
       <div v-if="loading" class="h-full flex items-center justify-center">
         <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-600"></div>
       </div>

@@ -51,7 +51,7 @@
       <!-- Disable scroll animation toggle -->
       <div class="mb-4">
         <div class="flex items-center justify-between">
-          <label class="text-sm font-medium">Disable auto-scroll animation</label>
+          <label class="text-sm font-medium">Disable scroll animation</label>
           <button 
             @click="disableScrollAnimation = !disableScrollAnimation" 
             class="relative inline-flex h-6 w-11 items-center rounded-full"
