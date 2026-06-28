@@ -201,48 +201,6 @@
       </div>
       
       <!-- Recommendations section -->
-      <div class="mb-4 border-t border-gray-700 pt-4">
-        <h3 class="text-sm font-medium block mb-2">Recommendations</h3>
-        
-
-        
-        <!-- Recommended Tags Section -->
-        <div v-if="hasRecommendations" class="mb-3">
-          <h4 class="text-xs font-medium text-gray-400 mb-1">Recommended Tags</h4>
-          <div class="flex flex-wrap gap-1">
-            <span 
-              v-for="tag in recommendedTags" 
-              :key="tag"
-              class="bg-pink-800 px-2 py-0.5 rounded text-xs inline-flex items-center"
-            >
-              {{ tag }}
-              <button 
-                @click="whitelistTags.push(tag); newWhitelistTag = ''" 
-                class="ml-1 text-xs hover:text-white"
-              >
-                + Add
-              </button>
-            </span>
-          </div>
-          <p v-if="recommendedTags.length === 0" class="text-xs text-gray-400">
-            Interact with more posts to get recommendations
-          </p>
-        </div>
-        
-        <!-- Recommendation Status -->
-        <div class="text-xs text-gray-400 mb-2">
-          <p v-if="hasRecommendations">Recommendations active</p>
-          <p v-else>Recommendations will activate after more interactions</p>
-        </div>
-        
-        <!-- Reset Recommendations Button -->
-        <button 
-          @click="$emit('reset-recommendations')" 
-          class="w-full bg-gray-700 hover:bg-gray-600 text-white py-1.5 rounded-md text-xs"
-        >
-          Reset Recommendations
-        </button>
-      </div>
       
       <button 
         @click="$emit('apply-settings')" 
@@ -263,8 +221,6 @@ export default {
   name: 'SettingsSidebar',
   props: {
     show: Boolean,
-    hasRecommendations: Boolean,
-    recommendedTags: Array,
   },
   data() {
     return {
