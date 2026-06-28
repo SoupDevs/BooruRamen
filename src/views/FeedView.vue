@@ -10,7 +10,7 @@
 <template>
   <div class="w-full relative overflow-hidden" :style="feedContainerStyle">
     <!-- Post feed -->
-    <div class="h-full overflow-y-auto snap-y snap-mandatory" ref="feedContainer">
+    <div class="h-full overflow-y-auto snap-y snap-mandatory" ref="feedContainer" :style="containerStyle">
       <div v-if="loading" class="h-full flex items-center justify-center">
         <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-600"></div>
       </div>
@@ -50,7 +50,7 @@
             :ref="(el) => setVideoRef(el, post)"
             :poster="post.preview_url || post.sample_url"
             autoplay
-            loop
+            :loop="loopVideos && !(autoScroll && autoScrollWaitForVideo)"
             playsinline
             muted
             class="max-w-full transition-[max-height] duration-300"
@@ -139,6 +139,10 @@ export default {
       isResizing: false, // Flag to suspend scroll tracking during CSS animation
       videoLoadingStates: {}, // Map of composite key -> loading boolean
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
+      _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
+      _accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
+      _wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
+      _clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
     }
   },
   directives: {
@@ -170,7 +174,7 @@ export default {
     }
   },
   computed: {
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'disableScrollAnimation', 'autoplayVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Calculate max height for media based on comments sheet
@@ -206,6 +210,12 @@ export default {
       return {
         transition: this.isResizing ? 'height 0.35s cubic-bezier(0.32, 0.72, 0, 1)' : 'none'
       };
+    },
+    containerStyle() {
+      if (this.disableScrollAnimation) {
+        return 'scroll-snap-stop: always; overscroll-behavior-y: contain';
+      }
+      return '';
     },
     // Alias to match template if needed, or just updated template to use 'muted'
     // The template uses 'isMuted' prop, so we alias it or change template.
@@ -403,6 +413,34 @@ export default {
         this.fetchPosts();
       }
     },
+    _accumulatedWheelDelta: 0,
+    _wheelSnapThreshold: 100,
+    _onWheel(event) {
+      if (!this.disableScrollAnimation) return;
+      const container = this.$refs.feedContainer;
+      if (!container) return;
+      const itemHeight = container.clientHeight;
+      if (itemHeight === 0) return;
+      this._accumulatedWheelDelta += event.deltaY;
+      if (this._clearWheelDeltaTimeout) {
+        clearTimeout(this._clearWheelDeltaTimeout);
+      }
+      this._clearWheelDeltaTimeout = setTimeout(() => {
+        this._accumulatedWheelDelta = 0;
+      }, 200);
+      if (Math.abs(this._accumulatedWheelDelta) >= this._wheelSnapThreshold) {
+        const direction = this._accumulatedWheelDelta > 0 ? 1 : -1;
+        this._accumulatedWheelDelta = 0;
+        const nextIndex = this.currentPostIndex + direction;
+        if (nextIndex >= 0 && nextIndex < this.posts.length) {
+          event.preventDefault();
+          container.scrollTo({
+            top: nextIndex * itemHeight,
+            behavior: 'auto'
+          });
+        }
+      }
+    },
     async determineCurrentPost() {
       const container = this.$refs.feedContainer;
       if (!container) return;
@@ -512,25 +550,77 @@ export default {
       this.$emit('video-state-change', { volume, muted });
     },
     startAutoScroll() {
-      if (this.autoScrollInterval) {
-        clearInterval(this.autoScrollInterval);
-      }
+      this.stopAutoScroll();
+      this._setupVideoEndedListener();
+      this._startAutoScrollTimer();
+    },
+    _isCurrentPostVideo() {
+      const post = this.posts[this.currentPostIndex];
+      if (!post) return false;
+      return this.isVideoPost(post);
+    },
+    _startAutoScrollTimer() {
+      if (this.autoScrollInterval) return;
       this.autoScrollInterval = setInterval(() => {
-        const container = this.$refs.feedContainer;
-        if (container) {
-          const nextScrollTop = container.scrollTop + container.clientHeight;
-          container.scrollTo({
-            top: nextScrollTop,
-            behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
-          });
-        }
+        if (this.autoScrollWaitForVideo && this._isCurrentPostVideo()) return;
+        this._doAutoScroll();
       }, this.autoScrollSeconds * 1000);
     },
-    stopAutoScroll() {
+    _stopAutoScrollTimer() {
       if (this.autoScrollInterval) {
         clearInterval(this.autoScrollInterval);
         this.autoScrollInterval = null;
       }
+    },
+    _snapToNearestPost() {
+      const container = this.$refs.feedContainer;
+      if (!container) return;
+      const itemHeight = container.clientHeight;
+      if (itemHeight === 0) return;
+      const scrolled = container.scrollTop;
+      const baseIndex = Math.floor(scrolled / itemHeight);
+      const offset = scrolled - (baseIndex * itemHeight);
+      // Snap forward if scrolled past 40 of item height, otherwise snap back
+      const SNAP_THRESHOLD = 0.4;
+      const targetIndex = offset / itemHeight >= SNAP_THRESHOLD ? baseIndex + 1 : baseIndex;
+      const clampedIndex = Math.max(0, Math.min(targetIndex, this.posts.length - 1));
+      if (clampedIndex === this.currentPostIndex) return;
+      container.scrollTo({
+        top: clampedIndex * itemHeight,
+        behavior: 'auto'
+      });
+    },
+    _doAutoScroll() {
+      this._isAutoScrolling = true;
+      const container = this.$refs.feedContainer;
+      if (container) {
+        const nextScrollTop = container.scrollTop + container.clientHeight;
+        container.scrollTo({
+          top: nextScrollTop,
+          behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
+        });
+      }
+      setTimeout(() => { this._isAutoScrolling = false; }, 100);
+    },
+    _setupVideoEndedListener() {
+      if (!this.$refs.feedContainer) return;
+      this.$refs.feedContainer.addEventListener('ended', this._onVideoEnded, true);
+    },
+    _removeVideoEndedListener() {
+      if (!this.$refs.feedContainer) return;
+      this.$refs.feedContainer.removeEventListener('ended', this._onVideoEnded, true);
+    },
+    _onVideoEnded(event) {
+      if (!this.autoScroll || !this.autoScrollWaitForVideo) return;
+      const currentPost = this.posts[this.currentPostIndex];
+      if (!currentPost) return;
+      const videoEl = this.videoElements[this.getCompositeKey(currentPost)];
+      if (!videoEl || event.target !== videoEl) return;
+      this._doAutoScroll();
+    },
+    stopAutoScroll() {
+      this._stopAutoScrollTimer();
+      this._removeVideoEndedListener();
     },
     onVideoLoadStart(post) {
       const key = this.getCompositeKey(post);
@@ -578,6 +668,7 @@ export default {
   },
   mounted() {
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
+    this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
 
     this.observer = new IntersectionObserver(
       (entries) => {
@@ -646,6 +737,7 @@ export default {
   },
   beforeUnmount() {
     this.$refs.feedContainer.removeEventListener('scroll', this.handleScroll);
+    this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
     if (this.observer) {
         this.observer.disconnect();
     }
@@ -673,6 +765,11 @@ export default {
         }
       },
       immediate: true
+    },
+    autoScrollWaitForVideo() {
+      if (this.autoScroll) {
+        this.startAutoScroll();
+      }
     },
     posts() {
       this.$nextTick(() => {
