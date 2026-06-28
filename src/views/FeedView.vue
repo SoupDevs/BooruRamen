@@ -730,46 +730,46 @@ export default {
 
               // Only auto-play if setting is enabled!
               if (this.autoplayVideos) {
-                if (!video.paused) {
-                  // Already playing (native autoplay) — will be handled by 'playing' event
-                } else {
-                  const attemptPlay = () => {
-                    video.play().then(() => {
-                      // Playback started — 'playing' event will handle unmute
-                      this._initializedVideos.add(video);
-                    }).catch(e => {
-                      console.warn('[FeedView] Autoplay prevented:', e.name, e.message);
-                      // Video may still play via native autoplay later — keep the 'playing' listener
-                    });
-                  };
-
-                  // Ensure video is ready before attempting play
-                  if (video.readyState >= 2) {
-                    // HAVE_CURRENT_DATA or better — safe to play
-                    attemptPlay();
-                  } else {
-                    // Wait for canplay/loadeddata before attempting play
-                    let playStarted = false;
-                    const tryPlay = () => {
-                      if (playStarted) return;
-                      playStarted = true;
-                      video.removeEventListener('canplay', tryPlay);
-                      video.removeEventListener('loadeddata', tryPlay);
-                      attemptPlay();
-                    };
-                    video.addEventListener('canplay', tryPlay);
-                    video.addEventListener('loadeddata', tryPlay);
-                    // Trigger loading if not started
-                    if (video.readyState === 0) {
-                      video.load();
-                    }
-                    // Timeout fallback in case events don't fire
+                const attemptPlay = () => {
+                  video.play().then(() => {
+                    // Playback started — 'playing' event will handle unmute
+                    this._initializedVideos.add(video);
+                  }).catch(e => {
+                    console.warn('[FeedView] Autoplay prevented:', e.name, e.message);
+                    // Retry once after a short delay (video might still be loading)
                     setTimeout(() => {
-                      if (!playStarted) {
-                        tryPlay();
+                      if (video.paused && this.autoplayVideos) {
+                        video.play().catch(() => {});
                       }
-                    }, 3000);
+                    }, 500);
+                  });
+                };
+
+                // Ensure video is ready before attempting play
+                if (video.readyState >= 2) {
+                  attemptPlay();
+                } else {
+                  // Wait for canplay/loadeddata before attempting play
+                  let playStarted = false;
+                  const tryPlay = () => {
+                    if (playStarted) return;
+                    playStarted = true;
+                    video.removeEventListener('canplay', tryPlay);
+                    video.removeEventListener('loadeddata', tryPlay);
+                    attemptPlay();
+                  };
+                  video.addEventListener('canplay', tryPlay);
+                  video.addEventListener('loadeddata', tryPlay);
+                  // Trigger loading if not started
+                  if (video.readyState === 0) {
+                    video.load();
                   }
+                  // Timeout fallback in case events don't fire (e.g., CDN blocked)
+                  setTimeout(() => {
+                    if (!playStarted && video.paused && this.autoplayVideos) {
+                      tryPlay();
+                    }
+                  }, 3000);
                 }
               } else {
                 // Even without autoplay, honor user's mute preference after element is ready
