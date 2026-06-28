@@ -700,25 +700,65 @@ export default {
               
               // Only auto-play if setting is enabled!
               if (this.autoplayVideos) {
-                video.play().then(() => {
-                  // Mark as initialized so re-intersections don't reset playback
+                // Skip if already playing (e.g., native autoplay from HTML attribute)
+                if (!video.paused) {
                   this._initializedVideos.add(video);
-                  // After playback starts, honor user's mute preference
                   const shouldMute = this.defaultMuted ? true : this.isMuted;
                   video.muted = shouldMute;
-                  // Sync store state with actual muted state
                   if (shouldMute !== this.isMuted) {
                     this.$emit('video-state-change', { muted: shouldMute });
                   }
-                }).catch(e => {
-                  // If autoplay fails, stay muted and try once more
-                  console.warn('[FeedView] Autoplay prevented:', e.name, e.message);
-                  video.muted = true;
-                  video.play().then(() => {
-                    this._initializedVideos.add(video);
-                  }).catch(() => {}); // Silently fail if still blocked
-                  this.$emit('video-state-change', { muted: true });
-                });
+                } else {
+                  const attemptPlay = () => {
+                    video.play().then(() => {
+                      // Mark as initialized so re-intersections don't reset playback
+                      this._initializedVideos.add(video);
+                      // After playback starts, honor user's mute preference
+                      const shouldMute = this.defaultMuted ? true : this.isMuted;
+                      video.muted = shouldMute;
+                      // Sync store state with actual muted state
+                      if (shouldMute !== this.isMuted) {
+                        this.$emit('video-state-change', { muted: shouldMute });
+                      }
+                    }).catch(e => {
+                      // If autoplay fails, stay muted and try once more
+                      console.warn('[FeedView] Autoplay prevented:', e.name, e.message);
+                      video.muted = true;
+                      video.play().then(() => {
+                        this._initializedVideos.add(video);
+                      }).catch(() => {}); // Silently fail if still blocked
+                      this.$emit('video-state-change', { muted: true });
+                    });
+                  };
+
+                  // Ensure video is ready before attempting play
+                  if (video.readyState >= 2) {
+                    // HAVE_CURRENT_DATA or better — safe to play
+                    attemptPlay();
+                  } else {
+                    // Wait for canplay/loadeddata before attempting play
+                    let playStarted = false;
+                    const tryPlay = () => {
+                      if (playStarted) return;
+                      playStarted = true;
+                      video.removeEventListener('canplay', tryPlay);
+                      video.removeEventListener('loadeddata', tryPlay);
+                      attemptPlay();
+                    };
+                    video.addEventListener('canplay', tryPlay);
+                    video.addEventListener('loadeddata', tryPlay);
+                    // Trigger loading if not started
+                    if (video.readyState === 0) {
+                      video.load();
+                    }
+                    // Timeout fallback in case events don't fire
+                    setTimeout(() => {
+                      if (!playStarted) {
+                        tryPlay();
+                      }
+                    }, 3000);
+                  }
+                }
               } else {
                 // Even without autoplay, honor user's mute preference after element is ready
                 const shouldMute = this.defaultMuted ? true : this.isMuted;
