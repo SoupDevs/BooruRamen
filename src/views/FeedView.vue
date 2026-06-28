@@ -690,6 +690,23 @@ export default {
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
     this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
 
+    // Browsers may block autoplay until user interacts with the page.
+    // Add a one-time listener to unlock playback on first user gesture.
+    this._unlockAutoplay = () => {
+      const currentPost = this.posts[this.currentPostIndex];
+      if (currentPost) {
+        const videoEl = this.videoElements[this.getCompositeKey(currentPost)];
+        if (videoEl && videoEl.paused) {
+          videoEl.play().catch(() => {});
+        }
+      }
+      document.removeEventListener('click', this._unlockAutoplay);
+      document.removeEventListener('touchstart', this._unlockAutoplay);
+      this._unlockAutoplay = null;
+    };
+    document.addEventListener('click', this._unlockAutoplay);
+    document.addEventListener('touchstart', this._unlockAutoplay);
+
     this.observer = new IntersectionObserver(
       (entries) => {
         entries.forEach(entry => {
@@ -809,6 +826,10 @@ export default {
     this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
     if (this.observer) {
         this.observer.disconnect();
+    }
+    if (this._unlockAutoplay) {
+        document.removeEventListener('click', this._unlockAutoplay);
+        document.removeEventListener('touchstart', this._unlockAutoplay);
     }
     this.$emit('current-post-changed', null, null);
     this.stopAutoScroll();
