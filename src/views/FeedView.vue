@@ -152,6 +152,7 @@ export default {
       videoErrorStates: {}, // Map of composite key -> error boolean (CDN blocked)
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
       _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
+      _hasUserScrolled: false, // Flag to detect if user has scrolled (for autoplay logic)
       _accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
       _wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
       _clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
@@ -333,6 +334,7 @@ export default {
         this.page = 1;
         this.posts = [];
         this.currentPostIndex = -1;
+        this._hasUserScrolled = false;
         if (this.$refs.feedContainer) {
           this.$refs.feedContainer.scrollTop = 0;
         }
@@ -419,6 +421,7 @@ export default {
     },
     handleScroll() {
       if (this.isResizing) return;
+      this._hasUserScrolled = true;
       this.determineCurrentPost();
       const container = this.$refs.feedContainer;
       // Fetch more posts when we are 1 page away from the bottom (pre-fetching)
@@ -730,44 +733,53 @@ export default {
 
               // Only auto-play if setting is enabled!
               if (this.autoplayVideos) {
-                const attemptPlay = () => {
-                  video.play().then(() => {
+                // For the first video on initial load, native autoplay attribute handles playback.
+                // For videos revealed by scrolling, we need to call play() explicitly.
+                const isInitialVideo = this.currentPostIndex === 0 && !this._hasUserScrolled;
+                
+                if (isInitialVideo) {
+                  // Let native autoplay handle it — just mark as initialized if already playing
+                  if (!video.paused) {
                     this._initializedVideos.add(video);
-                  }).catch(() => {
-                    // Autoplay failed — retry once after a short delay
-                    setTimeout(() => {
-                      if (video.paused && this.autoplayVideos) {
-                        video.play().catch(() => {});
-                      }
-                    }, 500);
-                  });
-                };
-
-                // Ensure video is ready before attempting play
-                if (video.readyState >= 2) {
-                  attemptPlay();
-                } else {
-                  // Wait for canplay/loadeddata before attempting play
-                  let playStarted = false;
-                  const tryPlay = () => {
-                    if (playStarted) return;
-                    playStarted = true;
-                    video.removeEventListener('canplay', tryPlay);
-                    video.removeEventListener('loadeddata', tryPlay);
-                    attemptPlay();
-                  };
-                  video.addEventListener('canplay', tryPlay);
-                  video.addEventListener('loadeddata', tryPlay);
-                  // Trigger loading if not started
-                  if (video.readyState === 0) {
-                    video.load();
                   }
-                  // Timeout fallback in case events don't fire (e.g., CDN blocked)
-                  setTimeout(() => {
-                    if (!playStarted && video.paused && this.autoplayVideos) {
-                      tryPlay();
+                  // If native autoplay fails, the 'error' event will trigger fallback UI
+                } else {
+                  // Video revealed by scrolling — call play() to start playback
+                  const attemptPlay = () => {
+                    video.play().then(() => {
+                      this._initializedVideos.add(video);
+                    }).catch(() => {
+                      // Retry once after a short delay
+                      setTimeout(() => {
+                        if (video.paused && this.autoplayVideos) {
+                          video.play().catch(() => {});
+                        }
+                      }, 500);
+                    });
+                  };
+
+                  if (video.readyState >= 2) {
+                    attemptPlay();
+                  } else {
+                    let playStarted = false;
+                    const tryPlay = () => {
+                      if (playStarted) return;
+                      playStarted = true;
+                      video.removeEventListener('canplay', tryPlay);
+                      video.removeEventListener('loadeddata', tryPlay);
+                      attemptPlay();
+                    };
+                    video.addEventListener('canplay', tryPlay);
+                    video.addEventListener('loadeddata', tryPlay);
+                    if (video.readyState === 0) {
+                      video.load();
                     }
-                  }, 3000);
+                    setTimeout(() => {
+                      if (!playStarted && video.paused && this.autoplayVideos) {
+                        tryPlay();
+                      }
+                    }, 3000);
+                  }
                 }
               } else {
                 // Even without autoplay, honor user's mute preference after element is ready
