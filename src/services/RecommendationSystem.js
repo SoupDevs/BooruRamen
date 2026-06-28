@@ -220,23 +220,23 @@ class RecommendationSystem {
         freeTags.push('-filetype:mp4,webm,gif');
       }
 
-      const baseTagCount = apiTags.filter(t => !t.startsWith('status:')).length;
-      const whitelistCount = whitelist.length;
-      const blacklistCount = blacklist.length;
-
-      const totalExpensiveTags = baseTagCount + whitelistCount + blacklistCount;
-
-      let clientSideFilterNeeded = false;
-      let finalApiTags = [...apiTags];
-
       const tagLimit = BooruService.getTagLimit();
 
-      if (totalExpensiveTags > tagLimit) {
-        clientSideFilterNeeded = true;
-        console.log(`Query "${baseQuery.tags}" + filters exceeds API limit (${totalExpensiveTags} > ${tagLimit}). Using Client-Side Filtering.`);
-      } else {
-        if (whitelist.length > 0) finalApiTags.push(...whitelist);
-        if (blacklist.length > 0) finalApiTags.push(...blacklist.map(t => `-${t}`));
+      // freeTags (rating:, filetype:, -filetype:) are meta-tags that don't count
+      // toward Danbooru's search tag limit, so we can always append them.
+      // Only user tags (base, whitelist, blacklist) count toward the limit.
+      const availableForSearch = tagLimit;
+
+      // Prioritize whitelist tags (mandatory) then fill remaining slots with base tags
+      const prioritizedTags = [...new Set([...whitelist, ...apiTags])];
+      let finalApiTags = prioritizedTags.slice(0, availableForSearch);
+
+      // Determine if we need client-side filtering for tags that didn't fit
+      const totalSearchTags = new Set([...whitelist, ...apiTags, ...blacklist.map(t => `-${t}`)]).size;
+      const clientSideFilterNeeded = totalSearchTags > availableForSearch;
+
+      if (clientSideFilterNeeded) {
+        console.log(`Query "${baseQuery.tags}" + filters exceeds API limit (${totalSearchTags} > ${availableForSearch}). Using Client-Side Filtering.`);
       }
 
       finalApiTags.push(...freeTags);
