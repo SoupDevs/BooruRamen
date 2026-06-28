@@ -545,9 +545,11 @@ export default {
       }
     },
     _setupVideoEndedListener() {
+      if (!this.$refs.feedContainer) return;
       this.$refs.feedContainer.addEventListener('ended', this._onVideoEnded, true);
     },
     _removeVideoEndedListener() {
+      if (!this.$refs.feedContainer) return;
       this.$refs.feedContainer.removeEventListener('ended', this._onVideoEnded, true);
     },
     _onVideoEnded(event) {
