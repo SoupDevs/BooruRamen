@@ -134,11 +134,10 @@ export default defineConfig({
         proxyRes.pipe(res, { end: true })
       })
 
-      proxyReq.on('error', (err) => {
-        console.error('[VideoMiddleware] Error:', err.message)
+      proxyReq.on('error', () => {
         if (!res.headersSent) {
           res.writeHead(502)
-          res.end('Proxy error: ' + err.message)
+          res.end('Proxy error')
         }
       })
 

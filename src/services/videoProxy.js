@@ -22,60 +22,53 @@ const isTauri = () => {
 
 // Cache for blob URLs to avoid re-fetching
 const blobUrlCache = new Map();
+let proxyWarningShown = false;
 
 /**
- * Get a playable video URL. Fetches the video as a blob URL to bypass
- * CORP/CORS restrictions from CDN providers (Danbooru, Gelbooru).
- * In dev mode, uses Vite proxy paths. In Tauri production, uses Tauri HTTP.
+ * Get a playable video URL. In dev mode, attempts to fetch through Vite middleware
+ * to bypass CDN restrictions. Falls back to original URL if proxy fails.
  * @param {string} url - The original video URL
- * @returns {Promise<string>} - A blob URL for playback
+ * @returns {Promise<string>} - A blob URL or the original URL
  */
 export async function getPlayableVideoUrl(url) {
     if (!url) return url;
 
-    // Check if it's a video URL that needs proxying
     const isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(url);
     if (!isVideo) return url;
 
-    // Check cache first
     if (blobUrlCache.has(url)) {
         return blobUrlCache.get(url);
     }
 
-    // In dev mode, use local Vite middleware to bypass CDN restrictions
+    // In dev mode, try local Vite middleware to bypass CDN restrictions
     let fetchUrl = url;
     if (import.meta.env && import.meta.env.DEV) {
       fetchUrl = `/video-proxy/${encodeURIComponent(url)}`;
     }
 
     try {
-        console.log('[VideoProxy] Fetching video as blob:', fetchUrl);
-        const response = await httpFetch(fetchUrl, {
-            method: 'GET',
-        });
+        const response = await httpFetch(fetchUrl, { method: 'GET' });
 
         if (!response.ok) {
-            console.error('[VideoProxy] Failed to fetch video:', response.status);
-            return url; // Fall back to original URL
+            // CDN blocked the request — fall back to direct URL
+            return url;
         }
 
-        // Verify we got actual video content, not an HTML error page
         const contentType = response.headers.get('content-type') || '';
         if (!contentType.startsWith('video/') && !contentType.startsWith('application/octet-stream')) {
-            console.error('[VideoProxy] Unexpected content type:', contentType);
-            return url; // Fall back to original URL (will show error UI)
+            // Got HTML (Cloudflare challenge) instead of video — fall back
+            if (import.meta.env.DEV && !proxyWarningShown) {
+                proxyWarningShown = true;
+                console.warn('[VideoProxy] CDN proxy unavailable — videos will load directly from CDN (subject to Cloudflare restrictions)');
+            }
+            return url;
         }
 
         const blob = await response.blob();
         const blobUrl = URL.createObjectURL(blob);
-
-        // Cache the blob URL
         blobUrlCache.set(url, blobUrl);
-        console.log('[VideoProxy] Created blob URL for video');
-
         return blobUrl;
     } catch (error) {
-        console.error('[VideoProxy] Error proxying video:', error);
         return url; // Fall back to original URL
     }
 }

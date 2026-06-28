@@ -307,7 +307,7 @@ export default {
               this.videoBlobUrls[post.file_url] = blobUrl;
             }
           } catch (e) {
-            console.error('[FeedView] Failed to proxy video:', e);
+            // Silently fall back to original URL
           }
         }
       }
@@ -732,11 +732,9 @@ export default {
               if (this.autoplayVideos) {
                 const attemptPlay = () => {
                   video.play().then(() => {
-                    // Playback started — 'playing' event will handle unmute
                     this._initializedVideos.add(video);
-                  }).catch(e => {
-                    console.warn('[FeedView] Autoplay prevented:', e.name, e.message);
-                    // Retry once after a short delay (video might still be loading)
+                  }).catch(() => {
+                    // Autoplay failed — retry once after a short delay
                     setTimeout(() => {
                       if (video.paused && this.autoplayVideos) {
                         video.play().catch(() => {});
