@@ -143,6 +143,7 @@ export default {
       _accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
       _wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
       _clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
+      _initializedVideos: new Set(), // Track videos that have already started playback to prevent restart
     }
   },
   directives: {
@@ -516,13 +517,16 @@ export default {
     },
     onVideoPlay(event, post) {
       if (this.posts[this.currentPostIndex] && this.getCompositeKey(this.posts[this.currentPostIndex]) !== this.getCompositeKey(post)) return;
-      
+
       // Enforce playback rate to prevent accidental speed changes
       const video = event.target;
       if (video.playbackRate !== 1.0) {
           video.playbackRate = 1.0;
       }
-      
+
+      // Mark as initialized so re-intersections don't reset playback
+      this._initializedVideos.add(video);
+
       this.$emit('video-state-change', { isPlaying: true });
     },
     onVideoPause(event, post) {
@@ -680,8 +684,11 @@ export default {
               // Set flag to prevent volumechange event from overwriting store
               this.isProgrammaticVolumeChange = true;
               
-              // Reset video progress to start when becoming visible
-              video.currentTime = 0;
+              // Only reset progress on FIRST visibility to prevent restart on re-intersection
+              // (e.g. scroll jitters that briefly drop below threshold then come back)
+              if (!this._initializedVideos.has(video)) {
+                video.currentTime = 0;
+              }
               
               // Apply user's volume and mute preferences when video becomes visible
               video.volume = this.volume;
@@ -700,11 +707,16 @@ export default {
               
               // Only auto-play if setting is enabled!
               if (this.autoplayVideos) {
-                video.play().catch(e => {
+                video.play().then(() => {
+                  // Mark as initialized so re-intersections don't reset playback
+                  this._initializedVideos.add(video);
+                }).catch(e => {
                   // If autoplay fails, try again with muted=true
                   if (e.name === 'NotAllowedError') {
                     video.muted = true;
-                    video.play().catch(() => {}); // Silently fail if still blocked
+                    video.play().then(() => {
+                      this._initializedVideos.add(video);
+                    }).catch(() => {}); // Silently fail if still blocked
                     // Sync global state to reflect fallback to muted
                     this.$emit('video-state-change', { muted: true });
                   }
@@ -714,6 +726,8 @@ export default {
           } else {
             if (video) {
               video.pause();
+              // Remove from initialized set so next time it enters view, it resets to start
+              this._initializedVideos.delete(video);
               // Set flag before muting to prevent event feedback
               this.isProgrammaticVolumeChange = true;
               // Only mute if we aren't already muted (reduce spam)
