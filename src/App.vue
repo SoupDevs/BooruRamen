@@ -385,10 +385,12 @@ export default {
     ...mapWritableState(useSettingsStore, [
       'autoScroll',
       'autoScrollSeconds',
+      'autoScrollWaitForVideo',
       'autoScrollSpeed',
       'disableScrollAnimation',
       'disableHistory',
       'autoplayVideos',
+      'loopVideos',
       'mediaType',
       'ratings',
       'whitelistTags',
