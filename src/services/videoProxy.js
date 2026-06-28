@@ -24,11 +24,11 @@ const isTauri = () => {
 const blobUrlCache = new Map();
 
 /**
- * Get a playable video URL. In dev mode, fetches the video through Vite proxy
- * and creates a blob URL to bypass CORP restrictions. In Tauri production,
- * uses Tauri HTTP to fetch as blob.
+ * Get a playable video URL. Fetches the video as a blob URL to bypass
+ * CORP/CORS restrictions from CDN providers (Danbooru, Gelbooru).
+ * In dev mode, uses Vite proxy paths. In Tauri production, uses Tauri HTTP.
  * @param {string} url - The original video URL
- * @returns {Promise<string>} - A playable URL (blob URL or proxied URL)
+ * @returns {Promise<string>} - A blob URL for playback
  */
 export async function getPlayableVideoUrl(url) {
     if (!url) return url;
@@ -37,47 +37,40 @@ export async function getPlayableVideoUrl(url) {
     const isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(url);
     if (!isVideo) return url;
 
-    // Rewrite CDN URLs to use Vite proxy in dev mode
-    let proxiedUrl = url;
+    // Check cache first
+    if (blobUrlCache.has(url)) {
+        return blobUrlCache.get(url);
+    }
+
+    // In dev mode, use a public CORS proxy to bypass CDN restrictions
+    let fetchUrl = url;
     if (import.meta.env && import.meta.env.DEV) {
-        proxiedUrl = url
-            .replace('https://cdn.donmai.us/', '/danbooru-cdn/')
-            .replace('https://video-cdn4.gelbooru.com/', '/gelbooru-video/');
+        fetchUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
     }
 
-    // In Tauri production, fetch as blob
-    if (isTauri()) {
-        // Check cache first
-        if (blobUrlCache.has(url)) {
-            return blobUrlCache.get(url);
+    try {
+        console.log('[VideoProxy] Fetching video as blob:', fetchUrl);
+        const response = await httpFetch(fetchUrl, {
+            method: 'GET',
+        });
+
+        if (!response.ok) {
+            console.error('[VideoProxy] Failed to fetch video:', response.status);
+            return url; // Fall back to original URL
         }
 
-        try {
-            console.log('[VideoProxy] Fetching video as blob:', url);
-            const response = await httpFetch(url, {
-                method: 'GET',
-            });
+        const blob = await response.blob();
+        const blobUrl = URL.createObjectURL(blob);
 
-            if (!response.ok) {
-                console.error('[VideoProxy] Failed to fetch video:', response.status);
-                return proxiedUrl; // Fall back to proxied URL
-            }
+        // Cache the blob URL
+        blobUrlCache.set(url, blobUrl);
+        console.log('[VideoProxy] Created blob URL for video');
 
-            const blob = await response.blob();
-            const blobUrl = URL.createObjectURL(blob);
-
-            // Cache the blob URL
-            blobUrlCache.set(url, blobUrl);
-            console.log('[VideoProxy] Created blob URL for video');
-
-            return blobUrl;
-        } catch (error) {
-            console.error('[VideoProxy] Error proxying video:', error);
-            return proxiedUrl; // Fall back to proxied URL
-        }
+        return blobUrl;
+    } catch (error) {
+        console.error('[VideoProxy] Error proxying video:', error);
+        return url; // Fall back to original URL
     }
-
-    return proxiedUrl;
 }
 
 /**

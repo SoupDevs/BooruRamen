@@ -56,6 +56,7 @@ import { mapState } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
 import StorageService from '../services/StorageService';
+import { getPlayableVideoUrl } from '../services/videoProxy.js';
 import { postFilterMixin } from '../mixins/postFilterMixin';
 
 export default {
@@ -73,6 +74,7 @@ export default {
       loading: true,
       currentPostIndex: 0,
       observer: null,
+      videoBlobUrls: {}, // Map of original URL -> blob URL for CORS bypass
     };
   },
   computed: {
@@ -144,6 +146,8 @@ export default {
       // Pause any videos that are still in the DOM from before filtering
       this.$refs.viewerContainer?.querySelectorAll('video').forEach(v => v.pause());
       this.loading = false;
+      // Pre-fetch video URLs as blobs to bypass CORS/CORP restrictions
+      this.processVideoUrls(this.posts);
       // Recreate observer so it only watches filtered posts (not stale video elements)
       this.setupObserver();
       // Scroll to initial post; IntersectionObserver handles autoplay for the visible post
@@ -293,11 +297,9 @@ export default {
     },
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
-      // In dev mode, rewrite CDN URLs to use Vite proxy (avoids CORP blocks)
-      if (import.meta.env.DEV) {
-        return post.file_url
-          .replace('https://cdn.donmai.us/', '/danbooru-cdn/')
-          .replace('https://video-cdn4.gelbooru.com/', '/gelbooru-video/');
+      // Use blob URL if available
+      if (this.videoBlobUrls[post.file_url]) {
+        return this.videoBlobUrls[post.file_url];
       }
       return post.file_url;
     },
@@ -305,7 +307,22 @@ export default {
         const video = event.target;
         if (video.paused) video.play();
         else video.pause();
-    }
+    },
+    async processVideoUrls(posts) {
+      for (const post of posts) {
+        if (this.isVideo(post) && post.file_url) {
+          if (this.videoBlobUrls[post.file_url]) continue;
+          try {
+            const blobUrl = await getPlayableVideoUrl(post.file_url);
+            if (blobUrl !== post.file_url) {
+              this.videoBlobUrls[post.file_url] = blobUrl;
+            }
+          } catch (e) {
+            console.error('[PostViewerView] Failed to proxy video:', e);
+          }
+        }
+      }
+    },
   },
   watch: {
     posts: 'observePosts',
