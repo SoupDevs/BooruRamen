@@ -67,24 +67,6 @@
             @canplay="onVideoCanPlay(post)"
             @error="onVideoError(post)"
           ></video>
-          <!-- Fallback for videos that fail to load (e.g. Cloudflare-protected CDN) -->
-          <div
-            v-if="videoErrorStates[getCompositeKey(post)]"
-            class="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-70 text-white p-4"
-          >
-            <p class="text-sm text-gray-300 mb-2">Video unavailable (CDN restricted)</p>
-            <a :href="post.file_url" target="_blank" rel="noopener"
-               class="px-3 py-1 bg-pink-600 hover:bg-pink-500 rounded text-sm">
-              Open in new tab
-            </a>
-          </div>
-          <div 
-            v-else
-            class="flex items-center justify-center bg-gray-900 p-4 rounded"
-          >
-            <p>Unable to display media. <a :href="post.file_url" target="_blank" class="text-pink-500 underline">Open directly</a></p>
-          </div>
-
           <!-- Custom Loading Spinner -->
           <div 
             v-if="videoLoadingStates[getCompositeKey(post)]" 
