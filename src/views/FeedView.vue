@@ -261,15 +261,8 @@ export default {
     },
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
-      // Use blob URL if available (successfully proxied)
-      if (this.videoBlobUrls[post.file_url]) {
-        return this.videoBlobUrls[post.file_url];
-      }
-      // In dev mode, route through Vite proxy to avoid CORP blocks
-      if (import.meta.env.DEV) {
-        return `/video-proxy/${encodeURIComponent(post.file_url)}`;
-      }
-      return post.file_url;
+      // Use blob URL if available (set by processVideoUrls via getPlayableVideoUrl)
+      return this.videoBlobUrls[post.file_url] || post.file_url;
     },
     async processVideoUrls(posts) {
       // Pre-fetch video URLs as blobs for Tauri production
