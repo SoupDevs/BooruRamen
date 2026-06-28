@@ -142,7 +142,11 @@ export default {
       this.posts = postData.filter(p => p && p.id);
       // Apply user filters (ratings, media type, tag whitelist/blacklist)
       this.posts = await this.filterPostsBySettings(this.posts);
+      // Pause any videos that are still in the DOM from before filtering
+      this.$refs.viewerContainer?.querySelectorAll('video').forEach(v => v.pause());
       this.loading = false;
+      // Recreate observer so it only watches filtered posts (not stale video elements)
+      this.setupObserver();
       this.$nextTick(this.scrollToInitialPost);
     },
     scrollToInitialPost() {
