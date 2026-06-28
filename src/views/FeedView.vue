@@ -705,42 +705,41 @@ export default {
               
               // Apply user's volume preference
               video.volume = this.volume;
-              // Always start muted for autoplay compliance, then unmute after play starts
+              // Always start muted for autoplay compliance
               video.muted = true;
-              
+
               // Clear flag after a short delay to allow volumechange event to pass
               setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
-              
+
+              // Helper to apply mute preference once video is playing
+              const applyMutePreference = () => {
+                const shouldMute = this.defaultMuted ? true : this.isMuted;
+                video.muted = shouldMute;
+                if (shouldMute !== this.isMuted) {
+                  this.$emit('video-state-change', { muted: shouldMute });
+                }
+              };
+
+              // Listen for 'playing' event to unmute (works for both native autoplay and JS play())
+              const onPlaying = () => {
+                this._initializedVideos.add(video);
+                applyMutePreference();
+                video.removeEventListener('playing', onPlaying);
+              };
+              video.addEventListener('playing', onPlaying);
+
               // Only auto-play if setting is enabled!
               if (this.autoplayVideos) {
-                // Skip if already playing (e.g., native autoplay from HTML attribute)
                 if (!video.paused) {
-                  this._initializedVideos.add(video);
-                  const shouldMute = this.defaultMuted ? true : this.isMuted;
-                  video.muted = shouldMute;
-                  if (shouldMute !== this.isMuted) {
-                    this.$emit('video-state-change', { muted: shouldMute });
-                  }
+                  // Already playing (native autoplay) — will be handled by 'playing' event
                 } else {
                   const attemptPlay = () => {
                     video.play().then(() => {
-                      // Mark as initialized so re-intersections don't reset playback
+                      // Playback started — 'playing' event will handle unmute
                       this._initializedVideos.add(video);
-                      // After playback starts, honor user's mute preference
-                      const shouldMute = this.defaultMuted ? true : this.isMuted;
-                      video.muted = shouldMute;
-                      // Sync store state with actual muted state
-                      if (shouldMute !== this.isMuted) {
-                        this.$emit('video-state-change', { muted: shouldMute });
-                      }
                     }).catch(e => {
-                      // If autoplay fails, stay muted and try once more
                       console.warn('[FeedView] Autoplay prevented:', e.name, e.message);
-                      video.muted = true;
-                      video.play().then(() => {
-                        this._initializedVideos.add(video);
-                      }).catch(() => {}); // Silently fail if still blocked
-                      this.$emit('video-state-change', { muted: true });
+                      // Video may still play via native autoplay later — keep the 'playing' listener
                     });
                   };
 
