@@ -31,6 +31,7 @@
             :autoplay="autoplayVideos"
             muted
             loop
+            preload="auto"
             class="max-h-[calc(100vh-0px)] max-w-full"
             @click="togglePlayPause"
             @play="handleVideoStateUpdate($event, index)"
@@ -145,10 +146,9 @@ export default {
       this.loading = false;
       // Recreate observer so it only watches filtered posts (not stale video elements)
       this.setupObserver();
-      // Trigger autoplay check for the initially visible post (observer may have missed it)
+      // Scroll to initial post; IntersectionObserver handles autoplay for the visible post
       this.$nextTick(() => {
         this.scrollToInitialPost();
-        this.playVisibleVideo();
       });
     },
     scrollToInitialPost() {
@@ -233,13 +233,26 @@ export default {
       // Always start muted for autoplay compliance, then apply user preference
       video.muted = true;
       video.volume = this.volume;
+      // Guard against calling play() while another play() is pending
+      if (video._playPending) return;
+      video._playPending = true;
       video.play().then(() => {
+        video._playPending = false;
         // After playback starts successfully, try to honor user's mute preference
         // This may fail in browsers without user gesture - that's OK, stays muted
         if (!this.muted) {
           video.muted = false;
         }
-      }).catch(e => console.warn("Autoplay was prevented in viewer.", e));
+      }).catch(e => {
+        video._playPending = false;
+        // Only retry if not already muted
+        if (!video.muted) {
+          video.muted = true;
+          video.play().then(() => {
+            if (!this.muted) video.muted = false;
+          }).catch(() => {});
+        }
+      });
     },
     handleVideoStateUpdate(event, index) {
       if (index !== this.currentPostIndex) return;
