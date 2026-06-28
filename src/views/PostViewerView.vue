@@ -26,7 +26,7 @@
           />
           <video 
             v-else-if="isVideo(post)" 
-            :src="post.file_url" 
+            :src="getVideoSrc(post)"
             ref="videoPlayer"
             :autoplay="autoplayVideos"
             muted
@@ -290,6 +290,16 @@ export default {
       if (!post || !post.file_ext) return false;
       const ext = post.file_ext.toLowerCase();
       return ['mp4', 'webm'].includes(ext);
+    },
+    getVideoSrc(post) {
+      if (!post || !post.file_url) return '';
+      // In dev mode, rewrite CDN URLs to use Vite proxy (avoids CORP blocks)
+      if (import.meta.env.DEV) {
+        return post.file_url
+          .replace('https://cdn.donmai.us/', '/danbooru-cdn/')
+          .replace('https://video-cdn4.gelbooru.com/', '/gelbooru-video/');
+      }
+      return post.file_url;
     },
     togglePlayPause(event) {
         const video = event.target;

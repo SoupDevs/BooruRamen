@@ -266,8 +266,17 @@ export default {
     },
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
-      // Use blob URL if available (for Tauri production), otherwise use original
-      return this.videoBlobUrls[post.file_url] || post.file_url;
+      // Use blob URL if available (for Tauri production)
+      if (this.videoBlobUrls[post.file_url]) {
+        return this.videoBlobUrls[post.file_url];
+      }
+      // In dev mode, rewrite CDN URLs to use Vite proxy (avoids CORP blocks)
+      if (import.meta.env.DEV) {
+        return post.file_url
+          .replace('https://cdn.donmai.us/', '/danbooru-cdn/')
+          .replace('https://video-cdn4.gelbooru.com/', '/gelbooru-video/');
+      }
+      return post.file_url;
     },
     async processVideoUrls(posts) {
       // Pre-fetch video URLs as blobs for Tauri production
