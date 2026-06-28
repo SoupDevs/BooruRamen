@@ -210,10 +210,11 @@
       <SettingsSidebar :show="showSettingsSidebar" @apply-settings="applySettings" @save-player-preferences="savePlayerPreferences" />
       
       <!-- Floating toggle button for settings sidebar -->
-      <button 
-        @click="showSettingsSidebar = !showSettingsSidebar" 
+      <button
+        v-if="showSettingsToggle"
+        @click="showSettingsSidebar = !showSettingsSidebar"
         class="absolute right-0 z-30 p-2 rounded-l-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
-        :style="{ 
+        :style="{
           transform: showSettingsSidebar ? 'translateX(-320px)' : 'translateX(0)',
           top: `calc(1rem + env(safe-area-inset-top, 0))`
         }"
@@ -367,9 +368,19 @@ export default {
         this.watchStartTime = null;
         this.accumulatedWatchTime = 0;
       }
+      // Collapse settings sidebar when navigating to profile pages
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
+        this.showSettingsSidebar = false;
+      }
     },
     showSettingsSidebar(isOpen) {
-    }
+      if (!isOpen) return;
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      if (hiddenRoutes.includes(this.$route.name)) {
+        this.showSettingsSidebar = false;
+      }
+    },
   },
 
   computed: {
@@ -421,6 +432,11 @@ export default {
       if (!this.currentPost) return false;
       const ext = this.currentPost.file_ext;
       return ['mp4', 'webm'].includes(ext);
+    },
+    showSettingsToggle() {
+      // Only show settings on feed, history, likes, favorites, and viewer
+      const routeName = this.$route.name;
+      return !['Profile', 'ProfileSettings', 'ProfileAnalytics'].includes(routeName);
     },
   },
   methods: {
@@ -649,9 +665,27 @@ export default {
 
     applySettings() {
       this.saveSettings();
-      // Navigate to feed with new settings
-      this.navigateToFeed();
+      // Refresh current view with new settings instead of always redirecting to feed
+      const currentName = this.$route.name;
+      const settingsAwareRoutes = ['Home', 'History', 'Likes', 'Favorites'];
+
+      if (settingsAwareRoutes.includes(currentName)) {
+        // For feed/history/likes/favorites: update query to trigger refetch
+        const query = this.generateQueryFromSettings();
+        // Only navigate if query actually changed (avoids redundant navigation)
+        if (JSON.stringify(this.$route.query) !== JSON.stringify(query)) {
+          this.$router.replace({ name: currentName, query });
+        }
+      }
+      // For other routes (Viewer, etc.), just stay put - no navigation needed
+
+      // Emit event so child views can react to settings change
+      this.$routerViewKeyBump();
       this.showSettingsSidebar = false;
+    },
+    $routerViewKeyBump() {
+      // Increment key to force re-render of current view if needed
+      this.routerViewKey++;
     },
 
     generateQueryFromSettings() {

@@ -14,12 +14,13 @@ export const useSettingsStore = defineStore('settings', {
         loopVideos: true,
         mediaType: { images: false, videos: true },
         ratings: ['general'],
-        whitelistTags: [],
+        whitelistTags: ['meme'],
         blacklistTags: [],
         activeSource: { type: 'danbooru', url: 'https://danbooru.donmai.us', name: 'Danbooru' },
         customSources: [],
         debugMode: false,
         avoidedTags: [],
+        settingsVersion: 0,
         initialized: false
     }),
 
@@ -87,7 +88,7 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         async saveSettings() {
-            // Debounce could be added here if needed, but for now direct save is okay 
+            // Debounce could be added here if needed, but for now direct save is okay
             // as interactions aren't super high frequency (like scroll)
             await StorageService.saveAppSettings({
                 settings: {
@@ -109,6 +110,7 @@ export const useSettingsStore = defineStore('settings', {
                     avoidedTags: this.avoidedTags
                 }
             })
+            this.settingsVersion++
         }
     }
 })
