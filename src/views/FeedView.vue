@@ -697,22 +697,25 @@ export default {
           
           if (entry.isIntersecting) {
             if (video) {
-              // Set flag to prevent volumechange event from overwriting store
-              this.isProgrammaticVolumeChange = true;
-              
-              // Only reset progress on FIRST visibility to prevent restart on re-intersection
-              // (e.g. scroll jitters that briefly drop below threshold then come back)
-              if (!this._initializedVideos.has(video)) {
-                video.currentTime = 0;
-              }
-              
-              // Apply user's volume preference
-              video.volume = this.volume;
-              // Always start muted for autoplay compliance
-              video.muted = true;
+              // For the first video on initial load (no user scroll yet),
+              // let native autoplay handle everything — don't interfere.
+              const isInitialVideo = this.currentPostIndex === 0 && !this._hasUserScrolled;
 
-              // Clear flag after a short delay to allow volumechange event to pass
-              setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
+              if (!isInitialVideo) {
+                // Set flag to prevent volumechange event from overwriting store
+                this.isProgrammaticVolumeChange = true;
+
+                // Reset progress to start when becoming visible
+                if (!this._initializedVideos.has(video)) {
+                  video.currentTime = 0;
+                }
+
+                // Start muted for autoplay compliance
+                video.muted = true;
+
+                // Clear flag after a short delay to allow volumechange event to pass
+                setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
+              }
 
               // Helper to apply mute preference once video is playing
               const applyMutePreference = () => {
@@ -723,7 +726,7 @@ export default {
                 }
               };
 
-              // Listen for 'playing' event to unmute (works for both native autoplay and JS play())
+              // Listen for 'playing' event to unmute
               const onPlaying = () => {
                 this._initializedVideos.add(video);
                 applyMutePreference();
@@ -731,57 +734,45 @@ export default {
               };
               video.addEventListener('playing', onPlaying);
 
-              // Only auto-play if setting is enabled!
-              if (this.autoplayVideos) {
-                // For the first video on initial load, native autoplay attribute handles playback.
-                // For videos revealed by scrolling, we need to call play() explicitly.
-                const isInitialVideo = this.currentPostIndex === 0 && !this._hasUserScrolled;
-                
-                if (isInitialVideo) {
-                  // Let native autoplay handle it — just mark as initialized if already playing
-                  if (!video.paused) {
+              // Only auto-play if setting is enabled (and not the initial video)
+              if (this.autoplayVideos && !isInitialVideo) {
+                // Video revealed by scrolling — call play() to start playback
+                const attemptPlay = () => {
+                  video.play().then(() => {
                     this._initializedVideos.add(video);
-                  }
-                  // If native autoplay fails, the 'error' event will trigger fallback UI
-                } else {
-                  // Video revealed by scrolling — call play() to start playback
-                  const attemptPlay = () => {
-                    video.play().then(() => {
-                      this._initializedVideos.add(video);
-                    }).catch(() => {
-                      // Retry once after a short delay
-                      setTimeout(() => {
-                        if (video.paused && this.autoplayVideos) {
-                          video.play().catch(() => {});
-                        }
-                      }, 500);
-                    });
-                  };
-
-                  if (video.readyState >= 2) {
-                    attemptPlay();
-                  } else {
-                    let playStarted = false;
-                    const tryPlay = () => {
-                      if (playStarted) return;
-                      playStarted = true;
-                      video.removeEventListener('canplay', tryPlay);
-                      video.removeEventListener('loadeddata', tryPlay);
-                      attemptPlay();
-                    };
-                    video.addEventListener('canplay', tryPlay);
-                    video.addEventListener('loadeddata', tryPlay);
-                    if (video.readyState === 0) {
-                      video.load();
-                    }
+                  }).catch(() => {
+                    // Retry once after a short delay
                     setTimeout(() => {
-                      if (!playStarted && video.paused && this.autoplayVideos) {
-                        tryPlay();
+                      if (video.paused && this.autoplayVideos) {
+                        video.play().catch(() => {});
                       }
-                    }, 3000);
+                    }, 500);
+                  });
+                };
+
+                if (video.readyState >= 2) {
+                  attemptPlay();
+                } else {
+                  let playStarted = false;
+                  const tryPlay = () => {
+                    if (playStarted) return;
+                    playStarted = true;
+                    video.removeEventListener('canplay', tryPlay);
+                    video.removeEventListener('loadeddata', tryPlay);
+                    attemptPlay();
+                  };
+                  video.addEventListener('canplay', tryPlay);
+                  video.addEventListener('loadeddata', tryPlay);
+                  if (video.readyState === 0) {
+                    video.load();
                   }
+                  setTimeout(() => {
+                    if (!playStarted && video.paused && this.autoplayVideos) {
+                      tryPlay();
+                    }
+                  }, 3000);
                 }
-              } else {
+              } else if (!this.autoplayVideos) {
                 // Even without autoplay, honor user's mute preference after element is ready
                 const shouldMute = this.defaultMuted ? true : this.isMuted;
                 video.muted = shouldMute;
