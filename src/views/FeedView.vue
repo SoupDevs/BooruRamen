@@ -140,6 +140,9 @@ export default {
       videoLoadingStates: {}, // Map of composite key -> loading boolean
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
       _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
+      _accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
+      _wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
+      _clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
     }
   },
   directives: {
@@ -210,7 +213,7 @@ export default {
     },
     containerStyle() {
       if (this.disableScrollAnimation) {
-        return 'scroll-behavior: auto; scroll-snap-stop: always; overscroll-behavior-y: none';
+        return 'scroll-snap-stop: always; overscroll-behavior-y: contain';
       }
       return '';
     },
@@ -408,6 +411,34 @@ export default {
       // Fetch more posts when we are 1 page away from the bottom (pre-fetching)
       if (this.hasMorePosts && container.scrollTop + container.clientHeight >= container.scrollHeight - container.clientHeight) {
         this.fetchPosts();
+      }
+    },
+    _accumulatedWheelDelta: 0,
+    _wheelSnapThreshold: 100,
+    _onWheel(event) {
+      if (!this.disableScrollAnimation) return;
+      const container = this.$refs.feedContainer;
+      if (!container) return;
+      const itemHeight = container.clientHeight;
+      if (itemHeight === 0) return;
+      this._accumulatedWheelDelta += event.deltaY;
+      if (this._clearWheelDeltaTimeout) {
+        clearTimeout(this._clearWheelDeltaTimeout);
+      }
+      this._clearWheelDeltaTimeout = setTimeout(() => {
+        this._accumulatedWheelDelta = 0;
+      }, 200);
+      if (Math.abs(this._accumulatedWheelDelta) >= this._wheelSnapThreshold) {
+        const direction = this._accumulatedWheelDelta > 0 ? 1 : -1;
+        this._accumulatedWheelDelta = 0;
+        const nextIndex = this.currentPostIndex + direction;
+        if (nextIndex >= 0 && nextIndex < this.posts.length) {
+          event.preventDefault();
+          container.scrollTo({
+            top: nextIndex * itemHeight,
+            behavior: 'auto'
+          });
+        }
       }
     },
     async determineCurrentPost() {
@@ -637,6 +668,7 @@ export default {
   },
   mounted() {
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
+    this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
 
     this.observer = new IntersectionObserver(
       (entries) => {
@@ -705,6 +737,7 @@ export default {
   },
   beforeUnmount() {
     this.$refs.feedContainer.removeEventListener('scroll', this.handleScroll);
+    this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
     if (this.observer) {
         this.observer.disconnect();
     }
