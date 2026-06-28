@@ -700,22 +700,6 @@ export default {
               // let native autoplay handle everything — don't interfere.
               const isInitialVideo = this.currentPostIndex === 0 && !this._hasUserScrolled;
 
-              if (!isInitialVideo) {
-                // Set flag to prevent volumechange event from overwriting store
-                this.isProgrammaticVolumeChange = true;
-
-                // Reset progress to start when becoming visible
-                if (!this._initializedVideos.has(video)) {
-                  video.currentTime = 0;
-                }
-
-                // Start muted for autoplay compliance
-                video.muted = true;
-
-                // Clear flag after a short delay to allow volumechange event to pass
-                setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
-              }
-
               // Helper to apply mute preference once video is playing
               const applyMutePreference = () => {
                 const shouldMute = this.defaultMuted ? true : this.isMuted;
@@ -725,13 +709,29 @@ export default {
                 }
               };
 
-              // Listen for 'playing' event to unmute
-              const onPlaying = () => {
-                this._initializedVideos.add(video);
-                applyMutePreference();
-                video.removeEventListener('playing', onPlaying);
-              };
-              video.addEventListener('playing', onPlaying);
+              // Listen for 'playing' event to unmute (only once per video)
+              if (!video._hasPlayingListener) {
+                video._hasPlayingListener = true;
+                const onPlaying = () => {
+                  this._initializedVideos.add(video);
+                  applyMutePreference();
+                };
+                video.addEventListener('playing', onPlaying);
+              }
+
+              if (!isInitialVideo) {
+                // Set flag to prevent volumechange event from overwriting store
+                this.isProgrammaticVolumeChange = true;
+
+                // Reset progress and mute only on FIRST visibility
+                if (!this._initializedVideos.has(video)) {
+                  video.currentTime = 0;
+                  video.muted = true;
+                }
+
+                // Clear flag after a short delay to allow volumechange event to pass
+                setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
+              }
 
               // Only auto-play if setting is enabled (and not the initial video)
               if (this.autoplayVideos && !isInitialVideo) {
