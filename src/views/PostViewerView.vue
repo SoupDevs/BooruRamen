@@ -25,8 +25,8 @@
             :alt="post.tag_string" 
             class="max-h-[calc(100vh-0px)] max-w-full object-contain"
           />
-          <video 
-            v-else-if="isVideo(post)" 
+          <video
+            v-else-if="isVideo(post) && isPostVisible(post)"
             :src="getVideoSrc(post)"
             ref="videoPlayer"
             :autoplay="autoplayVideos"
@@ -40,6 +40,13 @@
             @timeupdate="handleVideoStateUpdate($event, index)"
             @volumechange="handleVideoStateUpdate($event, index)"
           ></video>
+          <!-- Placeholder for not-yet-visible videos -->
+          <div
+            v-else-if="isVideo(post)"
+            class="flex items-center justify-center bg-gray-900 h-full w-full"
+          >
+            <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-600"></div>
+          </div>
           <div 
             v-else
             class="flex items-center justify-center bg-gray-900 p-4 rounded"
@@ -253,9 +260,10 @@ export default {
         // Only unmute if video loaded via blob URL (not direct CDN URL)
         // Direct CDN URLs may have CORP restrictions that block playback when unmuted
         const isBlobUrl = video.src && video.src.startsWith('blob:');
-        if (!this.muted && isBlobUrl) {
-          video.muted = false;
-        }
+        const shouldMute = this.muted || !isBlobUrl;
+        video.muted = shouldMute;
+        // Sync UI state with actual video muted state
+        this.$emit('video-state-change', { muted: shouldMute });
       }).catch(() => {
         video._playPending = false;
       });
@@ -303,11 +311,10 @@ export default {
       if (this.videoBlobUrls[post.file_url]) {
         return this.videoBlobUrls[post.file_url];
       }
-      // Only load src for visible posts to avoid CORP blocks on offscreen videos
-      if (this._visiblePostKeys && this._visiblePostKeys.has(String(post.id))) {
-        return post.file_url;
-      }
-      return ''; // Don't load src until post is visible
+      return post.file_url;
+    },
+    isPostVisible(post) {
+      return this._visiblePostKeys && this._visiblePostKeys.has(String(post.id));
     },
     togglePlayPause(event) {
         const video = event.target;
