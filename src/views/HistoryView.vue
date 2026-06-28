@@ -44,10 +44,11 @@ export default {
       this.posts = await this.filterPostsBySettings(allPosts);
     },
     onPostClicked({ index }) {
-      this.$router.push({ 
-        name: 'Viewer', 
-        params: { source: 'history' }, 
-        query: { start: index } 
+      const post = this.posts[index];
+      this.$router.push({
+        name: 'Viewer',
+        params: { source: 'history' },
+        query: { start: index, postId: post?.id }
       });
     },
   },
