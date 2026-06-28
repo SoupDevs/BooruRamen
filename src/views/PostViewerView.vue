@@ -234,7 +234,7 @@ export default {
       }
     },
     _playVideo(video) {
-      // Always start muted for autoplay compliance, then apply user preference
+      // Always start muted for autoplay compliance
       video.muted = true;
       video.volume = this.volume;
       // Guard against calling play() while another play() is pending
@@ -242,20 +242,14 @@ export default {
       video._playPending = true;
       video.play().then(() => {
         video._playPending = false;
-        // After playback starts successfully, try to honor user's mute preference
-        // This may fail in browsers without user gesture - that's OK, stays muted
-        if (!this.muted) {
+        // Only unmute if video loaded via blob URL (not direct CDN URL)
+        // Direct CDN URLs may have CORP restrictions that block playback when unmuted
+        const isBlobUrl = video.src && video.src.startsWith('blob:');
+        if (!this.muted && isBlobUrl) {
           video.muted = false;
         }
-      }).catch(e => {
+      }).catch(() => {
         video._playPending = false;
-        // Only retry if not already muted
-        if (!video.muted) {
-          video.muted = true;
-          video.play().then(() => {
-            if (!this.muted) video.muted = false;
-          }).catch(() => {});
-        }
       });
     },
     handleVideoStateUpdate(event, index) {
