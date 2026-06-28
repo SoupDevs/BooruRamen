@@ -368,17 +368,16 @@ export default {
         this.watchStartTime = null;
         this.accumulatedWatchTime = 0;
       }
+      // Collapse settings sidebar when navigating to profile pages
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
+        this.showSettingsSidebar = false;
+      }
     },
     showSettingsSidebar(isOpen) {
       if (!isOpen) return;
       const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
       if (hiddenRoutes.includes(this.$route.name)) {
-        this.showSettingsSidebar = false;
-      }
-    },
-    $route(to) {
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
-      if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
         this.showSettingsSidebar = false;
       }
     },
