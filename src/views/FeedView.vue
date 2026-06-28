@@ -50,7 +50,7 @@
             :ref="(el) => setVideoRef(el, post)"
             :poster="post.preview_url || post.sample_url"
             autoplay
-            :loop="!autoScrollWaitForVideo"
+            :loop="loopVideos && !(autoScroll && autoScrollWaitForVideo)"
             playsinline
             muted
             class="max-w-full transition-[max-height] duration-300"
@@ -174,7 +174,7 @@ export default {
     }
   },
   computed: {
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Calculate max height for media based on comments sheet
