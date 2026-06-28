@@ -42,10 +42,10 @@ export async function getPlayableVideoUrl(url) {
         return blobUrlCache.get(url);
     }
 
-    // In dev mode, use a public CORS proxy to bypass CDN restrictions
+    // In dev mode, use local Vite middleware to bypass CDN restrictions
     let fetchUrl = url;
     if (import.meta.env && import.meta.env.DEV) {
-        fetchUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+      fetchUrl = `/video-proxy/${encodeURIComponent(url)}`;
     }
 
     try {
