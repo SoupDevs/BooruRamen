@@ -9,6 +9,7 @@
 import PostGrid from '../components/PostGrid.vue';
 import StorageService from '../services/StorageService';
 import { postFilterMixin } from '../mixins/postFilterMixin';
+import { useSettingsStore } from '../stores/settings';
 
 export default {
   name: 'FavoritesView',
@@ -20,6 +21,16 @@ export default {
     return {
       posts: [],
     };
+  },
+  computed: {
+    settingsVersion() {
+      return useSettingsStore().settingsVersion;
+    },
+  },
+  watch: {
+    settingsVersion() {
+      this.loadFavorites();
+    },
   },
   beforeRouteEnter(to, from, next) {
     next(vm => {
