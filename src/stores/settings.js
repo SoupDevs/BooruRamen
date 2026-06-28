@@ -15,7 +15,6 @@ export const useSettingsStore = defineStore('settings', {
         blacklistTags: [],
         activeSource: { type: 'danbooru', url: 'https://danbooru.donmai.us', name: 'Danbooru' },
         customSources: [],
-        exploreMode: true,
         debugMode: false,
         avoidedTags: [],
         initialized: false
@@ -30,7 +29,6 @@ export const useSettingsStore = defineStore('settings', {
             if (saved) {
                 this.$patch({
                     ...saved.settings,
-                    exploreMode: saved.exploreMode !== undefined ? saved.exploreMode : this.exploreMode,
                     debugMode: saved.settings && saved.settings.debugMode !== undefined ? saved.settings.debugMode : this.debugMode,
                     activeSource: saved.settings && saved.settings.activeSource ? saved.settings.activeSource : this.activeSource,
                     customSources: saved.settings && saved.settings.customSources ? saved.settings.customSources : this.customSources,
@@ -80,11 +78,6 @@ export const useSettingsStore = defineStore('settings', {
             this.saveSettings()
         },
 
-        toggleExploreMode() {
-            this.exploreMode = !this.exploreMode
-            this.saveSettings()
-        },
-
         setMediaType(type, value) {
             this.mediaType[type] = value
             this.saveSettings()
@@ -108,8 +101,7 @@ export const useSettingsStore = defineStore('settings', {
                     customSources: this.customSources,
                     debugMode: this.debugMode,
                     avoidedTags: this.avoidedTags
-                },
-                exploreMode: this.exploreMode
+                }
             })
         }
     }

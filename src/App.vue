@@ -207,7 +207,7 @@
       </div>
 
       <!-- Settings sidebar -->
-      <SettingsSidebar :show="showSettingsSidebar" :hasRecommendations="hasRecommendations" :recommendedTags="recommendedTags" @reset-recommendations="handleResetRecommendations" @apply-settings="applySettings" @save-player-preferences="savePlayerPreferences" />
+      <SettingsSidebar :show="showSettingsSidebar" @apply-settings="applySettings" @save-player-preferences="savePlayerPreferences" />
       
       <!-- Floating toggle button for settings sidebar -->
       <button 
@@ -332,8 +332,6 @@ export default {
       accumulatedWatchTime: 0,
       
       // Sidebar filter state
-      hasRecommendations: false,
-      recommendedTags: [],
       recommendationSystem,
       
       debugDetails: null, // Store for calculated debug info
@@ -371,9 +369,6 @@ export default {
       }
     },
     showSettingsSidebar(isOpen) {
-      if (isOpen) {
-        this.updateRecommendationStatus();
-      }
     }
   },
 
@@ -400,7 +395,6 @@ export default {
       'blacklistTags',
       'activeSource',
       'customSources',
-      'exploreMode',
       'debugMode'
     ]),
     // Map player store state
@@ -435,7 +429,6 @@ export default {
         removeWhitelistTag: 'removeWhitelistTag',
         addBlacklistTagAction: 'addBlacklistTag',
         removeBlacklistTag: 'removeBlacklistTag', 
-        toggleExploreMode: 'toggleExploreMode',
         saveSettings: 'saveSettings',
         initializeSettings: 'initialize'
     }),
@@ -519,13 +512,7 @@ export default {
         }
     },
     
-    async handleResetRecommendations() {
-      await this.recommendationSystem.resetRecommendations();
-      this.hasRecommendations = false;
-      this.recommendedTags = [];
-      window.location.reload();
-    },
-    
+
     startWatchTimeTracking() {
         this.watchStartTime = Date.now();
     },
@@ -671,8 +658,7 @@ export default {
         images: this.mediaType.images ? '1' : '0',
         videos: this.mediaType.videos ? '1' : '0',
         whitelist: this.whitelistTags.join(','),
-        blacklist: this.blacklistTags.join(','),
-        explore: this.exploreMode ? '1' : '0'
+        blacklist: this.blacklistTags.join(',')
       };
       return query;
     },
@@ -683,7 +669,6 @@ export default {
       if (query.videos !== undefined) this.mediaType.videos = query.videos !== '0';
       if (query.whitelist) this.whitelistTags = query.whitelist.split(',');
       if (query.blacklist) this.blacklistTags = query.blacklist.split(',');
-      if (query.explore !== undefined) this.exploreMode = query.explore === '1';
     },
     
     // Video Controls
@@ -800,16 +785,7 @@ export default {
         this.savePlayerPreferences(); // Save mute state to player store
     },
 
-    async updateRecommendationStatus() {
-       try {
-           const tags = await this.recommendationSystem.getRecommendedTags(5);
-           this.recommendedTags = tags || [];
-           this.hasRecommendations = this.recommendedTags.length > 0;
-       } catch (error) {
-           console.error("Error fetching recommended tags:", error);
-           this.hasRecommendations = false;
-       }
-    },
+
     
     handleKeydown(e) {
       if (e.target.tagName === 'INPUT') return;
