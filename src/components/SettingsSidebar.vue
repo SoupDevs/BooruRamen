@@ -31,7 +31,7 @@
             class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-pink-600"
           />
         </div>
-        <div v-if="autoScroll" class="mt-2">
+        <div class="mt-2" :class="{ 'opacity-50 pointer-events-none': !autoScroll }">
           <div class="flex items-center justify-between">
             <label class="text-sm text-gray-400">Wait for video to finish</label>
             <button 
