@@ -11,9 +11,10 @@
         </div>
       </div>
       
-      <div 
-        v-for="(post, index) in posts" 
+      <div
+        v-for="(post, index) in posts"
         :key="post.id"
+        :data-post-key="post.id"
         class="h-full w-full snap-start flex items-center justify-center relative"
       >
         <!-- Post media -->
@@ -75,6 +76,7 @@ export default {
       currentPostIndex: 0,
       observer: null,
       videoBlobUrls: {}, // Map of original URL -> blob URL for CORS bypass
+      _visiblePostKeys: new Set(), // Track which posts are currently visible
     };
   },
   computed: {
@@ -105,15 +107,21 @@ export default {
       this.observer = new IntersectionObserver(
         (entries) => {
           entries.forEach(entry => {
-            const video = entry.target.querySelector('video');
+            const postEl = entry.target;
+            const postKey = postEl.dataset.postKey;
+            const video = postEl.querySelector('video');
             if (entry.isIntersecting) {
+              this._visiblePostKeys.add(postKey);
               if (this.autoplayVideos && video) {
                 this._playVideo(video);
               }
             } else {
+              this._visiblePostKeys.delete(postKey);
               video?.pause();
             }
           });
+          // Trigger reactivity for getVideoSrc
+          this._visiblePostKeys = new Set(this._visiblePostKeys);
         },
         { threshold: 0.5 }
       );
@@ -291,11 +299,15 @@ export default {
     },
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
-      // Use blob URL if available
+      // Use blob URL if available (successfully proxied)
       if (this.videoBlobUrls[post.file_url]) {
         return this.videoBlobUrls[post.file_url];
       }
-      return post.file_url;
+      // Only load src for visible posts to avoid CORP blocks on offscreen videos
+      if (this._visiblePostKeys && this._visiblePostKeys.has(String(post.id))) {
+        return post.file_url;
+      }
+      return ''; // Don't load src until post is visible
     },
     togglePlayPause(event) {
         const video = event.target;
