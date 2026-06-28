@@ -147,7 +147,11 @@ export default {
       this.loading = false;
       // Recreate observer so it only watches filtered posts (not stale video elements)
       this.setupObserver();
-      this.$nextTick(this.scrollToInitialPost);
+      // Trigger autoplay check for the initially visible post (observer may have missed it)
+      this.$nextTick(() => {
+        this.scrollToInitialPost();
+        this.playVisibleVideo();
+      });
     },
     scrollToInitialPost() {
         const startIndex = parseInt(this.$route.query.start || 0, 10);
@@ -207,6 +211,27 @@ export default {
         const postElements = this.$refs.viewerContainer?.querySelectorAll('.snap-start');
         postElements?.forEach(el => this.observer.observe(el));
       });
+    },
+    playVisibleVideo() {
+      if (!this.autoplayVideos) return;
+      const container = this.$refs.viewerContainer;
+      if (!container) return;
+      const postElements = [...container.querySelectorAll('.snap-start')];
+      const containerMidY = container.getBoundingClientRect().top + container.clientHeight / 2;
+      for (let i = 0; i < postElements.length; i++) {
+        const postEl = postElements[i];
+        const rect = postEl.getBoundingClientRect();
+        const postMidY = rect.top + rect.height / 2;
+        if (Math.abs(containerMidY - postMidY) < rect.height * 0.5) {
+          const video = postEl.querySelector('video');
+          if (video) {
+            video.volume = this.volume;
+            video.muted = this.muted;
+            video.play().catch(e => console.warn("Autoplay prevented.", e));
+          }
+          break;
+        }
+      }
     },
     handleVideoStateUpdate(event, index) {
       if (index !== this.currentPostIndex) return;
