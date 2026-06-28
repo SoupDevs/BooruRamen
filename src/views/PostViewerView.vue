@@ -291,9 +291,13 @@ export default {
     },
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
-      // Use blob URL if available
+      // Use blob URL if available (successfully proxied)
       if (this.videoBlobUrls[post.file_url]) {
         return this.videoBlobUrls[post.file_url];
+      }
+      // In dev mode, route through Vite proxy to avoid CORP blocks
+      if (import.meta.env.DEV) {
+        return `/video-proxy/${encodeURIComponent(post.file_url)}`;
       }
       return post.file_url;
     },
