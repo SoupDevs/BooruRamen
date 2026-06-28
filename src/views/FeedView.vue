@@ -210,7 +210,7 @@ export default {
     },
     containerStyle() {
       if (this.disableScrollAnimation) {
-        return 'scroll-behavior: auto; scroll-snap-stop: always';
+        return 'scroll-behavior: auto; scroll-snap-stop: always; overscroll-behavior-y: none';
       }
       return '';
     },
@@ -403,9 +403,6 @@ export default {
     },
     handleScroll() {
       if (this.isResizing) return;
-      if (this.disableScrollAnimation && !this._isAutoScrolling) {
-        this._snapToNearestPost();
-      }
       this.determineCurrentPost();
       const container = this.$refs.feedContainer;
       // Fetch more posts when we are 1 page away from the bottom (pre-fetching)
@@ -549,8 +546,14 @@ export default {
       if (!container) return;
       const itemHeight = container.clientHeight;
       if (itemHeight === 0) return;
-      const targetIndex = Math.round(container.scrollTop / itemHeight);
+      const scrolled = container.scrollTop;
+      const baseIndex = Math.floor(scrolled / itemHeight);
+      const offset = scrolled - (baseIndex * itemHeight);
+      // Snap forward if scrolled past 40 of item height, otherwise snap back
+      const SNAP_THRESHOLD = 0.4;
+      const targetIndex = offset / itemHeight >= SNAP_THRESHOLD ? baseIndex + 1 : baseIndex;
       const clampedIndex = Math.max(0, Math.min(targetIndex, this.posts.length - 1));
+      if (clampedIndex === this.currentPostIndex) return;
       container.scrollTo({
         top: clampedIndex * itemHeight,
         behavior: 'auto'
