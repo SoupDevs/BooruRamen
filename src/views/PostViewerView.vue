@@ -257,10 +257,9 @@ export default {
       video._playPending = true;
       video.play().then(() => {
         video._playPending = false;
-        // Only unmute if video loaded via blob URL (not direct CDN URL)
-        // Direct CDN URLs may have CORP restrictions that block playback when unmuted
-        const isBlobUrl = video.src && video.src.startsWith('blob:');
-        const shouldMute = this.muted || !isBlobUrl;
+        // Unmute if user wants audio and video loaded via proxy/blob (not direct CDN)
+        const isProxied = video.src && (video.src.startsWith('blob:') || video.src.includes('/video-proxy/'));
+        const shouldMute = this.muted || !isProxied;
         video.muted = shouldMute;
         // Sync UI state with actual video muted state
         this.$emit('video-state-change', { muted: shouldMute });
@@ -310,6 +309,10 @@ export default {
       // Use blob URL if available (successfully proxied)
       if (this.videoBlobUrls[post.file_url]) {
         return this.videoBlobUrls[post.file_url];
+      }
+      // In dev mode, route through same-origin proxy to avoid CORP blocks
+      if (import.meta.env.DEV) {
+        return `/video-proxy/${encodeURIComponent(post.file_url)}`;
       }
       return post.file_url;
     },

@@ -106,8 +106,6 @@ export default defineConfig({
         return
       }
 
-      console.log('[VideoMiddleware] Proxying:', decodedUrl)
-
       const client = decodedUrl.startsWith('https:') ? https : http
       
       const proxyReq = client.request(decodedUrl, {
@@ -119,6 +117,14 @@ export default defineConfig({
         },
         rejectUnauthorized: false,
       }, (proxyRes) => {
+        // Check if we got video content or a Cloudflare challenge page
+        const contentType = proxyRes.headers['content-type'] || '';
+        if (!contentType.startsWith('video/') && !contentType.startsWith('application/octet-stream')) {
+          // CDN returned non-video content (likely Cloudflare challenge)
+          res.writeHead(502, { 'Content-Type': 'text/plain' });
+          res.end('CDN blocked request');
+          return;
+        }
         // Forward response headers, overriding CORS
         const headers = { ...proxyRes.headers }
         headers['Access-Control-Allow-Origin'] = '*'
