@@ -55,9 +55,11 @@ import { mapState } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
 import StorageService from '../services/StorageService';
+import { postFilterMixin } from '../mixins/postFilterMixin';
 
 export default {
   name: 'PostViewerView',
+  mixins: [postFilterMixin],
   props: {
     source: {
       type: String,
@@ -138,6 +140,8 @@ export default {
           .map(i => i.metadata.post);
       }
       this.posts = postData.filter(p => p && p.id);
+      // Apply user filters (ratings, media type, tag whitelist/blacklist)
+      this.posts = await this.filterPostsBySettings(this.posts);
       this.loading = false;
       this.$nextTick(this.scrollToInitialPost);
     },
