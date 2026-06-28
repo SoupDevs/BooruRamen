@@ -9,6 +9,7 @@
 import PostGrid from '../components/PostGrid.vue';
 import StorageService from '../services/StorageService';
 import { postFilterMixin } from '../mixins/postFilterMixin';
+import { useSettingsStore } from '../stores/settings';
 
 export default {
   name: 'HistoryView',
@@ -23,6 +24,16 @@ export default {
   },
   mounted() {
     this.loadHistory();
+  },
+  computed: {
+    settingsVersion() {
+      return useSettingsStore().settingsVersion;
+    },
+  },
+  watch: {
+    settingsVersion() {
+      this.loadHistory();
+    },
   },
   methods: {
     async loadHistory() {
