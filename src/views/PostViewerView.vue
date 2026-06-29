@@ -196,7 +196,7 @@ export default {
         }
     },
     syncVisiblePosts() {
-      // Track which posts are visible for :autoplay and :muted bindings
+      // Track which posts are visible and play/pause videos accordingly
       const container = this.$refs.viewerContainer;
       if (!container) return;
       const containerRect = container.getBoundingClientRect();
@@ -208,14 +208,22 @@ export default {
         const postMidY = rect.top + rect.height / 2;
         const isVisible = Math.abs(containerMidY - postMidY) < rect.height * 0.6;
         const postKey = el.dataset.postKey;
-        if (isVisible && !this._visiblePostKeys[postKey]) {
-          this._visiblePostKeys[postKey] = true;
-          changed = true;
-        } else if (!isVisible && this._visiblePostKeys[postKey]) {
-          delete this._visiblePostKeys[postKey];
-          const video = el.querySelector('video');
-          if (video) video.pause();
-          changed = true;
+        const video = el.querySelector('video');
+        if (isVisible) {
+          if (!this._visiblePostKeys[postKey]) {
+            this._visiblePostKeys[postKey] = true;
+            changed = true;
+          }
+          // Always try to play visible videos (handles retries after pause/failed play)
+          if (this.autoplayVideos && video && video.paused && !video._playPending) {
+            this._playVideo(video);
+          }
+        } else {
+          if (this._visiblePostKeys[postKey]) {
+            delete this._visiblePostKeys[postKey];
+            changed = true;
+          }
+          if (video && !video.paused) video.pause();
         }
       });
       if (changed) this._visibilityVersion++;
@@ -280,19 +288,16 @@ export default {
       }
     },
     _playVideo(video) {
-      // Always start muted for autoplay compliance
+      if (!video || video._playPending) return;
+      // Always start muted for autoplay compliance, unmute after play resolves
       video.muted = true;
       video.volume = this.volume;
-      // Guard against calling play() while another play() is pending
-      if (video._playPending) return;
       video._playPending = true;
       video.play().then(() => {
         video._playPending = false;
         // Respect user mute preference (same as FeedView)
-        const shouldMute = this.muted;
-        video.muted = shouldMute;
-        // Sync UI state with actual video muted state
-        this.$emit('video-state-change', { muted: shouldMute });
+        video.muted = this.muted;
+        this.$emit('video-state-change', { muted: this.muted });
       }).catch(() => {
         video._playPending = false;
       });
