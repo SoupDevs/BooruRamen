@@ -14,12 +14,21 @@ export const useSettingsStore = defineStore('settings', {
         loopVideos: true,
         mediaType: { images: false, videos: true },
         ratings: ['general'],
+        // Which ratings are enabled in profile settings (controls visibility in sidebar)
+        enabledRatings: ['general'],
         whitelistTags: ['meme'],
         blacklistTags: [],
         activeSource: { type: 'danbooru', url: 'https://danbooru.donmai.us', name: 'Danbooru' },
         customSources: [],
         debugMode: false,
         avoidedTags: [],
+        // Download settings
+        downloadLocation: '~/Downloads/BooruRamen',
+        downloadLiked: false,
+        downloadFavorited: false,
+        downloadSeparateFolders: false,
+        // Age confirmation: stores DOB once verified
+        confirmedDateOfBirth: null,
         settingsVersion: 0,
         initialized: false
     }),
@@ -36,7 +45,13 @@ export const useSettingsStore = defineStore('settings', {
                     debugMode: saved.settings && saved.settings.debugMode !== undefined ? saved.settings.debugMode : this.debugMode,
                     activeSource: saved.settings && saved.settings.activeSource ? saved.settings.activeSource : this.activeSource,
                     customSources: saved.settings && saved.settings.customSources ? saved.settings.customSources : this.customSources,
-                    avoidedTags: saved.settings && saved.settings.avoidedTags ? saved.settings.avoidedTags : this.avoidedTags
+                    avoidedTags: saved.settings && saved.settings.avoidedTags ? saved.settings.avoidedTags : this.avoidedTags,
+                    enabledRatings: saved.settings && saved.settings.enabledRatings ? saved.settings.enabledRatings : this.enabledRatings,
+                    downloadLocation: saved.settings && saved.settings.downloadLocation !== undefined ? saved.settings.downloadLocation : this.downloadLocation,
+                    downloadLiked: saved.settings && saved.settings.downloadLiked !== undefined ? saved.settings.downloadLiked : this.downloadLiked,
+                    downloadFavorited: saved.settings && saved.settings.downloadFavorited !== undefined ? saved.settings.downloadFavorited : this.downloadFavorited,
+                    downloadSeparateFolders: saved.settings && saved.settings.downloadSeparateFolders !== undefined ? saved.settings.downloadSeparateFolders : this.downloadSeparateFolders,
+                    confirmedDateOfBirth: saved.settings && saved.settings.confirmedDateOfBirth ? saved.settings.confirmedDateOfBirth : this.confirmedDateOfBirth
                 })
             }
 
@@ -53,6 +68,25 @@ export const useSettingsStore = defineStore('settings', {
             if (index > -1) {
                 this.ratings.splice(index, 1)
             } else {
+                this.ratings.push(rating)
+            }
+            this.saveSettings()
+        },
+
+        toggleEnabledRating(rating) {
+            const index = this.enabledRatings.indexOf(rating)
+            if (index > -1) {
+                this.enabledRatings.splice(index, 1)
+            } else {
+                this.enabledRatings.push(rating)
+            }
+            // Sync: also toggle in active ratings
+            const activeIndex = this.ratings.indexOf(rating)
+            if (index > -1 && activeIndex > -1) {
+                // Disabling: also turn off in sidebar
+                this.ratings.splice(activeIndex, 1)
+            } else if (index === -1 && activeIndex === -1) {
+                // Enabling: auto-enable in sidebar too
                 this.ratings.push(rating)
             }
             this.saveSettings()
@@ -88,8 +122,6 @@ export const useSettingsStore = defineStore('settings', {
         },
 
         async saveSettings() {
-            // Debounce could be added here if needed, but for now direct save is okay
-            // as interactions aren't super high frequency (like scroll)
             await StorageService.saveAppSettings({
                 settings: {
                     autoScroll: this.autoScroll,
@@ -102,12 +134,18 @@ export const useSettingsStore = defineStore('settings', {
                     loopVideos: this.loopVideos,
                     mediaType: this.mediaType,
                     ratings: this.ratings,
+                    enabledRatings: this.enabledRatings,
                     whitelistTags: this.whitelistTags,
                     blacklistTags: this.blacklistTags,
                     activeSource: this.activeSource,
                     customSources: this.customSources,
                     debugMode: this.debugMode,
-                    avoidedTags: this.avoidedTags
+                    avoidedTags: this.avoidedTags,
+                    downloadLocation: this.downloadLocation,
+                    downloadLiked: this.downloadLiked,
+                    downloadFavorited: this.downloadFavorited,
+                    downloadSeparateFolders: this.downloadSeparateFolders,
+                    confirmedDateOfBirth: this.confirmedDateOfBirth
                 }
             })
             this.settingsVersion++

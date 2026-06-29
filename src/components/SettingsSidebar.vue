@@ -149,11 +149,11 @@
         </div>
       </div>
       
-      <!-- Rating selection -->
-      <div class="mb-4">
+      <!-- Rating selection (only show when multiple ratings enabled in profile settings) -->
+      <div v-if="visibleRatings.length > 1" class="mb-4">
         <label class="text-sm font-medium block mb-2">Rating</label>
         <div class="space-y-2">
-          <div v-for="rating in ['general', 'sensitive', 'questionable', 'explicit']" :key="rating" class="flex items-center justify-between">
+          <div v-for="rating in visibleRatings" :key="rating" class="flex items-center justify-between">
             <label class="text-sm capitalize">{{ rating }}</label>
             <button 
               @click="toggleRatingAction(rating)" 
@@ -263,9 +263,14 @@ export default {
   computed: {
     ...mapWritableState(useSettingsStore, [
       'autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos',
-      'mediaType', 'ratings', 'whitelistTags', 'blacklistTags'
+      'mediaType', 'ratings', 'whitelistTags', 'blacklistTags', 'enabledRatings'
     ]),
     ...mapWritableState(usePlayerStore, ['defaultMuted']),
+    visibleRatings() {
+      // Only show ratings in the sidebar that are enabled in profile settings
+      const allRatings = ['general', 'sensitive', 'questionable', 'explicit'];
+      return allRatings.filter(r => this.enabledRatings.includes(r));
+    },
   },
   methods: {
     ...mapActions(useSettingsStore, [

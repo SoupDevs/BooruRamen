@@ -29,12 +29,14 @@
       <div class="h-full w-full relative overflow-hidden"
         :style="routerViewContainerStyle"
       >
-        <router-view
-          :key="routerViewKey"
-          :commentsSheetHeight="commentsSheetHeight"
-          @current-post-changed="updateCurrentPost"
-          @video-state-change="handleVideoStateChange"
-        ></router-view>
+        <transition :name="pageTransitionName" mode="out-in">
+          <router-view
+            :key="routerViewKey"
+            :commentsSheetHeight="commentsSheetHeight"
+            @current-post-changed="updateCurrentPost"
+            @video-state-change="handleVideoStateChange"
+          ></router-view>
+        </transition>
         
         <!-- Debug Overlay -->
         <div v-if="debugMode && currentPost" class="absolute top-0 left-1/2 transform -translate-x-1/2 p-4 bg-black bg-opacity-75 text-xs text-white z-40 max-w-xs font-mono rounded shadow-lg pointer-events-auto"
@@ -281,6 +283,7 @@ import { useInteractionsStore } from './stores/interactions';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
 import recommendationSystem from './services/RecommendationSystem.js';
+import DownloadService from './services/DownloadService.js';
 
 import BottomNavBar from './components/BottomNavBar.vue';
 import CommentsSheet from './components/CommentsSheet.vue';
@@ -316,6 +319,7 @@ export default {
       commentsSheetHeight: 0,
 
       routerViewKey: 0,
+      pageTransitionName: 'page-fade',
       
       // UI state for controls
       showVideoControls: true,
@@ -358,6 +362,25 @@ export default {
         }
     },
     $route(to, from) {
+      // Determine page transition direction
+      const profileDepth = { Profile: 0, ProfileSettings: 1, ProfileAnalytics: 1 };
+      const fromDepth = profileDepth[from.name] ?? -1;
+      const toDepth = profileDepth[to.name] ?? -1;
+
+      if (fromDepth >= 0 && toDepth >= 0) {
+        // Both are profile pages: slide based on depth
+        this.pageTransitionName = toDepth > fromDepth ? 'page-slide-left' : 'page-slide-right';
+      } else if (fromDepth >= 0 && toDepth < 0) {
+        // Leaving profile pages entirely: slide right
+        this.pageTransitionName = 'page-slide-right';
+      } else if (fromDepth < 0 && toDepth >= 0) {
+        // Entering profile pages: slide left
+        this.pageTransitionName = 'page-slide-left';
+      } else {
+        // Non-profile navigation: fade
+        this.pageTransitionName = 'page-fade';
+      }
+
       // Hide post details and video controls when leaving the viewer
       if (to.name !== 'Viewer') {
         if (this.currentPost) {
@@ -408,7 +431,10 @@ export default {
       'blacklistTags',
       'activeSource',
       'customSources',
-      'debugMode'
+      'debugMode',
+      'enabledRatings',
+      'downloadLiked',
+      'downloadFavorited'
     ]),
     // Map player store state
     ...mapWritableState(usePlayerStore, [
@@ -612,6 +638,10 @@ export default {
                 value: 0,
                 metadata: { post }
             });
+            // Auto-download if enabled
+            if (this.downloadLiked) {
+              this.downloadPostFile(post, 'liked');
+            }
         }
     },
     toggleDislike(post) {
@@ -644,11 +674,23 @@ export default {
             value: post.favorited ? 1 : 0,
             metadata: { post }
         });
+        // Auto-download if enabled
+        if (post.favorited && this.downloadFavorited) {
+          this.downloadPostFile(post, 'favorited');
+        }
     },
 
     openComments(post) {
-        if (!post) return;
-        this.commentsPost = post;
+      if (!post) return;
+      this.commentsPost = post;
+    },
+
+    async downloadPostFile(post, type) {
+      try {
+        await DownloadService.downloadPost(post, type);
+      } catch (error) {
+        console.error('Auto-download failed:', error);
+      }
     },
 
     toggleRating(rating) {
@@ -1029,5 +1071,43 @@ export default {
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
+}
+
+/* Page transition: slide left (going deeper into settings/profile) */
+.page-slide-left-enter-active,
+.page-slide-left-leave-active {
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+.page-slide-left-enter-from {
+  transform: translateX(40px);
+  opacity: 0;
+}
+.page-slide-left-leave-to {
+  transform: translateX(-40px);
+  opacity: 0;
+}
+
+/* Page transition: slide right (going back/up from settings/profile) */
+.page-slide-right-enter-active,
+.page-slide-right-leave-active {
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+.page-slide-right-enter-from {
+  transform: translateX(-40px);
+  opacity: 0;
+}
+.page-slide-right-leave-to {
+  transform: translateX(40px);
+  opacity: 0;
+}
+
+/* Page transition: fade (non-profile navigation) */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+.page-fade-enter-from,
+.page-fade-leave-to {
+  opacity: 0;
 }
 </style>
