@@ -26,13 +26,14 @@
             class="max-h-[calc(100vh-0px)] max-w-full object-contain"
           />
           <video
-            v-else-if="isVideo(post) && isPostVisible(post)"
+            v-else-if="isVideo(post)"
             :src="getVideoSrc(post)"
-            ref="videoPlayer"
-            :autoplay="autoplayVideos"
-            muted
+            :ref="(el) => setVideoRef(el, post)"
+            :autoplay="autoplayVideos && isPostVisible(post)"
+            :muted="!isPostVisible(post) || muted"
             loop
             preload="auto"
+            playsinline
             class="max-h-[calc(100vh-0px)] max-w-full"
             @click="togglePlayPause"
             @play="handleVideoStateUpdate($event, index)"
@@ -40,13 +41,6 @@
             @timeupdate="handleVideoStateUpdate($event, index)"
             @volumechange="handleVideoStateUpdate($event, index)"
           ></video>
-          <!-- Placeholder for not-yet-visible videos -->
-          <div
-            v-else-if="isVideo(post)"
-            class="flex items-center justify-center bg-gray-900 h-full w-full"
-          >
-            <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-600"></div>
-          </div>
           <div 
             v-else
             class="flex items-center justify-center bg-gray-900 p-4 rounded"
@@ -189,14 +183,20 @@ export default {
             if (postElements[targetIndex]) {
                 container.scrollTop = postElements[targetIndex].offsetTop;
                 this.currentPostIndex = targetIndex;
-                this.$emit('current-post-changed', this.posts[this.currentPostIndex], this.$refs.videoPlayer?.[this.currentPostIndex]);
-                // Immediately mark the visible post so video element renders without waiting for IO callback
                 this.syncVisiblePosts();
+                this.$nextTick(() => {
+                  // Explicitly start playback after Vue has updated :autoplay / :muted bindings
+                  const video = postElements[targetIndex]?.querySelector('video');
+                  if (video && this.autoplayVideos) {
+                    this._playVideo(video);
+                  }
+                  this.$emit('current-post-changed', this.posts[this.currentPostIndex], video);
+                });
             }
         }
     },
     syncVisiblePosts() {
-      // Manually determine which posts are in view (reliable fallback for initial load / IO timing)
+      // Track which posts are visible for :autoplay and :muted bindings
       const container = this.$refs.viewerContainer;
       if (!container) return;
       const containerRect = container.getBoundingClientRect();
@@ -208,16 +208,12 @@ export default {
         const postMidY = rect.top + rect.height / 2;
         const isVisible = Math.abs(containerMidY - postMidY) < rect.height * 0.6;
         const postKey = el.dataset.postKey;
-        const video = el.querySelector('video');
         if (isVisible && !this._visiblePostKeys[postKey]) {
           this._visiblePostKeys[postKey] = true;
           changed = true;
-          // Autoplay + apply mute preference (mirrors IO callback logic)
-          if (this.autoplayVideos && video) {
-            this._playVideo(video);
-          }
         } else if (!isVisible && this._visiblePostKeys[postKey]) {
           delete this._visiblePostKeys[postKey];
+          const video = el.querySelector('video');
           if (video) video.pause();
           changed = true;
         }
@@ -353,6 +349,13 @@ export default {
       // Touch _visibilityVersion to register a reactive dependency — forces re-evaluate when version changes
       const _v = this._visibilityVersion;
       return !!this._visiblePostKeys[String(post.id)];
+    },
+    setVideoRef(el, post) {
+      if (el) {
+        // Store on element for later lookup by post ID
+        this._videoElements = this._videoElements || {};
+        this._videoElements[post.id] = el;
+      }
     },
     togglePlayPause(event) {
         const video = event.target;
