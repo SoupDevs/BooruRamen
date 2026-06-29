@@ -208,11 +208,17 @@ export default {
         const postMidY = rect.top + rect.height / 2;
         const isVisible = Math.abs(containerMidY - postMidY) < rect.height * 0.6;
         const postKey = el.dataset.postKey;
+        const video = el.querySelector('video');
         if (isVisible && !this._visiblePostKeys[postKey]) {
           this._visiblePostKeys[postKey] = true;
           changed = true;
+          // Autoplay + apply mute preference (mirrors IO callback logic)
+          if (this.autoplayVideos && video) {
+            this._playVideo(video);
+          }
         } else if (!isVisible && this._visiblePostKeys[postKey]) {
-          delete this._visiblePostKeys[postKey]
+          delete this._visiblePostKeys[postKey];
+          if (video) video.pause();
           changed = true;
         }
       });
