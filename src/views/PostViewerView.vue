@@ -286,9 +286,8 @@ export default {
       video._playPending = true;
       video.play().then(() => {
         video._playPending = false;
-        // Unmute if user wants audio and video loaded via proxy/blob (not direct CDN)
-        const isProxied = video.src && (video.src.startsWith('blob:') || video.src.includes('/video-proxy/'));
-        const shouldMute = this.muted || !isProxied;
+        // Respect user mute preference (same as FeedView)
+        const shouldMute = this.muted;
         video.muted = shouldMute;
         // Sync UI state with actual video muted state
         this.$emit('video-state-change', { muted: shouldMute });
