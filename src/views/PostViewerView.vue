@@ -32,7 +32,7 @@
             :autoplay="autoplayVideos && isPostVisible(post)"
             :muted="!isPostVisible(post) || muted"
             loop
-            preload="auto"
+            preload="none"
             playsinline
             class="max-h-[calc(100vh-0px)] max-w-full"
             @click="togglePlayPause"

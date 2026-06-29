@@ -33,44 +33,12 @@ let proxyWarningShown = false;
 export async function getPlayableVideoUrl(url) {
     if (!url) return url;
 
-    const isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(url);
-    if (!isVideo) return url;
-
-    if (blobUrlCache.has(url)) {
-        return blobUrlCache.get(url);
-    }
-
-    // In dev mode, try local Vite middleware to bypass CDN restrictions
-    let fetchUrl = url;
-    if (import.meta.env && import.meta.env.DEV) {
-      fetchUrl = `/video-proxy/${encodeURIComponent(url)}`;
-    }
-
-    try {
-        const response = await httpFetch(fetchUrl, { method: 'GET' });
-
-        if (!response.ok) {
-            // CDN blocked the request — fall back to direct URL
-            return url;
-        }
-
-        const contentType = response.headers.get('content-type') || '';
-        if (!contentType.startsWith('video/') && !contentType.startsWith('application/octet-stream')) {
-            // Got HTML (Cloudflare challenge) instead of video — fall back
-            if (import.meta.env.DEV && !proxyWarningShown) {
-                proxyWarningShown = true;
-                console.warn('[VideoProxy] CDN proxy unavailable — videos will load directly from CDN (subject to Cloudflare restrictions)');
-            }
-            return url;
-        }
-
-        const blob = await response.blob();
-        const blobUrl = URL.createObjectURL(blob);
-        blobUrlCache.set(url, blobUrl);
-        return blobUrl;
-    } catch (error) {
-        return url; // Fall back to original URL
-    }
+    // CDN URLs (danbooru) are behind Cloudflare bot protection.
+    // Server-side proxies (Vite middleware, Node.js) get 403 (TLS fingerprinting).
+    // Browser fetch/XHR are blocked by CORP (no CORS headers from CDN).
+    // Direct <video> src works natively — browser solves Cloudflare challenge.
+    // Return the original URL and let the browser handle it.
+    return url;
 }
 
 /**
