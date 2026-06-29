@@ -10,7 +10,7 @@
 <template>
   <div class="w-full relative overflow-hidden" :style="feedContainerStyle">
     <!-- Post feed -->
-    <div class="h-full overflow-y-auto snap-y snap-mandatory" ref="feedContainer">
+    <div class="h-full overflow-y-auto snap-y snap-mandatory" ref="feedContainer" :style="containerStyle">
       <div v-if="loading" class="h-full flex items-center justify-center">
         <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-600"></div>
       </div>
@@ -50,7 +50,7 @@
             :ref="(el) => setVideoRef(el, post)"
             :poster="post.preview_url || post.sample_url"
             autoplay
-            loop
+            :loop="loopVideos && !(autoScroll && autoScrollWaitForVideo)"
             playsinline
             muted
             class="max-w-full transition-[max-height] duration-300"
@@ -67,13 +67,6 @@
             @canplay="onVideoCanPlay(post)"
             @error="onVideoError(post)"
           ></video>
-          <div 
-            v-else
-            class="flex items-center justify-center bg-gray-900 p-4 rounded"
-          >
-            <p>Unable to display media. <a :href="post.file_url" target="_blank" class="text-pink-500 underline">Open directly</a></p>
-          </div>
-
           <!-- Custom Loading Spinner -->
           <div 
             v-if="videoLoadingStates[getCompositeKey(post)]" 
@@ -138,7 +131,14 @@ export default {
       isProgrammaticVolumeChange: false, // Flag to ignore volumechange events during programmatic updates
       isResizing: false, // Flag to suspend scroll tracking during CSS animation
       videoLoadingStates: {}, // Map of composite key -> loading boolean
+      videoErrorStates: {}, // Map of composite key -> error boolean (CDN blocked)
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
+      _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
+      _hasUserScrolled: false, // Flag to detect if user has scrolled (for autoplay logic)
+      _accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
+      _wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
+      _clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
+      _initializedVideos: new Set(), // Track videos that have already started playback to prevent restart
     }
   },
   directives: {
@@ -170,7 +170,7 @@ export default {
     }
   },
   computed: {
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'disableScrollAnimation', 'autoplayVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Calculate max height for media based on comments sheet
@@ -206,6 +206,12 @@ export default {
       return {
         transition: this.isResizing ? 'height 0.35s cubic-bezier(0.32, 0.72, 0, 1)' : 'none'
       };
+    },
+    containerStyle() {
+      if (this.disableScrollAnimation) {
+        return 'scroll-snap-stop: always; overscroll-behavior-y: contain';
+      }
+      return '';
     },
     // Alias to match template if needed, or just updated template to use 'muted'
     // The template uses 'isMuted' prop, so we alias it or change template.
@@ -255,7 +261,7 @@ export default {
     },
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
-      // Use blob URL if available (for Tauri production), otherwise use original
+      // Use blob URL if available (set by processVideoUrls via getPlayableVideoUrl)
       return this.videoBlobUrls[post.file_url] || post.file_url;
     },
     async processVideoUrls(posts) {
@@ -284,68 +290,11 @@ export default {
               this.videoBlobUrls[post.file_url] = blobUrl;
             }
           } catch (e) {
-            console.error('[FeedView] Failed to proxy video:', e);
+            // Silently fall back to original URL
           }
         }
       }
     },
-    async buildTagsFromRouteQuery(overrideQuery = null) {
-      const query = overrideQuery || this.$route.query;
-      const tags = [];
-
-      const ratings = query.ratings ? query.ratings.split(',') : ['general'];
-      if (ratings.length > 0) {
-        const ratingMap = { 'general': 'g', 'sensitive': 's', 'questionable': 'q', 'explicit': 'e' };
-        const shortRatings = ratings.map(r => ratingMap[r] || r);
-        tags.push(`rating:${shortRatings.join(',')}`);
-      }
-
-      const wantsImages = 'images' in query ? query.images === '1' : true;
-      const wantsVideos = 'videos' in query ? query.videos === '1' : true;
-
-      if (wantsVideos && !wantsImages) {
-        tags.push('filetype:mp4,webm');
-      } else if (!wantsVideos && wantsImages) {
-        tags.push('-filetype:mp4,webm');
-      }
-
-      // Use query param if present, otherwise fall back to global settings
-      if (query.whitelist) {
-        tags.push(...query.whitelist.split(','));
-      } else if (this.whitelistTags && this.whitelistTags.length > 0) {
-        tags.push(...this.whitelistTags);
-      }
-
-      if (query.blacklist) {
-        tags.push(...query.blacklist.split(',').map(t => `-${t}`));
-      } else if (this.blacklistTags && this.blacklistTags.length > 0) {
-        tags.push(...this.blacklistTags.map(t => `-${t}`));
-      }
-
-      // Inject top recommended tags from recommendation engine
-      // when no explicit whitelist is set
-      if ((!query.whitelist && !this.whitelistTags?.length) && this.recommendationSystem) {
-        const banditSelection = await this.recommendationSystem.selectBanditTag();
-        if (banditSelection && (banditSelection.tag || banditSelection.modifier)) {
-          let tagQuery = banditSelection.tag || '';
-          if (banditSelection.modifier) {
-            tagQuery = tagQuery ? `${tagQuery} ${banditSelection.modifier}` : banditSelection.modifier;
-          }
-          if (tagQuery.trim()) {
-            tags.push(tagQuery.trim());
-          }
-        } else {
-          // Fallback to top tag if bandit returns nothing useful
-          const topTags = await this.recommendationSystem.getQueryableTags();
-          if (topTags.length > 0) {
-            tags.push(...topTags.slice(0, 2));
-          }
-        }
-      }
-
-      return tags.join(' ');
-    },
-
     async fetchPosts(newSearch = false) {
       if (this.isFetching) return;
       this.isFetching = true;
@@ -367,6 +316,7 @@ export default {
         this.page = 1;
         this.posts = [];
         this.currentPostIndex = -1;
+        this._hasUserScrolled = false;
         if (this.$refs.feedContainer) {
           this.$refs.feedContainer.scrollTop = 0;
         }
@@ -383,106 +333,52 @@ export default {
           return;
       }
 
-      const exploreMode = this.$route.query.explore === '1';
-
       try {
         let newPosts = [];
-        
-        if (exploreMode) {
-          // Guard: if recommendationSystem not yet initialized (watcher fires before created), skip
-          if (!this.recommendationSystem) {
-            console.log('Skipping explore mode - recommendationSystem not yet initialized');
-            this.isFetching = false;
-            this.loading = false;
-            return;
-          }
-          const targetCount = 5; // Relaxed target for explore mode
-          let attempts = 0;
-          const maxAttempts = 15;
 
-          const fetchFunction = (queryParams, limit) => {
-            return BooruService.getPosts({ 
-              tags: queryParams.tags || '', 
-              limit, 
-              // Use specific page from recommendation system if provided (for smart cursors), 
-              // otherwise fall back to global page (though global page is now static in explore mode)
-              page: queryParams.page || this.page, 
-              sort: this.sort, 
-              sortOrder: this.sortOrder,
-              skipSort: true // RecommendationSystem handles order
-            });
-          };
+        // Guard: if recommendationSystem not yet initialized (watcher fires before created), skip
+        if (!this.recommendationSystem) {
+          console.log('Skipping fetch - recommendationSystem not yet initialized');
+          this.isFetching = false;
+          this.loading = false;
+          return;
+        }
+        const targetCount = 5;
+        let attempts = 0;
+        const maxAttempts = 15;
 
-          const { ratings, whitelist, blacklist } = this.$route.query;
+        const fetchFunction = (queryParams, limit) => {
+          return BooruService.getPosts({ 
+            tags: queryParams.tags || '', 
+            limit, 
+            page: queryParams.page || this.page, 
+            sort: this.sort, 
+            sortOrder: this.sortOrder,
+            skipSort: true
+          });
+        };
 
-          // Resolve whitelist/blacklist: use query first, then global settings
-          const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
-          const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
+        const { ratings, whitelist, blacklist } = this.$route.query;
 
-          // Loop until we find news posts or hit max attempts
-          while (newPosts.length < targetCount && attempts < maxAttempts) {
-            attempts++;
-            
-            const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
-              postsPerFetch: 20,
-              selectedRatings: ratings ? ratings.split(',') : ['general'],
-              whitelist: activeWhitelist,
-              blacklist: activeBlacklist,
-              existingPostIds: blockedKeys, 
-              wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : true,
-              wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : true,
-            });
-            
-            if (batch.length > 0) {
-              newPosts = [...newPosts, ...batch];
-              batch.forEach(p => blockedKeys.add(this.getCompositeKey(p)));
-            }
-          }
+        const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
+        const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
 
-        } else {
-          // Normal mode with deduplication
-          const tagsForApi = await this.buildTagsFromRouteQuery();
-          const targetCount = 10;
-          let fetchedCount = 0;
-          let attempts = 0;
-          const maxAttempts = 5; // Prevent infinite loops
+        while (newPosts.length < targetCount && attempts < maxAttempts) {
+          attempts++;
           
-          while (newPosts.length < targetCount && attempts < maxAttempts) {
-            attempts++;
-            
-            // Fetch a batch of posts
-            const rawPosts = await BooruService.getPosts({
-              tags: tagsForApi,
-              page: this.page,
-              limit: 20, // Fetch more than needed to account for filtering
-              sort: this.sort,
-              sortOrder: this.sortOrder,
-            });
-            
-            if (!rawPosts || rawPosts.length === 0) {
-              break; // No more posts available
-            }
-            
-            // Filter out blocked posts
-            const filteredBatch = rawPosts.filter(p => !blockedKeys.has(this.getCompositeKey(p)));
-            
-            // Add unique posts to our result
-            for (const post of filteredBatch) {
-              if (newPosts.length < targetCount) {
-                // Attach search criteria for debug mode
-                post._searchCriteria = tagsForApi;
-                newPosts.push(post);
-                blockedKeys.add(this.getCompositeKey(post)); 
-              }
-            }
-            
-            // Always increment page to move forward in the API
-            this.page++;
-            
-            // If we got fewer posts than requested from API (ignoring filter), we reached the end
-            if (rawPosts.length < 20) {
-              break;
-            }
+          const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
+            postsPerFetch: 20,
+            selectedRatings: ratings ? ratings.split(',') : ['general'],
+            whitelist: activeWhitelist,
+            blacklist: activeBlacklist,
+            existingPostIds: blockedKeys, 
+            wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : true,
+            wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : true,
+          });
+          
+          if (batch.length > 0) {
+            newPosts = [...newPosts, ...batch];
+            batch.forEach(p => blockedKeys.add(this.getCompositeKey(p)));
           }
         }
         
@@ -491,11 +387,8 @@ export default {
           console.log(`Added ${newPosts.length} new posts. Total: ${this.posts.length}`);
           // Pre-fetch video URLs as blobs for Tauri production (non-blocking)
           this.processVideoUrls(newPosts);
-        } else if (!exploreMode && newPosts.length === 0 && this.posts.length > 0) {
-            console.log("No new unique posts found in this batch (normal mode).");
-            this.hasMorePosts = false;
-        } else if (exploreMode && newPosts.length === 0) {
-            console.log("No new posts found in explore mode batch.");
+        } else if (newPosts.length === 0) {
+            console.log("No new posts found in batch.");
         }
       } catch (error) {
         console.error('Failed to fetch posts:', error);
@@ -510,11 +403,40 @@ export default {
     },
     handleScroll() {
       if (this.isResizing) return;
+      this._hasUserScrolled = true;
       this.determineCurrentPost();
       const container = this.$refs.feedContainer;
       // Fetch more posts when we are 1 page away from the bottom (pre-fetching)
       if (this.hasMorePosts && container.scrollTop + container.clientHeight >= container.scrollHeight - container.clientHeight) {
         this.fetchPosts();
+      }
+    },
+    _accumulatedWheelDelta: 0,
+    _wheelSnapThreshold: 100,
+    _onWheel(event) {
+      if (!this.disableScrollAnimation) return;
+      const container = this.$refs.feedContainer;
+      if (!container) return;
+      const itemHeight = container.clientHeight;
+      if (itemHeight === 0) return;
+      this._accumulatedWheelDelta += event.deltaY;
+      if (this._clearWheelDeltaTimeout) {
+        clearTimeout(this._clearWheelDeltaTimeout);
+      }
+      this._clearWheelDeltaTimeout = setTimeout(() => {
+        this._accumulatedWheelDelta = 0;
+      }, 200);
+      if (Math.abs(this._accumulatedWheelDelta) >= this._wheelSnapThreshold) {
+        const direction = this._accumulatedWheelDelta > 0 ? 1 : -1;
+        this._accumulatedWheelDelta = 0;
+        const nextIndex = this.currentPostIndex + direction;
+        if (nextIndex >= 0 && nextIndex < this.posts.length) {
+          event.preventDefault();
+          container.scrollTo({
+            top: nextIndex * itemHeight,
+            behavior: 'auto'
+          });
+        }
       }
     },
     async determineCurrentPost() {
@@ -592,13 +514,16 @@ export default {
     },
     onVideoPlay(event, post) {
       if (this.posts[this.currentPostIndex] && this.getCompositeKey(this.posts[this.currentPostIndex]) !== this.getCompositeKey(post)) return;
-      
+
       // Enforce playback rate to prevent accidental speed changes
       const video = event.target;
       if (video.playbackRate !== 1.0) {
           video.playbackRate = 1.0;
       }
-      
+
+      // Mark as initialized so re-intersections don't reset playback
+      this._initializedVideos.add(video);
+
       this.$emit('video-state-change', { isPlaying: true });
     },
     onVideoPause(event, post) {
@@ -626,25 +551,77 @@ export default {
       this.$emit('video-state-change', { volume, muted });
     },
     startAutoScroll() {
-      if (this.autoScrollInterval) {
-        clearInterval(this.autoScrollInterval);
-      }
+      this.stopAutoScroll();
+      this._setupVideoEndedListener();
+      this._startAutoScrollTimer();
+    },
+    _isCurrentPostVideo() {
+      const post = this.posts[this.currentPostIndex];
+      if (!post) return false;
+      return this.isVideoPost(post);
+    },
+    _startAutoScrollTimer() {
+      if (this.autoScrollInterval) return;
       this.autoScrollInterval = setInterval(() => {
-        const container = this.$refs.feedContainer;
-        if (container) {
-          const nextScrollTop = container.scrollTop + container.clientHeight;
-          container.scrollTo({
-            top: nextScrollTop,
-            behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
-          });
-        }
+        if (this.autoScrollWaitForVideo && this._isCurrentPostVideo()) return;
+        this._doAutoScroll();
       }, this.autoScrollSeconds * 1000);
     },
-    stopAutoScroll() {
+    _stopAutoScrollTimer() {
       if (this.autoScrollInterval) {
         clearInterval(this.autoScrollInterval);
         this.autoScrollInterval = null;
       }
+    },
+    _snapToNearestPost() {
+      const container = this.$refs.feedContainer;
+      if (!container) return;
+      const itemHeight = container.clientHeight;
+      if (itemHeight === 0) return;
+      const scrolled = container.scrollTop;
+      const baseIndex = Math.floor(scrolled / itemHeight);
+      const offset = scrolled - (baseIndex * itemHeight);
+      // Snap forward if scrolled past 40 of item height, otherwise snap back
+      const SNAP_THRESHOLD = 0.4;
+      const targetIndex = offset / itemHeight >= SNAP_THRESHOLD ? baseIndex + 1 : baseIndex;
+      const clampedIndex = Math.max(0, Math.min(targetIndex, this.posts.length - 1));
+      if (clampedIndex === this.currentPostIndex) return;
+      container.scrollTo({
+        top: clampedIndex * itemHeight,
+        behavior: 'auto'
+      });
+    },
+    _doAutoScroll() {
+      this._isAutoScrolling = true;
+      const container = this.$refs.feedContainer;
+      if (container) {
+        const nextScrollTop = container.scrollTop + container.clientHeight;
+        container.scrollTo({
+          top: nextScrollTop,
+          behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
+        });
+      }
+      setTimeout(() => { this._isAutoScrolling = false; }, 100);
+    },
+    _setupVideoEndedListener() {
+      if (!this.$refs.feedContainer) return;
+      this.$refs.feedContainer.addEventListener('ended', this._onVideoEnded, true);
+    },
+    _removeVideoEndedListener() {
+      if (!this.$refs.feedContainer) return;
+      this.$refs.feedContainer.removeEventListener('ended', this._onVideoEnded, true);
+    },
+    _onVideoEnded(event) {
+      if (!this.autoScroll || !this.autoScrollWaitForVideo) return;
+      const currentPost = this.posts[this.currentPostIndex];
+      if (!currentPost) return;
+      const videoEl = this.videoElements[this.getCompositeKey(currentPost)];
+      if (!videoEl || event.target !== videoEl) return;
+      this._doAutoScroll();
+    },
+    stopAutoScroll() {
+      this._stopAutoScrollTimer();
+      this._removeVideoEndedListener();
     },
     onVideoLoadStart(post) {
       const key = this.getCompositeKey(post);
@@ -688,10 +665,29 @@ export default {
         delete this.videoLoadingTimeouts[key];
       }
       this.videoLoadingStates[key] = false;
+      this.videoErrorStates[key] = true;
     },
   },
   mounted() {
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
+    this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
+
+    // Browsers may block autoplay until user interacts with the page.
+    // Add a one-time listener to unlock playback on first user gesture.
+    this._unlockAutoplay = () => {
+      const currentPost = this.posts[this.currentPostIndex];
+      if (currentPost) {
+        const videoEl = this.videoElements[this.getCompositeKey(currentPost)];
+        if (videoEl && videoEl.paused) {
+          videoEl.play().catch(() => {});
+        }
+      }
+      document.removeEventListener('click', this._unlockAutoplay);
+      document.removeEventListener('touchstart', this._unlockAutoplay);
+      this._unlockAutoplay = null;
+    };
+    document.addEventListener('click', this._unlockAutoplay);
+    document.addEventListener('touchstart', this._unlockAutoplay);
 
     this.observer = new IntersectionObserver(
       (entries) => {
@@ -700,43 +696,92 @@ export default {
           
           if (entry.isIntersecting) {
             if (video) {
-              // Set flag to prevent volumechange event from overwriting store
-              this.isProgrammaticVolumeChange = true;
-              
-              // Reset video progress to start when becoming visible
-              video.currentTime = 0;
-              
-              // Apply user's volume and mute preferences when video becomes visible
-              video.volume = this.volume;
-              // If defaultMuted is ON: always start this video muted
-              // If defaultMuted is OFF: inherit the current global mute state (from previous video)
-              const shouldMute = this.defaultMuted ? true : this.isMuted;
-              video.muted = shouldMute;
-              
-              // Sync store state with the actual video muted state so icon matches
-              if (shouldMute !== this.isMuted) {
-                this.$emit('video-state-change', { muted: shouldMute });
+              // For the first video on initial load (no user scroll yet),
+              // let native autoplay handle everything — don't interfere.
+              const isInitialVideo = this.currentPostIndex === 0 && !this._hasUserScrolled;
+
+              // Helper to apply mute preference once video is playing
+              const applyMutePreference = () => {
+                const shouldMute = this.defaultMuted ? true : this.isMuted;
+                video.muted = shouldMute;
+                if (shouldMute !== this.isMuted) {
+                  this.$emit('video-state-change', { muted: shouldMute });
+                }
+              };
+
+              // Listen for 'playing' event to unmute (only once per video)
+              if (!video._hasPlayingListener) {
+                video._hasPlayingListener = true;
+                const onPlaying = () => {
+                  this._initializedVideos.add(video);
+                  applyMutePreference();
+                };
+                video.addEventListener('playing', onPlaying);
               }
-              
-              // Clear flag after a short delay to allow volumechange event to pass
-              setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
-              
-              // Only auto-play if setting is enabled!
-              if (this.autoplayVideos) {
-                video.play().catch(e => {
-                  // If autoplay fails, try again with muted=true
-                  if (e.name === 'NotAllowedError') {
-                    video.muted = true;
-                    video.play().catch(() => {}); // Silently fail if still blocked
-                    // Sync global state to reflect fallback to muted
-                    this.$emit('video-state-change', { muted: true });
+
+              if (!isInitialVideo) {
+                // Set flag to prevent volumechange event from overwriting store
+                this.isProgrammaticVolumeChange = true;
+
+                // Reset progress and mute only on FIRST visibility
+                if (!this._initializedVideos.has(video)) {
+                  video.currentTime = 0;
+                  video.muted = true;
+                }
+
+                // Clear flag after a short delay to allow volumechange event to pass
+                setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
+              }
+
+              // Only auto-play if setting is enabled (and not the initial video)
+              if (this.autoplayVideos && !isInitialVideo) {
+                // Video revealed by scrolling — call play() to start playback
+                const attemptPlay = () => {
+                  video.play().then(() => {
+                    this._initializedVideos.add(video);
+                  }).catch(() => {
+                    // Retry once after a short delay
+                    setTimeout(() => {
+                      if (video.paused && this.autoplayVideos) {
+                        video.play().catch(() => {});
+                      }
+                    }, 500);
+                  });
+                };
+
+                if (video.readyState >= 2) {
+                  attemptPlay();
+                } else {
+                  let playStarted = false;
+                  const tryPlay = () => {
+                    if (playStarted) return;
+                    playStarted = true;
+                    video.removeEventListener('canplay', tryPlay);
+                    video.removeEventListener('loadeddata', tryPlay);
+                    attemptPlay();
+                  };
+                  video.addEventListener('canplay', tryPlay);
+                  video.addEventListener('loadeddata', tryPlay);
+                  if (video.readyState === 0) {
+                    video.load();
                   }
-                });
+                  setTimeout(() => {
+                    if (!playStarted && video.paused && this.autoplayVideos) {
+                      tryPlay();
+                    }
+                  }, 3000);
+                }
+              } else if (!this.autoplayVideos) {
+                // Even without autoplay, honor user's mute preference after element is ready
+                const shouldMute = this.defaultMuted ? true : this.isMuted;
+                video.muted = shouldMute;
               }
             }
           } else {
             if (video) {
               video.pause();
+              // Remove from initialized set so next time it enters view, it resets to start
+              this._initializedVideos.delete(video);
               // Set flag before muting to prevent event feedback
               this.isProgrammaticVolumeChange = true;
               // Only mute if we aren't already muted (reduce spam)
@@ -760,8 +805,13 @@ export default {
   },
   beforeUnmount() {
     this.$refs.feedContainer.removeEventListener('scroll', this.handleScroll);
+    this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
     if (this.observer) {
         this.observer.disconnect();
+    }
+    if (this._unlockAutoplay) {
+        document.removeEventListener('click', this._unlockAutoplay);
+        document.removeEventListener('touchstart', this._unlockAutoplay);
     }
     this.$emit('current-post-changed', null, null);
     this.stopAutoScroll();
@@ -787,6 +837,11 @@ export default {
         }
       },
       immediate: true
+    },
+    autoScrollWaitForVideo() {
+      if (this.autoScroll) {
+        this.startAutoScroll();
+      }
     },
     posts() {
       this.$nextTick(() => {

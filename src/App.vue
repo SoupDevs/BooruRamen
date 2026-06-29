@@ -29,12 +29,14 @@
       <div class="h-full w-full relative overflow-hidden"
         :style="routerViewContainerStyle"
       >
-        <router-view
-          :key="routerViewKey"
-          :commentsSheetHeight="commentsSheetHeight"
-          @current-post-changed="updateCurrentPost"
-          @video-state-change="handleVideoStateChange"
-        ></router-view>
+        <transition :name="pageTransitionName" mode="out-in">
+          <router-view
+            :key="routerViewKey"
+            :commentsSheetHeight="commentsSheetHeight"
+            @current-post-changed="updateCurrentPost"
+            @video-state-change="handleVideoStateChange"
+          ></router-view>
+        </transition>
         
         <!-- Debug Overlay -->
         <div v-if="debugMode && currentPost" class="absolute top-0 left-1/2 transform -translate-x-1/2 p-4 bg-black bg-opacity-75 text-xs text-white z-40 max-w-xs font-mono rounded shadow-lg pointer-events-auto"
@@ -207,13 +209,14 @@
       </div>
 
       <!-- Settings sidebar -->
-      <SettingsSidebar :show="showSettingsSidebar" :hasRecommendations="hasRecommendations" :recommendedTags="recommendedTags" @reset-recommendations="handleResetRecommendations" @apply-settings="applySettings" @save-player-preferences="savePlayerPreferences" />
+      <SettingsSidebar :show="showSettingsSidebar" @apply-settings="applySettings" @save-player-preferences="savePlayerPreferences" />
       
       <!-- Floating toggle button for settings sidebar -->
-      <button 
-        @click="showSettingsSidebar = !showSettingsSidebar" 
+      <button
+        v-if="showSettingsToggle"
+        @click="showSettingsSidebar = !showSettingsSidebar"
         class="absolute right-0 z-30 p-2 rounded-l-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
-        :style="{ 
+        :style="{
           transform: showSettingsSidebar ? 'translateX(-320px)' : 'translateX(0)',
           top: `calc(1rem + env(safe-area-inset-top, 0))`
         }"
@@ -280,6 +283,7 @@ import { useInteractionsStore } from './stores/interactions';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
 import recommendationSystem from './services/RecommendationSystem.js';
+import DownloadService from './services/DownloadService.js';
 
 import BottomNavBar from './components/BottomNavBar.vue';
 import CommentsSheet from './components/CommentsSheet.vue';
@@ -315,6 +319,7 @@ export default {
       commentsSheetHeight: 0,
 
       routerViewKey: 0,
+      pageTransitionName: 'page-fade',
       
       // UI state for controls
       showVideoControls: true,
@@ -332,8 +337,6 @@ export default {
       accumulatedWatchTime: 0,
       
       // Sidebar filter state
-      hasRecommendations: false,
-      recommendedTags: [],
       recommendationSystem,
       
       debugDetails: null, // Store for calculated debug info
@@ -359,6 +362,25 @@ export default {
         }
     },
     $route(to, from) {
+      // Determine page transition direction
+      const profileDepth = { Profile: 0, ProfileSettings: 1, ProfileAnalytics: 1 };
+      const fromDepth = profileDepth[from.name] ?? -1;
+      const toDepth = profileDepth[to.name] ?? -1;
+
+      if (fromDepth >= 0 && toDepth >= 0) {
+        // Both are profile pages: slide based on depth
+        this.pageTransitionName = toDepth > fromDepth ? 'page-slide-left' : 'page-slide-right';
+      } else if (fromDepth >= 0 && toDepth < 0) {
+        // Leaving profile pages entirely: slide right
+        this.pageTransitionName = 'page-slide-right';
+      } else if (fromDepth < 0 && toDepth >= 0) {
+        // Entering profile pages: slide left
+        this.pageTransitionName = 'page-slide-left';
+      } else {
+        // Non-profile navigation: fade
+        this.pageTransitionName = 'page-fade';
+      }
+
       // Hide post details and video controls when leaving the viewer
       if (to.name !== 'Viewer') {
         if (this.currentPost) {
@@ -369,12 +391,19 @@ export default {
         this.watchStartTime = null;
         this.accumulatedWatchTime = 0;
       }
+      // Collapse settings sidebar when navigating to profile pages
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
+        this.showSettingsSidebar = false;
+      }
     },
     showSettingsSidebar(isOpen) {
-      if (isOpen) {
-        this.updateRecommendationStatus();
+      if (!isOpen) return;
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      if (hiddenRoutes.includes(this.$route.name)) {
+        this.showSettingsSidebar = false;
       }
-    }
+    },
   },
 
   computed: {
@@ -390,18 +419,22 @@ export default {
     ...mapWritableState(useSettingsStore, [
       'autoScroll',
       'autoScrollSeconds',
+      'autoScrollWaitForVideo',
       'autoScrollSpeed',
       'disableScrollAnimation',
       'disableHistory',
       'autoplayVideos',
+      'loopVideos',
       'mediaType',
       'ratings',
       'whitelistTags',
       'blacklistTags',
       'activeSource',
       'customSources',
-      'exploreMode',
-      'debugMode'
+      'debugMode',
+      'enabledRatings',
+      'downloadLiked',
+      'downloadFavorited'
     ]),
     // Map player store state
     ...mapWritableState(usePlayerStore, [
@@ -426,6 +459,11 @@ export default {
       const ext = this.currentPost.file_ext;
       return ['mp4', 'webm'].includes(ext);
     },
+    showSettingsToggle() {
+      // Only show settings on feed, history, likes, favorites, and viewer
+      const routeName = this.$route.name;
+      return !['Profile', 'ProfileSettings', 'ProfileAnalytics'].includes(routeName);
+    },
   },
   methods: {
     // Map store actions
@@ -435,7 +473,6 @@ export default {
         removeWhitelistTag: 'removeWhitelistTag',
         addBlacklistTagAction: 'addBlacklistTag',
         removeBlacklistTag: 'removeBlacklistTag', 
-        toggleExploreMode: 'toggleExploreMode',
         saveSettings: 'saveSettings',
         initializeSettings: 'initialize'
     }),
@@ -519,13 +556,7 @@ export default {
         }
     },
     
-    async handleResetRecommendations() {
-      await this.recommendationSystem.resetRecommendations();
-      this.hasRecommendations = false;
-      this.recommendedTags = [];
-      window.location.reload();
-    },
-    
+
     startWatchTimeTracking() {
         this.watchStartTime = Date.now();
     },
@@ -607,6 +638,10 @@ export default {
                 value: 0,
                 metadata: { post }
             });
+            // Auto-download if enabled
+            if (this.downloadLiked) {
+              this.downloadPostFile(post, 'liked');
+            }
         }
     },
     toggleDislike(post) {
@@ -639,11 +674,23 @@ export default {
             value: post.favorited ? 1 : 0,
             metadata: { post }
         });
+        // Auto-download if enabled
+        if (post.favorited && this.downloadFavorited) {
+          this.downloadPostFile(post, 'favorited');
+        }
     },
 
     openComments(post) {
-        if (!post) return;
-        this.commentsPost = post;
+      if (!post) return;
+      this.commentsPost = post;
+    },
+
+    async downloadPostFile(post, type) {
+      try {
+        await DownloadService.downloadPost(post, type);
+      } catch (error) {
+        console.error('Auto-download failed:', error);
+      }
     },
 
     toggleRating(rating) {
@@ -660,9 +707,27 @@ export default {
 
     applySettings() {
       this.saveSettings();
-      // Navigate to feed with new settings
-      this.navigateToFeed();
+      // Refresh current view with new settings instead of always redirecting to feed
+      const currentName = this.$route.name;
+      const settingsAwareRoutes = ['Home', 'History', 'Likes', 'Favorites'];
+
+      if (settingsAwareRoutes.includes(currentName)) {
+        // For feed/history/likes/favorites: update query to trigger refetch
+        const query = this.generateQueryFromSettings();
+        // Only navigate if query actually changed (avoids redundant navigation)
+        if (JSON.stringify(this.$route.query) !== JSON.stringify(query)) {
+          this.$router.replace({ name: currentName, query });
+        }
+      }
+      // For other routes (Viewer, etc.), just stay put - no navigation needed
+
+      // Emit event so child views can react to settings change
+      this.$routerViewKeyBump();
       this.showSettingsSidebar = false;
+    },
+    $routerViewKeyBump() {
+      // Increment key to force re-render of current view if needed
+      this.routerViewKey++;
     },
 
     generateQueryFromSettings() {
@@ -671,8 +736,7 @@ export default {
         images: this.mediaType.images ? '1' : '0',
         videos: this.mediaType.videos ? '1' : '0',
         whitelist: this.whitelistTags.join(','),
-        blacklist: this.blacklistTags.join(','),
-        explore: this.exploreMode ? '1' : '0'
+        blacklist: this.blacklistTags.join(',')
       };
       return query;
     },
@@ -683,7 +747,6 @@ export default {
       if (query.videos !== undefined) this.mediaType.videos = query.videos !== '0';
       if (query.whitelist) this.whitelistTags = query.whitelist.split(',');
       if (query.blacklist) this.blacklistTags = query.blacklist.split(',');
-      if (query.explore !== undefined) this.exploreMode = query.explore === '1';
     },
     
     // Video Controls
@@ -800,16 +863,7 @@ export default {
         this.savePlayerPreferences(); // Save mute state to player store
     },
 
-    async updateRecommendationStatus() {
-       try {
-           const tags = await this.recommendationSystem.getRecommendedTags(5);
-           this.recommendedTags = tags || [];
-           this.hasRecommendations = this.recommendedTags.length > 0;
-       } catch (error) {
-           console.error("Error fetching recommended tags:", error);
-           this.hasRecommendations = false;
-       }
-    },
+
     
     handleKeydown(e) {
       if (e.target.tagName === 'INPUT') return;
@@ -1017,5 +1071,43 @@ export default {
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
+}
+
+/* Page transition: slide left (going deeper into settings/profile) */
+.page-slide-left-enter-active,
+.page-slide-left-leave-active {
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+.page-slide-left-enter-from {
+  transform: translateX(40px);
+  opacity: 0;
+}
+.page-slide-left-leave-to {
+  transform: translateX(-40px);
+  opacity: 0;
+}
+
+/* Page transition: slide right (going back/up from settings/profile) */
+.page-slide-right-enter-active,
+.page-slide-right-leave-active {
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+.page-slide-right-enter-from {
+  transform: translateX(-40px);
+  opacity: 0;
+}
+.page-slide-right-leave-to {
+  transform: translateX(40px);
+  opacity: 0;
+}
+
+/* Page transition: fade (non-profile navigation) */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+.page-fade-enter-from,
+.page-fade-leave-to {
+  opacity: 0;
 }
 </style>

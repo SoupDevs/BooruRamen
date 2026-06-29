@@ -31,12 +31,27 @@
             class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-pink-600"
           />
         </div>
+        <div class="mt-2" :class="{ 'opacity-50 pointer-events-none': !autoScroll }">
+          <div class="flex items-center justify-between">
+            <label class="text-sm text-gray-400">Wait for video to finish</label>
+            <button 
+              @click="autoScrollWaitForVideo = !autoScrollWaitForVideo" 
+              class="relative inline-flex h-6 w-11 items-center rounded-full"
+              :class="autoScrollWaitForVideo ? 'bg-pink-600' : 'bg-gray-600'"
+            >
+              <span 
+                class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                :class="autoScrollWaitForVideo ? 'translate-x-6' : 'translate-x-1'"
+              ></span>
+            </button>
+          </div>
+        </div>
       </div>
 
       <!-- Disable scroll animation toggle -->
       <div class="mb-4">
         <div class="flex items-center justify-between">
-          <label class="text-sm font-medium">Disable auto-scroll animation</label>
+          <label class="text-sm font-medium">Disable scroll animation</label>
           <button 
             @click="disableScrollAnimation = !disableScrollAnimation" 
             class="relative inline-flex h-6 w-11 items-center rounded-full"
@@ -62,6 +77,23 @@
             <span 
               class="inline-block h-4 w-4 transform rounded-full bg-white transition"
               :class="autoplayVideos ? 'translate-x-6' : 'translate-x-1'"
+            ></span>
+          </button>
+        </div>
+      </div>
+      
+      <!-- Loop videos toggle -->
+      <div class="mb-4">
+        <div class="flex items-center justify-between">
+          <label class="text-sm font-medium">Loop Videos</label>
+          <button 
+            @click="loopVideos = !loopVideos" 
+            class="relative inline-flex h-6 w-11 items-center rounded-full"
+            :class="loopVideos ? 'bg-pink-600' : 'bg-gray-600'"
+          >
+            <span 
+              class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+              :class="loopVideos ? 'translate-x-6' : 'translate-x-1'"
             ></span>
           </button>
         </div>
@@ -117,11 +149,11 @@
         </div>
       </div>
       
-      <!-- Rating selection -->
-      <div class="mb-4">
+      <!-- Rating selection (only show when multiple ratings enabled in profile settings) -->
+      <div v-if="visibleRatings.length > 1" class="mb-4">
         <label class="text-sm font-medium block mb-2">Rating</label>
         <div class="space-y-2">
-          <div v-for="rating in ['general', 'sensitive', 'questionable', 'explicit']" :key="rating" class="flex items-center justify-between">
+          <div v-for="rating in visibleRatings" :key="rating" class="flex items-center justify-between">
             <label class="text-sm capitalize">{{ rating }}</label>
             <button 
               @click="toggleRatingAction(rating)" 
@@ -201,62 +233,6 @@
       </div>
       
       <!-- Recommendations section -->
-      <div class="mb-4 border-t border-gray-700 pt-4">
-        <h3 class="text-sm font-medium block mb-2">Recommendations</h3>
-        
-        <!-- Explore Mode Toggle -->
-        <div class="flex items-center justify-between mb-2">
-          <label class="text-sm">Explore Mode</label>
-          <button 
-            @click="toggleExploreMode" 
-            class="relative inline-flex h-6 w-11 items-center rounded-full"
-            :class="exploreMode ? 'bg-pink-600' : 'bg-gray-600'"
-          >
-            <span 
-              class="inline-block h-4 w-4 transform rounded-full bg-white transition"
-              :class="exploreMode ? 'translate-x-6' : 'translate-x-1'"
-            ></span>
-          </button>
-        </div>
-        <p class="text-xs text-gray-400 mb-3">Explore mode shows more diverse content to help improve recommendations</p>
-        
-        <!-- Recommended Tags Section -->
-        <div v-if="hasRecommendations" class="mb-3">
-          <h4 class="text-xs font-medium text-gray-400 mb-1">Recommended Tags</h4>
-          <div class="flex flex-wrap gap-1">
-            <span 
-              v-for="tag in recommendedTags" 
-              :key="tag"
-              class="bg-pink-800 px-2 py-0.5 rounded text-xs inline-flex items-center"
-            >
-              {{ tag }}
-              <button 
-                @click="whitelistTags.push(tag); newWhitelistTag = ''" 
-                class="ml-1 text-xs hover:text-white"
-              >
-                + Add
-              </button>
-            </span>
-          </div>
-          <p v-if="recommendedTags.length === 0" class="text-xs text-gray-400">
-            Interact with more posts to get recommendations
-          </p>
-        </div>
-        
-        <!-- Recommendation Status -->
-        <div class="text-xs text-gray-400 mb-2">
-          <p v-if="hasRecommendations">Recommendations active</p>
-          <p v-else>Recommendations will activate after more interactions</p>
-        </div>
-        
-        <!-- Reset Recommendations Button -->
-        <button 
-          @click="$emit('reset-recommendations')" 
-          class="w-full bg-gray-700 hover:bg-gray-600 text-white py-1.5 rounded-md text-xs"
-        >
-          Reset Recommendations
-        </button>
-      </div>
       
       <button 
         @click="$emit('apply-settings')" 
@@ -277,8 +253,6 @@ export default {
   name: 'SettingsSidebar',
   props: {
     show: Boolean,
-    hasRecommendations: Boolean,
-    recommendedTags: Array,
   },
   data() {
     return {
@@ -288,15 +262,20 @@ export default {
   },
   computed: {
     ...mapWritableState(useSettingsStore, [
-      'autoScroll', 'autoScrollSeconds', 'disableScrollAnimation', 'autoplayVideos',
-      'mediaType', 'ratings', 'whitelistTags', 'blacklistTags', 'exploreMode'
+      'autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos',
+      'mediaType', 'ratings', 'whitelistTags', 'blacklistTags', 'enabledRatings'
     ]),
     ...mapWritableState(usePlayerStore, ['defaultMuted']),
+    visibleRatings() {
+      // Only show ratings in the sidebar that are enabled in profile settings
+      const allRatings = ['general', 'sensitive', 'questionable', 'explicit'];
+      return allRatings.filter(r => this.enabledRatings.includes(r));
+    },
   },
   methods: {
     ...mapActions(useSettingsStore, [
-      'toggleRating', 'addWhitelistTag', 'removeWhitelistTag', 
-      'addBlacklistTag', 'removeBlacklistTag', 'toggleExploreMode'
+      'toggleRating', 'addWhitelistTag', 'removeWhitelistTag',
+      'addBlacklistTag', 'removeBlacklistTag'
     ]),
     toggleRatingAction(rating) {
       this.toggleRating(rating);

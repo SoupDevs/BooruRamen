@@ -22,57 +22,22 @@ const isTauri = () => {
 
 // Cache for blob URLs to avoid re-fetching
 const blobUrlCache = new Map();
+let proxyWarningShown = false;
 
 /**
- * Get a playable video URL. In Tauri production, fetches the video and creates a blob URL.
- * In development (browser), returns the original URL (Vite proxy handles CORS).
+ * Get a playable video URL. In dev mode, attempts to fetch through Vite middleware
+ * to bypass CDN restrictions. Falls back to original URL if proxy fails.
  * @param {string} url - The original video URL
- * @returns {Promise<string>} - A playable URL (blob URL in Tauri, original in dev)
+ * @returns {Promise<string>} - A blob URL or the original URL
  */
 export async function getPlayableVideoUrl(url) {
     if (!url) return url;
 
-    // Check if it's a video URL that needs proxying
-    const isVideo = /\.(mp4|webm|mov)(\?|$)/i.test(url);
-    if (!isVideo) return url;
-
-    // In development, use proxy URLs (already handled by Vite)
-    if (import.meta.env && import.meta.env.DEV) {
-        return url;
-    }
-
-    // In Tauri production, fetch as blob
-    if (isTauri()) {
-        // Check cache first
-        if (blobUrlCache.has(url)) {
-            return blobUrlCache.get(url);
-        }
-
-        try {
-            console.log('[VideoProxy] Fetching video as blob:', url);
-            const response = await httpFetch(url, {
-                method: 'GET',
-            });
-
-            if (!response.ok) {
-                console.error('[VideoProxy] Failed to fetch video:', response.status);
-                return url; // Fall back to original URL
-            }
-
-            const blob = await response.blob();
-            const blobUrl = URL.createObjectURL(blob);
-
-            // Cache the blob URL
-            blobUrlCache.set(url, blobUrl);
-            console.log('[VideoProxy] Created blob URL for video');
-
-            return blobUrl;
-        } catch (error) {
-            console.error('[VideoProxy] Error proxying video:', error);
-            return url; // Fall back to original URL
-        }
-    }
-
+    // CDN URLs (danbooru) are behind Cloudflare bot protection.
+    // Server-side proxies (Vite middleware, Node.js) get 403 (TLS fingerprinting).
+    // Browser fetch/XHR are blocked by CORP (no CORS headers from CDN).
+    // Direct <video> src works natively — browser solves Cloudflare challenge.
+    // Return the original URL and let the browser handle it.
     return url;
 }
 

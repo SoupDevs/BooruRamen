@@ -195,7 +195,7 @@ class RecommendationWorkerCore {
           );
 
           // Record reward for bandit ONLY when the post was fetched via a strategy
-          // (explore mode). This ensures the bandit learns which query strategies
+          // This ensures the bandit learns which query strategies
           // produce engaging content.
           const strategy = interaction.metadata.post._strategy;
           if (strategy) {
@@ -555,13 +555,13 @@ class RecommendationWorkerCore {
       .map(([rating]) => rating);
   }
 
-  buildRecommendedQueryParams(includeUserTags = true, exploreMode = false) {
+  buildRecommendedQueryParams(includeUserTags = true) {
     let tags = [];
     if (includeUserTags && this.tagScores) {
       const recommendedTags = this.getRecommendedTags(1);
       if (recommendedTags.length > 0) tags.push(recommendedTags[0]);
     }
-    if (exploreMode && tags.length < 2) {
+    if (tags.length < 2) {
       const saferStrategies = ['age:<1d', 'age:<3d', 'age:<1w', 'order:rank', 'order:favcount'];
       tags.push(saferStrategies[Math.floor(Math.random() * saferStrategies.length)]);
     }
@@ -808,7 +808,7 @@ self.onmessage = async (e) => {
         result = core.getRecommendedRatings();
         break;
       case 'buildRecommendedQueryParams':
-        result = core.buildRecommendedQueryParams(payload.includeUserTags, payload.exploreMode);
+        result = core.buildRecommendedQueryParams(payload.includeUserTags);
         break;
       case 'getQueryableTags':
         result = core.getQueryableTags();
