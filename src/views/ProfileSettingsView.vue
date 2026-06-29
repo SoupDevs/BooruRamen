@@ -9,12 +9,12 @@
 -->
 <template>
   <div class="p-4 text-white h-full overflow-y-auto">
-    <!-- Header with back button -->
-    <div class="flex items-center mb-6">
+    <!-- Header with back button and centered title -->
+    <div class="relative flex items-center justify-center mb-6">
       <button
         v-if="navigationStack.length > 0"
         @click="goBack"
-        class="text-pink-500 hover:text-pink-400 mr-3 flex items-center gap-1"
+        class="absolute left-0 text-pink-500 hover:text-pink-400 flex items-center gap-1"
       >
         <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 12H5M12 19l-7-7 7-7"/>
@@ -24,7 +24,7 @@
       <router-link
         v-else
         to="/profile"
-        class="text-pink-500 hover:text-pink-400 mr-3 flex items-center gap-1"
+        class="absolute left-0 text-pink-500 hover:text-pink-400 flex items-center gap-1"
       >
         <svg viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 12H5M12 19l-7-7 7-7"/>
