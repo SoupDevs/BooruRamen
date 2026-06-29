@@ -27,6 +27,8 @@ export const useSettingsStore = defineStore('settings', {
         downloadLiked: false,
         downloadFavorited: false,
         downloadSeparateFolders: false,
+        // Age confirmation: stores DOB once verified
+        confirmedDateOfBirth: null,
         settingsVersion: 0,
         initialized: false
     }),
@@ -48,7 +50,8 @@ export const useSettingsStore = defineStore('settings', {
                     downloadLocation: saved.settings && saved.settings.downloadLocation !== undefined ? saved.settings.downloadLocation : this.downloadLocation,
                     downloadLiked: saved.settings && saved.settings.downloadLiked !== undefined ? saved.settings.downloadLiked : this.downloadLiked,
                     downloadFavorited: saved.settings && saved.settings.downloadFavorited !== undefined ? saved.settings.downloadFavorited : this.downloadFavorited,
-                    downloadSeparateFolders: saved.settings && saved.settings.downloadSeparateFolders !== undefined ? saved.settings.downloadSeparateFolders : this.downloadSeparateFolders
+                    downloadSeparateFolders: saved.settings && saved.settings.downloadSeparateFolders !== undefined ? saved.settings.downloadSeparateFolders : this.downloadSeparateFolders,
+                    confirmedDateOfBirth: saved.settings && saved.settings.confirmedDateOfBirth ? saved.settings.confirmedDateOfBirth : this.confirmedDateOfBirth
                 })
             }
 
@@ -141,7 +144,8 @@ export const useSettingsStore = defineStore('settings', {
                     downloadLocation: this.downloadLocation,
                     downloadLiked: this.downloadLiked,
                     downloadFavorited: this.downloadFavorited,
-                    downloadSeparateFolders: this.downloadSeparateFolders
+                    downloadSeparateFolders: this.downloadSeparateFolders,
+                    confirmedDateOfBirth: this.confirmedDateOfBirth
                 }
             })
             this.settingsVersion++

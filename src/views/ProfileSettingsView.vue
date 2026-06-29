@@ -665,7 +665,6 @@ export default {
       ageDay: '',
       ageYear: '',
       ageError: '',
-      ageConfirmed: false, // persists for session once confirmed
 
       // Rating definitions
       allRatings: [
@@ -679,7 +678,8 @@ export default {
   computed: {
     ...mapWritableState(useSettingsStore, [
       'disableHistory', 'debugMode', 'customSources', 'activeSource',
-      'enabledRatings', 'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders'
+      'enabledRatings', 'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders',
+      'confirmedDateOfBirth'
     ]),
     appVersion() {
       return __APP_VERSION__;
@@ -765,8 +765,8 @@ export default {
         this.toggleEnabledRating(ratingId);
         return;
       }
-      // Enabling non-general: check if already confirmed this session
-      if (this.ageConfirmed) {
+      // Enabling non-general: check if DOB already confirmed and stored
+      if (this.confirmedDateOfBirth) {
         this.toggleEnabledRating(ratingId);
         return;
       }
@@ -794,8 +794,9 @@ export default {
         this.ageError = 'You must be 18 or older to enable ratings beyond General.';
         return;
       }
-      // Age confirmed
-      this.ageConfirmed = true;
+      // Age confirmed: persist DOB to store
+      this.confirmedDateOfBirth = `${this.ageYear}-${String(this.ageMonth).padStart(2, '0')}-${String(this.ageDay).padStart(2, '0')}`;
+      this.saveSettings();
       this.showAgeModal = false;
       if (this.pendingRatingId) {
         this.toggleEnabledRating(this.pendingRatingId);
