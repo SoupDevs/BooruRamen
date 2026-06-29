@@ -408,7 +408,8 @@ export default {
       'blacklistTags',
       'activeSource',
       'customSources',
-      'debugMode'
+      'debugMode',
+      'enabledRatings'
     ]),
     // Map player store state
     ...mapWritableState(usePlayerStore, [

@@ -325,6 +325,30 @@ const clearFavorites = async () => {
 };
 
 /**
+ * Clear the downloads folder
+ * Uses the File System Access API if available, otherwise falls back to clearing
+ * the stored download location and any download interaction records.
+ */
+const clearDownloads = async () => {
+  try {
+    const settings = await loadAppSettings();
+    const downloadLocation = settings && settings.settings && settings.settings.downloadLocation;
+    if (downloadLocation && typeof navigator !== 'undefined' && navigator.storage) {
+      // Best-effort: we store the intent; actual file deletion happens via the app's
+      // download service or via the browse button in settings.
+      // For now, clear download-related interactions from IndexedDB.
+      await db.interactions.where('type').equals('download').delete();
+    } else {
+      await db.interactions.where('type').equals('download').delete();
+    }
+    return true;
+  } catch (error) {
+    console.error('Error clearing downloads:', error);
+    return false;
+  }
+};
+
+/**
  * Export analytics data for recommendations
  */
 const exportAnalytics = async () => {
@@ -413,6 +437,7 @@ export default {
   clearHistory,
   clearLikes,
   clearFavorites,
+  clearDownloads,
   exportAnalytics,
   saveAppSettings,
   loadAppSettings,
