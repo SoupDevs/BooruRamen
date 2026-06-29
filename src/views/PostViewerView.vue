@@ -11,9 +11,10 @@
         </div>
       </div>
       
-      <div 
-        v-for="(post, index) in posts" 
+      <div
+        v-for="(post, index) in posts"
         :key="post.id"
+        :data-post-key="post.id"
         class="h-full w-full snap-start flex items-center justify-center relative"
       >
         <!-- Post media -->
@@ -24,13 +25,15 @@
             :alt="post.tag_string" 
             class="max-h-[calc(100vh-0px)] max-w-full object-contain"
           />
-          <video 
-            v-else-if="isVideo(post)" 
-            :src="post.file_url" 
-            ref="videoPlayer"
-            :autoplay="autoplayVideos"
-            :muted="isMuted"
-            loop 
+          <video
+            v-else-if="isVideo(post)"
+            :src="getVideoSrc(post)"
+            :ref="(el) => setVideoRef(el, post)"
+            :autoplay="autoplayVideos && isPostVisible(post)"
+            :muted="!isPostVisible(post) || muted"
+            loop
+            preload="none"
+            playsinline
             class="max-h-[calc(100vh-0px)] max-w-full"
             @click="togglePlayPause"
             @play="handleVideoStateUpdate($event, index)"
@@ -55,6 +58,7 @@ import { mapState } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
 import StorageService from '../services/StorageService';
+import { getPlayableVideoUrl } from '../services/videoProxy.js';
 import { postFilterMixin } from '../mixins/postFilterMixin';
 
 export default {
@@ -72,6 +76,10 @@ export default {
       loading: true,
       currentPostIndex: 0,
       observer: null,
+      videoBlobUrls: {}, // Map of original URL -> blob URL for CORS bypass
+      _visiblePostKeys: {}, // Track which posts are currently visible (reactive object: { postId: true })
+      _visibilityVersion: 0, // Counter to force re-renders on visibility change
+      _proxyFailedUrls: {}, // Track URLs that failed proxy (skip proxy path next time)
     };
   },
   computed: {
@@ -102,19 +110,23 @@ export default {
       this.observer = new IntersectionObserver(
         (entries) => {
           entries.forEach(entry => {
-            const video = entry.target.querySelector('video');
+            const postEl = entry.target;
+            const postKey = postEl.dataset.postKey;
+            const video = postEl.querySelector('video');
             if (entry.isIntersecting) {
+              this._visiblePostKeys[postKey] = true;
               if (this.autoplayVideos && video) {
-                video.volume = this.volume;
-                video.muted = this.muted;
-                video.play().catch(e => console.warn("Autoplay was prevented in viewer.", e));
+                this._playVideo(video);
               }
             } else {
+              delete this._visiblePostKeys[postKey];
               video?.pause();
             }
           });
+          // Increment version to force method-based template expressions (isPostVisible) to re-evaluate
+          this._visibilityVersion++;
         },
-        { threshold: 0.5 }
+        { threshold: 0.1 }
       );
       this.observePosts();
     },
@@ -145,12 +157,13 @@ export default {
       // Pause any videos that are still in the DOM from before filtering
       this.$refs.viewerContainer?.querySelectorAll('video').forEach(v => v.pause());
       this.loading = false;
+      // Pre-fetch video URLs as blobs to bypass CORS/CORP restrictions
+      this.processVideoUrls(this.posts);
       // Recreate observer so it only watches filtered posts (not stale video elements)
       this.setupObserver();
-      // Trigger autoplay check for the initially visible post (observer may have missed it)
+      // Scroll to initial post; IntersectionObserver handles autoplay for the visible post
       this.$nextTick(() => {
         this.scrollToInitialPost();
-        this.playVisibleVideo();
       });
     },
     scrollToInitialPost() {
@@ -170,9 +183,50 @@ export default {
             if (postElements[targetIndex]) {
                 container.scrollTop = postElements[targetIndex].offsetTop;
                 this.currentPostIndex = targetIndex;
-                this.$emit('current-post-changed', this.posts[this.currentPostIndex], this.$refs.videoPlayer?.[this.currentPostIndex]);
+                this.syncVisiblePosts();
+                this.$nextTick(() => {
+                  // Explicitly start playback after Vue has updated :autoplay / :muted bindings
+                  const video = postElements[targetIndex]?.querySelector('video');
+                  if (video && this.autoplayVideos) {
+                    this._playVideo(video);
+                  }
+                  this.$emit('current-post-changed', this.posts[this.currentPostIndex], video);
+                });
             }
         }
+    },
+    syncVisiblePosts() {
+      // Track which posts are visible and play/pause videos accordingly
+      const container = this.$refs.viewerContainer;
+      if (!container) return;
+      const containerRect = container.getBoundingClientRect();
+      const containerMidY = containerRect.top + containerRect.height / 2;
+      const postElements = container.querySelectorAll('.snap-start');
+      let changed = false;
+      postElements.forEach(el => {
+        const rect = el.getBoundingClientRect();
+        const postMidY = rect.top + rect.height / 2;
+        const isVisible = Math.abs(containerMidY - postMidY) < rect.height * 0.6;
+        const postKey = el.dataset.postKey;
+        const video = el.querySelector('video');
+        if (isVisible) {
+          if (!this._visiblePostKeys[postKey]) {
+            this._visiblePostKeys[postKey] = true;
+            changed = true;
+          }
+          // Always try to play visible videos (handles retries after pause/failed play)
+          if (this.autoplayVideos && video && video.paused && !video._playPending) {
+            this._playVideo(video);
+          }
+        } else {
+          if (this._visiblePostKeys[postKey]) {
+            delete this._visiblePostKeys[postKey];
+            changed = true;
+          }
+          if (video && !video.paused) video.pause();
+        }
+      });
+      if (changed) this._visibilityVersion++;
     },
     async determineCurrentPost() {
       const container = this.$refs.viewerContainer;
@@ -203,6 +257,8 @@ export default {
           await StorageService.trackPostView(currentPost.id, currentPost, currentPost.source);
         }
       }
+      // Sync visibility on every scroll for reliability
+      this.syncVisiblePosts();
     },
     observePosts() {
       if (!this.observer) return;
@@ -225,13 +281,26 @@ export default {
         if (Math.abs(containerMidY - postMidY) < rect.height * 0.5) {
           const video = postEl.querySelector('video');
           if (video) {
-            video.volume = this.volume;
-            video.muted = this.muted;
-            video.play().catch(e => console.warn("Autoplay prevented.", e));
+            this._playVideo(video);
           }
           break;
         }
       }
+    },
+    _playVideo(video) {
+      if (!video || video._playPending) return;
+      // Always start muted for autoplay compliance, unmute after play resolves
+      video.muted = true;
+      video.volume = this.volume;
+      video._playPending = true;
+      video.play().then(() => {
+        video._playPending = false;
+        // Respect user mute preference (same as FeedView)
+        video.muted = this.muted;
+        this.$emit('video-state-change', { muted: this.muted });
+      }).catch(() => {
+        video._playPending = false;
+      });
     },
     handleVideoStateUpdate(event, index) {
       if (index !== this.currentPostIndex) return;
@@ -270,11 +339,54 @@ export default {
       const ext = post.file_ext.toLowerCase();
       return ['mp4', 'webm'].includes(ext);
     },
+    getVideoSrc(post) {
+      if (!post || !post.file_url) return '';
+      // Use blob URL if available (successfully proxied)
+      if (this.videoBlobUrls[post.file_url]) {
+        return this.videoBlobUrls[post.file_url];
+      }
+      // Only use proxy URL if processVideoUrls hasn't run yet or is still pending.
+      // If the proxy already failed (returned original URL), videoBlobUrls stays empty
+      // and we fall back to the direct CDN URL which the browser handles natively.
+      return post.file_url;
+    },
+    isPostVisible(post) {
+      // Touch _visibilityVersion to register a reactive dependency — forces re-evaluate when version changes
+      const _v = this._visibilityVersion;
+      return !!this._visiblePostKeys[String(post.id)];
+    },
+    setVideoRef(el, post) {
+      if (el) {
+        // Store on element for later lookup by post ID
+        this._videoElements = this._videoElements || {};
+        this._videoElements[post.id] = el;
+      }
+    },
     togglePlayPause(event) {
         const video = event.target;
         if (video.paused) video.play();
         else video.pause();
-    }
+    },
+    async processVideoUrls(posts) {
+      for (const post of posts) {
+        if (this.isVideo(post) && post.file_url) {
+          if (this.videoBlobUrls[post.file_url]) continue;
+          // Skip if already known to fail the proxy
+          if (this._proxyFailedUrls[post.file_url]) continue;
+          try {
+            const blobUrl = await getPlayableVideoUrl(post.file_url);
+            if (blobUrl !== post.file_url) {
+              this.videoBlobUrls[post.file_url] = blobUrl;
+            } else {
+              // Proxy failed — remember so getVideoSrc skips the proxy path
+              this._proxyFailedUrls[post.file_url] = true;
+            }
+          } catch (e) {
+            this._proxyFailedUrls[post.file_url] = true;
+          }
+        }
+      }
+    },
   },
   watch: {
     posts: 'observePosts',

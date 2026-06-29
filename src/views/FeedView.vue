@@ -67,13 +67,6 @@
             @canplay="onVideoCanPlay(post)"
             @error="onVideoError(post)"
           ></video>
-          <div 
-            v-else
-            class="flex items-center justify-center bg-gray-900 p-4 rounded"
-          >
-            <p>Unable to display media. <a :href="post.file_url" target="_blank" class="text-pink-500 underline">Open directly</a></p>
-          </div>
-
           <!-- Custom Loading Spinner -->
           <div 
             v-if="videoLoadingStates[getCompositeKey(post)]" 
@@ -138,11 +131,14 @@ export default {
       isProgrammaticVolumeChange: false, // Flag to ignore volumechange events during programmatic updates
       isResizing: false, // Flag to suspend scroll tracking during CSS animation
       videoLoadingStates: {}, // Map of composite key -> loading boolean
+      videoErrorStates: {}, // Map of composite key -> error boolean (CDN blocked)
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
       _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
+      _hasUserScrolled: false, // Flag to detect if user has scrolled (for autoplay logic)
       _accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
       _wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
       _clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
+      _initializedVideos: new Set(), // Track videos that have already started playback to prevent restart
     }
   },
   directives: {
@@ -265,7 +261,7 @@ export default {
     },
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
-      // Use blob URL if available (for Tauri production), otherwise use original
+      // Use blob URL if available (set by processVideoUrls via getPlayableVideoUrl)
       return this.videoBlobUrls[post.file_url] || post.file_url;
     },
     async processVideoUrls(posts) {
@@ -294,7 +290,7 @@ export default {
               this.videoBlobUrls[post.file_url] = blobUrl;
             }
           } catch (e) {
-            console.error('[FeedView] Failed to proxy video:', e);
+            // Silently fall back to original URL
           }
         }
       }
@@ -320,6 +316,7 @@ export default {
         this.page = 1;
         this.posts = [];
         this.currentPostIndex = -1;
+        this._hasUserScrolled = false;
         if (this.$refs.feedContainer) {
           this.$refs.feedContainer.scrollTop = 0;
         }
@@ -406,6 +403,7 @@ export default {
     },
     handleScroll() {
       if (this.isResizing) return;
+      this._hasUserScrolled = true;
       this.determineCurrentPost();
       const container = this.$refs.feedContainer;
       // Fetch more posts when we are 1 page away from the bottom (pre-fetching)
@@ -516,13 +514,16 @@ export default {
     },
     onVideoPlay(event, post) {
       if (this.posts[this.currentPostIndex] && this.getCompositeKey(this.posts[this.currentPostIndex]) !== this.getCompositeKey(post)) return;
-      
+
       // Enforce playback rate to prevent accidental speed changes
       const video = event.target;
       if (video.playbackRate !== 1.0) {
           video.playbackRate = 1.0;
       }
-      
+
+      // Mark as initialized so re-intersections don't reset playback
+      this._initializedVideos.add(video);
+
       this.$emit('video-state-change', { isPlaying: true });
     },
     onVideoPause(event, post) {
@@ -664,11 +665,29 @@ export default {
         delete this.videoLoadingTimeouts[key];
       }
       this.videoLoadingStates[key] = false;
+      this.videoErrorStates[key] = true;
     },
   },
   mounted() {
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
     this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
+
+    // Browsers may block autoplay until user interacts with the page.
+    // Add a one-time listener to unlock playback on first user gesture.
+    this._unlockAutoplay = () => {
+      const currentPost = this.posts[this.currentPostIndex];
+      if (currentPost) {
+        const videoEl = this.videoElements[this.getCompositeKey(currentPost)];
+        if (videoEl && videoEl.paused) {
+          videoEl.play().catch(() => {});
+        }
+      }
+      document.removeEventListener('click', this._unlockAutoplay);
+      document.removeEventListener('touchstart', this._unlockAutoplay);
+      this._unlockAutoplay = null;
+    };
+    document.addEventListener('click', this._unlockAutoplay);
+    document.addEventListener('touchstart', this._unlockAutoplay);
 
     this.observer = new IntersectionObserver(
       (entries) => {
@@ -677,43 +696,92 @@ export default {
           
           if (entry.isIntersecting) {
             if (video) {
-              // Set flag to prevent volumechange event from overwriting store
-              this.isProgrammaticVolumeChange = true;
-              
-              // Reset video progress to start when becoming visible
-              video.currentTime = 0;
-              
-              // Apply user's volume and mute preferences when video becomes visible
-              video.volume = this.volume;
-              // If defaultMuted is ON: always start this video muted
-              // If defaultMuted is OFF: inherit the current global mute state (from previous video)
-              const shouldMute = this.defaultMuted ? true : this.isMuted;
-              video.muted = shouldMute;
-              
-              // Sync store state with the actual video muted state so icon matches
-              if (shouldMute !== this.isMuted) {
-                this.$emit('video-state-change', { muted: shouldMute });
+              // For the first video on initial load (no user scroll yet),
+              // let native autoplay handle everything — don't interfere.
+              const isInitialVideo = this.currentPostIndex === 0 && !this._hasUserScrolled;
+
+              // Helper to apply mute preference once video is playing
+              const applyMutePreference = () => {
+                const shouldMute = this.defaultMuted ? true : this.isMuted;
+                video.muted = shouldMute;
+                if (shouldMute !== this.isMuted) {
+                  this.$emit('video-state-change', { muted: shouldMute });
+                }
+              };
+
+              // Listen for 'playing' event to unmute (only once per video)
+              if (!video._hasPlayingListener) {
+                video._hasPlayingListener = true;
+                const onPlaying = () => {
+                  this._initializedVideos.add(video);
+                  applyMutePreference();
+                };
+                video.addEventListener('playing', onPlaying);
               }
-              
-              // Clear flag after a short delay to allow volumechange event to pass
-              setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
-              
-              // Only auto-play if setting is enabled!
-              if (this.autoplayVideos) {
-                video.play().catch(e => {
-                  // If autoplay fails, try again with muted=true
-                  if (e.name === 'NotAllowedError') {
-                    video.muted = true;
-                    video.play().catch(() => {}); // Silently fail if still blocked
-                    // Sync global state to reflect fallback to muted
-                    this.$emit('video-state-change', { muted: true });
+
+              if (!isInitialVideo) {
+                // Set flag to prevent volumechange event from overwriting store
+                this.isProgrammaticVolumeChange = true;
+
+                // Reset progress and mute only on FIRST visibility
+                if (!this._initializedVideos.has(video)) {
+                  video.currentTime = 0;
+                  video.muted = true;
+                }
+
+                // Clear flag after a short delay to allow volumechange event to pass
+                setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
+              }
+
+              // Only auto-play if setting is enabled (and not the initial video)
+              if (this.autoplayVideos && !isInitialVideo) {
+                // Video revealed by scrolling — call play() to start playback
+                const attemptPlay = () => {
+                  video.play().then(() => {
+                    this._initializedVideos.add(video);
+                  }).catch(() => {
+                    // Retry once after a short delay
+                    setTimeout(() => {
+                      if (video.paused && this.autoplayVideos) {
+                        video.play().catch(() => {});
+                      }
+                    }, 500);
+                  });
+                };
+
+                if (video.readyState >= 2) {
+                  attemptPlay();
+                } else {
+                  let playStarted = false;
+                  const tryPlay = () => {
+                    if (playStarted) return;
+                    playStarted = true;
+                    video.removeEventListener('canplay', tryPlay);
+                    video.removeEventListener('loadeddata', tryPlay);
+                    attemptPlay();
+                  };
+                  video.addEventListener('canplay', tryPlay);
+                  video.addEventListener('loadeddata', tryPlay);
+                  if (video.readyState === 0) {
+                    video.load();
                   }
-                });
+                  setTimeout(() => {
+                    if (!playStarted && video.paused && this.autoplayVideos) {
+                      tryPlay();
+                    }
+                  }, 3000);
+                }
+              } else if (!this.autoplayVideos) {
+                // Even without autoplay, honor user's mute preference after element is ready
+                const shouldMute = this.defaultMuted ? true : this.isMuted;
+                video.muted = shouldMute;
               }
             }
           } else {
             if (video) {
               video.pause();
+              // Remove from initialized set so next time it enters view, it resets to start
+              this._initializedVideos.delete(video);
               // Set flag before muting to prevent event feedback
               this.isProgrammaticVolumeChange = true;
               // Only mute if we aren't already muted (reduce spam)
@@ -740,6 +808,10 @@ export default {
     this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
     if (this.observer) {
         this.observer.disconnect();
+    }
+    if (this._unlockAutoplay) {
+        document.removeEventListener('click', this._unlockAutoplay);
+        document.removeEventListener('touchstart', this._unlockAutoplay);
     }
     this.$emit('current-post-changed', null, null);
     this.stopAutoScroll();

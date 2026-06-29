@@ -3,6 +3,8 @@ import vue from '@vitejs/plugin-vue'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { readFileSync } from 'fs'
+import http from 'http'
+import https from 'https'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -46,12 +48,9 @@ export default defineConfig({
         secure: false,
         configure: (proxy, _options) => {
           proxy.on('proxyReq', (proxyReq, req, _res) => {
-            // Gelbooru might require a valid referer matching the domain?
-            // changeOrigin: true handles the Host header.
-            // We set User-Agent to satisfy WAF.
-            proxyReq.setHeader('Referer', 'https://gelbooru.com/'); // Added Referer often helps with 401/403
+            proxyReq.setHeader('Referer', 'https://gelbooru.com/');
             proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-            proxyReq.removeHeader('cookie'); // Still remove localhost cookies
+            proxyReq.removeHeader('cookie');
           });
         }
       },
@@ -70,49 +69,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/danbooru/, ''),
       },
-      // Danbooru CDN proxy for images/videos
-      '/danbooru-cdn/': {
-        target: 'https://cdn.donmai.us',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/danbooru-cdn/, ''),
-        secure: false,
-        configure: (proxy, _options) => {
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
-            // Danbooru CDN requires a valid referer
-            proxyReq.setHeader('Referer', 'https://danbooru.donmai.us/');
-            proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-            proxyReq.removeHeader('cookie');
-          });
-          proxy.on('proxyRes', (proxyRes, req, res) => {
-            // Add CORS headers for video playback
-            proxyRes.headers['Access-Control-Allow-Origin'] = '*';
-            proxyRes.headers['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS';
-            proxyRes.headers['Access-Control-Allow-Headers'] = 'Range';
-          });
-        }
-      },
-      // Gelbooru video CDN proxy
-      '/gelbooru-video/': {
-        target: 'https://video-cdn4.gelbooru.com',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/gelbooru-video/, ''),
-        secure: false,
-        configure: (proxy, _options) => {
-          proxy.on('proxyReq', (proxyReq, req, _res) => {
-            // Gelbooru may require a valid referer
-            proxyReq.setHeader('Referer', 'https://gelbooru.com/');
-            proxyReq.setHeader('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-            proxyReq.removeHeader('cookie');
-          });
-          proxy.on('proxyRes', (proxyRes, req, res) => {
-            // Add CORS headers for video playback
-            proxyRes.headers['Access-Control-Allow-Origin'] = '*';
-            proxyRes.headers['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS';
-            proxyRes.headers['Access-Control-Allow-Headers'] = 'Range';
-            proxyRes.headers['Access-Control-Expose-Headers'] = 'Content-Length, Content-Range';
-          });
-        }
-      }
     }
   },
   // to make use of `TAURI_PLATFORM`, `TAURI_ARCH`, `TAURI_FAMILY`, `TAURI_PLATFORM_VERSION`, `TAURI_PLATFORM_TYPE` and `TAURI_DEBUG`
@@ -126,4 +82,72 @@ export default defineConfig({
     // produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_DEBUG,
   },
+  configureServer(server) {
+    // Custom middleware to proxy video requests from Danbooru CDN
+    // This bypasses CORP/CORS restrictions by fetching server-side
+    server.middlewares.use('/video-proxy', async (req, res) => {
+      // Get the encoded URL from path (e.g., /video-proxy/https%3A%2F%2F...)
+      const pathname = req.url.split('?')[0]
+      const prefix = '/video-proxy/'
+      if (!pathname.startsWith(prefix)) {
+        res.writeHead(400)
+        res.end('Invalid path')
+        return
+      }
+      
+      const encodedUrl = pathname.slice(prefix.length)
+      const decodedUrl = decodeURIComponent(encodedUrl)
+      
+      // Only allow danbooru/video CDN URLs
+      if (!decodedUrl.startsWith('https://cdn.donmai.us/') && 
+          !decodedUrl.startsWith('https://video-cdn')) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' })
+        res.end('Only Danbooru CDN URLs are allowed')
+        return
+      }
+
+      const client = decodedUrl.startsWith('https:') ? https : http
+      
+      const proxyReq = client.request(decodedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'video/mp4,video/webm,video/*;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Referer': 'https://danbooru.donmai.us/',
+        },
+        rejectUnauthorized: false,
+      }, (proxyRes) => {
+        // Check if we got video content or a Cloudflare challenge page
+        const contentType = proxyRes.headers['content-type'] || '';
+        if (!contentType.startsWith('video/') && !contentType.startsWith('application/octet-stream')) {
+          // CDN returned non-video content (likely Cloudflare challenge)
+          res.writeHead(502, { 'Content-Type': 'text/plain' });
+          res.end('CDN blocked request');
+          return;
+        }
+        // Forward response headers, overriding CORS
+        const headers = { ...proxyRes.headers }
+        headers['Access-Control-Allow-Origin'] = '*'
+        headers['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS'
+        headers['Access-Control-Allow-Headers'] = 'Range, Content-Type'
+        headers['Access-Control-Expose-Headers'] = 'Content-Length, Content-Range, Accept-Ranges'
+        delete headers['cross-origin-resource-policy']
+        delete headers['cross-origin-opener-policy']
+        delete headers['x-frame-options']
+        delete headers['content-security-policy']
+        
+        res.writeHead(proxyRes.statusCode, headers)
+        proxyRes.pipe(res, { end: true })
+      })
+
+      proxyReq.on('error', () => {
+        if (!res.headersSent) {
+          res.writeHead(502)
+          res.end('Proxy error')
+        }
+      })
+
+      proxyReq.end()
+    })
+  }
 })
