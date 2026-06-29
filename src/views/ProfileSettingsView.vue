@@ -348,7 +348,7 @@
                 <input
                   v-model="downloadLocation"
                   type="text"
-                  placeholder="e.g. ~/Downloads/BooruRamen"
+                  placeholder="~/Downloads/BooruRamen"
                   class="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:border-pink-500 focus:outline-none"
                   @change="saveDownloadSettings"
                 />

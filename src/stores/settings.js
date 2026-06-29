@@ -23,7 +23,7 @@ export const useSettingsStore = defineStore('settings', {
         debugMode: false,
         avoidedTags: [],
         // Download settings
-        downloadLocation: '',
+        downloadLocation: '~/Downloads/BooruRamen',
         downloadLiked: false,
         downloadFavorited: false,
         downloadSeparateFolders: false,

@@ -283,6 +283,7 @@ import { useInteractionsStore } from './stores/interactions';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
 import recommendationSystem from './services/RecommendationSystem.js';
+import DownloadService from './services/DownloadService.js';
 
 import BottomNavBar from './components/BottomNavBar.vue';
 import CommentsSheet from './components/CommentsSheet.vue';
@@ -431,7 +432,9 @@ export default {
       'activeSource',
       'customSources',
       'debugMode',
-      'enabledRatings'
+      'enabledRatings',
+      'downloadLiked',
+      'downloadFavorited'
     ]),
     // Map player store state
     ...mapWritableState(usePlayerStore, [
@@ -635,6 +638,10 @@ export default {
                 value: 0,
                 metadata: { post }
             });
+            // Auto-download if enabled
+            if (this.downloadLiked) {
+              this.downloadPostFile(post, 'liked');
+            }
         }
     },
     toggleDislike(post) {
@@ -667,11 +674,23 @@ export default {
             value: post.favorited ? 1 : 0,
             metadata: { post }
         });
+        // Auto-download if enabled
+        if (post.favorited && this.downloadFavorited) {
+          this.downloadPostFile(post, 'favorited');
+        }
     },
 
     openComments(post) {
-        if (!post) return;
-        this.commentsPost = post;
+      if (!post) return;
+      this.commentsPost = post;
+    },
+
+    async downloadPostFile(post, type) {
+      try {
+        await DownloadService.downloadPost(post, type);
+      } catch (error) {
+        console.error('Auto-download failed:', error);
+      }
     },
 
     toggleRating(rating) {
