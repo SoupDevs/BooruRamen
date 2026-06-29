@@ -160,11 +160,8 @@
                   Enable rating categories to make their toggles available in the feed settings sidebar.
                 </p>
               </div>
-              <!-- 18+ Warning -->
-              <div
-                v-if="showRatingWarning"
-                class="mb-3 p-3 bg-yellow-900/40 border border-yellow-600/50 rounded-lg"
-              >
+              <!-- 18+ Warning (always visible) -->
+              <div class="mb-3 p-3 bg-yellow-900/40 border border-yellow-600/50 rounded-lg">
                 <div class="flex items-start gap-2">
                   <svg viewBox="0 0 24 24" class="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
@@ -186,7 +183,7 @@
                     <p class="text-xs text-gray-500">{{ rating.description }}</p>
                   </div>
                   <button
-                    @click="toggleEnabledRating(rating.id)"
+                    @click="handleRatingToggle(rating.id)"
                     class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
                     :class="enabledRatings.includes(rating.id) ? 'bg-pink-600' : 'bg-gray-600'"
                   >
@@ -539,6 +536,72 @@
       </div>
     </div>
 
+    <!-- Age Confirmation Modal -->
+    <transition name="age-modal">
+      <div v-if="showAgeModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
+        <div class="bg-gray-800 rounded-lg max-w-md w-full p-8 shadow-xl border border-gray-700">
+          <div class="flex items-start gap-3 mb-6">
+            <svg viewBox="0 0 24 24" class="w-8 h-8 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            </svg>
+            <div>
+              <h3 class="text-xl font-bold mb-1">Age Restricted Content</h3>
+              <p class="text-sm text-gray-400">Enabling ratings beyond General may allow 18+ sexual or other adult content. You must confirm you are 18 or older to enable these ratings.</p>
+            </div>
+          </div>
+
+          <div class="mb-6">
+            <label class="text-sm font-medium block mb-2">Date of Birth</label>
+            <div class="grid grid-cols-3 gap-2">
+              <div>
+                <select
+                  v-model="ageMonth"
+                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
+                >
+                  <option value="" disabled>Month</option>
+                  <option v-for="m in 12" :key="m" :value="m">{{ m }}</option>
+                </select>
+              </div>
+              <div>
+                <select
+                  v-model="ageDay"
+                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
+                >
+                  <option value="" disabled>Day</option>
+                  <option v-for="d in 31" :key="d" :value="d">{{ d }}</option>
+                </select>
+              </div>
+              <div>
+                <select
+                  v-model="ageYear"
+                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
+                >
+                  <option value="" disabled>Year</option>
+                  <option v-for="y in ageYearOptions" :key="y" :value="y">{{ y }}</option>
+                </select>
+              </div>
+            </div>
+            <p v-if="ageError" class="text-red-400 text-xs mt-2">{{ ageError }}</p>
+          </div>
+
+          <div class="flex gap-3">
+            <button
+              @click="cancelAgeConfirmation"
+              class="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded text-white font-medium transition"
+            >
+              Cancel
+            </button>
+            <button
+              @click="confirmAge"
+              class="flex-1 px-4 py-2.5 bg-pink-600 hover:bg-pink-700 rounded text-white font-medium transition"
+            >
+              Confirm
+            </button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
     <!-- About/License Note -->
     <div class="mt-16 pb-8 text-center border-t border-gray-800 pt-8 opacity-40">
       <p class="text-sm font-semibold text-gray-400">BooruRamen v{{ appVersion }}</p>
@@ -595,6 +658,15 @@ export default {
       // Folder picker status
       folderStatus: null,
 
+      // Age confirmation
+      showAgeModal: false,
+      pendingRatingId: null,
+      ageMonth: '',
+      ageDay: '',
+      ageYear: '',
+      ageError: '',
+      ageConfirmed: false, // persists for session once confirmed
+
       // Rating definitions
       allRatings: [
         { id: 'general', label: 'General', description: 'Safe for all ages' },
@@ -629,6 +701,14 @@ export default {
     },
     showRatingWarning() {
       return this.enabledRatings.some(r => r !== 'general');
+    },
+    ageYearOptions() {
+      const currentYear = new Date().getFullYear();
+      const years = [];
+      for (let y = currentYear; y >= currentYear - 120; y--) {
+        years.push(y);
+      }
+      return years;
     },
   },
   async mounted() {
@@ -671,6 +751,61 @@ export default {
       if (this.navigationStack.length > 0) {
         this.navigationStack.pop();
       }
+    },
+
+    // Rating toggle with age gate
+    handleRatingToggle(ratingId) {
+      // Disabling: always allow
+      if (this.enabledRatings.includes(ratingId)) {
+        this.toggleEnabledRating(ratingId);
+        return;
+      }
+      // Enabling general: no age check needed
+      if (ratingId === 'general') {
+        this.toggleEnabledRating(ratingId);
+        return;
+      }
+      // Enabling non-general: check if already confirmed this session
+      if (this.ageConfirmed) {
+        this.toggleEnabledRating(ratingId);
+        return;
+      }
+      // First time enabling non-general: show age confirmation
+      this.pendingRatingId = ratingId;
+      this.ageMonth = '';
+      this.ageDay = '';
+      this.ageYear = '';
+      this.ageError = '';
+      this.showAgeModal = true;
+    },
+    confirmAge() {
+      if (!this.ageMonth || !this.ageDay || !this.ageYear) {
+        this.ageError = 'Please enter your full date of birth.';
+        return;
+      }
+      const now = new Date();
+      const birthDate = new Date(this.ageYear, this.ageMonth - 1, this.ageDay);
+      let age = now.getFullYear() - birthDate.getFullYear();
+      const monthDiff = now.getMonth() - birthDate.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
+        age--;
+      }
+      if (age < 18) {
+        this.ageError = 'You must be 18 or older to enable ratings beyond General.';
+        return;
+      }
+      // Age confirmed
+      this.ageConfirmed = true;
+      this.showAgeModal = false;
+      if (this.pendingRatingId) {
+        this.toggleEnabledRating(this.pendingRatingId);
+        this.pendingRatingId = null;
+      }
+    },
+    cancelAgeConfirmation() {
+      this.showAgeModal = false;
+      this.pendingRatingId = null;
+      this.ageError = '';
     },
 
     toggleHistory() {
@@ -1017,6 +1152,22 @@ export default {
 }
 .slide-leave-to {
   transform: translateX(-30px);
+  opacity: 0;
+}
+
+/* Age modal: scale up from center */
+.age-modal-enter-active {
+  transition: transform 0.3s ease, opacity 0.3s ease;
+}
+.age-modal-leave-active {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.age-modal-enter-from {
+  transform: scale(0.85);
+  opacity: 0;
+}
+.age-modal-leave-to {
+  transform: scale(0.9);
   opacity: 0;
 }
 </style>
