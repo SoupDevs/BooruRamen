@@ -149,8 +149,8 @@
         </div>
       </div>
       
-      <!-- Rating selection (only show ratings enabled in profile settings) -->
-      <div v-if="visibleRatings.length > 0" class="mb-4">
+      <!-- Rating selection (only show when multiple ratings enabled in profile settings) -->
+      <div v-if="visibleRatings.length > 1" class="mb-4">
         <label class="text-sm font-medium block mb-2">Rating</label>
         <div class="space-y-2">
           <div v-for="rating in visibleRatings" :key="rating" class="flex items-center justify-between">
