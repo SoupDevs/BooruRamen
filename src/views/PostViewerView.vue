@@ -85,6 +85,7 @@ export default {
       videoBlobUrls: {}, // Map of original URL -> blob URL for CORS bypass
       _visiblePostKeys: {}, // Track which posts are currently visible (reactive object: { postId: true })
       _visibilityVersion: 0, // Counter to force re-renders on visibility change
+      _proxyFailedUrls: {}, // Track URLs that failed proxy (skip proxy path next time)
     };
   },
   computed: {
@@ -338,10 +339,9 @@ export default {
       if (this.videoBlobUrls[post.file_url]) {
         return this.videoBlobUrls[post.file_url];
       }
-      // In dev mode, route through same-origin proxy to avoid CORP blocks
-      if (import.meta.env.DEV) {
-        return `/video-proxy/${encodeURIComponent(post.file_url)}`;
-      }
+      // Only use proxy URL if processVideoUrls hasn't run yet or is still pending.
+      // If the proxy already failed (returned original URL), videoBlobUrls stays empty
+      // and we fall back to the direct CDN URL which the browser handles natively.
       return post.file_url;
     },
     isPostVisible(post) {
@@ -358,13 +358,18 @@ export default {
       for (const post of posts) {
         if (this.isVideo(post) && post.file_url) {
           if (this.videoBlobUrls[post.file_url]) continue;
+          // Skip if already known to fail the proxy
+          if (this._proxyFailedUrls[post.file_url]) continue;
           try {
             const blobUrl = await getPlayableVideoUrl(post.file_url);
             if (blobUrl !== post.file_url) {
               this.videoBlobUrls[post.file_url] = blobUrl;
+            } else {
+              // Proxy failed — remember so getVideoSrc skips the proxy path
+              this._proxyFailedUrls[post.file_url] = true;
             }
           } catch (e) {
-            console.error('[PostViewerView] Failed to proxy video:', e);
+            this._proxyFailedUrls[post.file_url] = true;
           }
         }
       }
