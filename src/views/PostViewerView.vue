@@ -83,7 +83,8 @@ export default {
       currentPostIndex: 0,
       observer: null,
       videoBlobUrls: {}, // Map of original URL -> blob URL for CORS bypass
-      _visiblePostKeys: new Set(), // Track which posts are currently visible
+      _visiblePostKeys: {}, // Track which posts are currently visible (reactive object: { postId: true })
+      _visibilityVersion: 0, // Counter to force re-renders on visibility change
     };
   },
   computed: {
@@ -118,19 +119,19 @@ export default {
             const postKey = postEl.dataset.postKey;
             const video = postEl.querySelector('video');
             if (entry.isIntersecting) {
-              this._visiblePostKeys.add(postKey);
+              this._visiblePostKeys[postKey] = true;
               if (this.autoplayVideos && video) {
                 this._playVideo(video);
               }
             } else {
-              this._visiblePostKeys.delete(postKey);
+              delete this._visiblePostKeys[postKey];
               video?.pause();
             }
           });
-          // Trigger reactivity for getVideoSrc
-          this._visiblePostKeys = new Set(this._visiblePostKeys);
+          // Increment version to force method-based template expressions (isPostVisible) to re-evaluate
+          this._visibilityVersion++;
         },
-        { threshold: 0.5 }
+        { threshold: 0.1 }
       );
       this.observePosts();
     },
@@ -188,8 +189,33 @@ export default {
                 container.scrollTop = postElements[targetIndex].offsetTop;
                 this.currentPostIndex = targetIndex;
                 this.$emit('current-post-changed', this.posts[this.currentPostIndex], this.$refs.videoPlayer?.[this.currentPostIndex]);
+                // Immediately mark the visible post so video element renders without waiting for IO callback
+                this.syncVisiblePosts();
             }
         }
+    },
+    syncVisiblePosts() {
+      // Manually determine which posts are in view (reliable fallback for initial load / IO timing)
+      const container = this.$refs.viewerContainer;
+      if (!container) return;
+      const containerRect = container.getBoundingClientRect();
+      const containerMidY = containerRect.top + containerRect.height / 2;
+      const postElements = container.querySelectorAll('.snap-start');
+      let changed = false;
+      postElements.forEach(el => {
+        const rect = el.getBoundingClientRect();
+        const postMidY = rect.top + rect.height / 2;
+        const isVisible = Math.abs(containerMidY - postMidY) < rect.height * 0.6;
+        const postKey = el.dataset.postKey;
+        if (isVisible && !this._visiblePostKeys[postKey]) {
+          this._visiblePostKeys[postKey] = true;
+          changed = true;
+        } else if (!isVisible && this._visiblePostKeys[postKey]) {
+          delete this._visiblePostKeys[postKey]
+          changed = true;
+        }
+      });
+      if (changed) this._visibilityVersion++;
     },
     async determineCurrentPost() {
       const container = this.$refs.viewerContainer;
@@ -220,6 +246,8 @@ export default {
           await StorageService.trackPostView(currentPost.id, currentPost, currentPost.source);
         }
       }
+      // Sync visibility on every scroll for reliability
+      this.syncVisiblePosts();
     },
     observePosts() {
       if (!this.observer) return;
@@ -317,7 +345,9 @@ export default {
       return post.file_url;
     },
     isPostVisible(post) {
-      return this._visiblePostKeys && this._visiblePostKeys.has(String(post.id));
+      // Touch _visibilityVersion to register a reactive dependency — forces re-evaluate when version changes
+      const _v = this._visibilityVersion;
+      return !!this._visiblePostKeys[String(post.id)];
     },
     togglePlayPause(event) {
         const video = event.target;
