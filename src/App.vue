@@ -886,14 +886,8 @@ export default {
       this.initializePlayer();
       this.initializeInteractions();
       
-      // Sync settings from URL query params (deep links)
       if (Object.keys(this.$route.query).length > 0) {
           this.syncSettingsFromQuery(this.$route.query);
-      } else if (this.$route.name === 'Home') {
-          // On cold start with no query params, adopt the persisted mediaType/ratings
-          // settings into the route query so the FeedView applies the user's saved
-          // image/video filter on first load instead of defaulting to showing all media.
-          this.$router.replace({ name: 'Home', query: this.generateQueryFromSettings() });
       }
       
       window.addEventListener('keydown', this.handleKeydown);

@@ -170,7 +170,7 @@ export default {
     }
   },
   computed: {
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'mediaType', 'whitelistTags', 'blacklistTags']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Calculate max height for media based on comments sheet
@@ -372,8 +372,8 @@ export default {
             whitelist: activeWhitelist,
             blacklist: activeBlacklist,
             existingPostIds: blockedKeys, 
-            wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : this.mediaType.images,
-            wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : this.mediaType.videos,
+            wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : true,
+            wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : true,
           });
           
           if (batch.length > 0) {
