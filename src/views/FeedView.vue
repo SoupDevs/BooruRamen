@@ -485,10 +485,9 @@ export default {
         if (!this.videoElements[key] || this.videoElements[key] !== el) {
             this.videoElements[key] = el;
             el.volume = this.volume;
-            // Apply mute preference: if defaultMuted is ON, keep muted (autoplay compliance).
-            // If defaultMuted is OFF and user is unmuted, start unmuted so audio plays on scroll.
-            const shouldMute = this.defaultMuted ? true : this.isMuted;
-            el.muted = shouldMute;
+            // If defaultMuted is ON, start muted. If OFF, inherit current mute state.
+            // Use muted=true for initial autoplay compliance, IntersectionObserver will set correct state when visible.
+            el.muted = true; // Safe default for autoplay
             el.currentTime = 0; // Reset progress to prevent carryover
         }
       }
@@ -700,52 +699,37 @@ export default {
               // let native autoplay handle everything — don't interfere.
               const isInitialVideo = this.currentPostIndex === 0 && !this._hasUserScrolled;
 
-              // Helper to apply mute preference safely on every visibility change
+              // Helper to apply mute preference once video is playing
               const applyMutePreference = () => {
-                if (!video.paused || video.readyState >= 1) {
-                  const shouldMute = this.defaultMuted ? true : this.isMuted;
-                  video.muted = shouldMute;
-                  if (shouldMute !== this.isMuted) {
-                    this.$emit('video-state-change', { muted: shouldMute });
-                  }
+                const shouldMute = this.defaultMuted ? true : this.isMuted;
+                video.muted = shouldMute;
+                if (shouldMute !== this.isMuted) {
+                  this.$emit('video-state-change', { muted: shouldMute });
                 }
               };
 
-              // Listen for 'playing' event to apply mute preference when it fires
-              // This also handles re-buffering scenarios where the video naturally restarts
+              // Listen for 'playing' event to unmute (only once per video)
               if (!video._hasPlayingListener) {
                 video._hasPlayingListener = true;
-                video.addEventListener('playing', () => {
+                const onPlaying = () => {
                   this._initializedVideos.add(video);
                   applyMutePreference();
-                });
+                };
+                video.addEventListener('playing', onPlaying);
               }
 
               if (!isInitialVideo) {
                 // Set flag to prevent volumechange event from overwriting store
                 this.isProgrammaticVolumeChange = true;
 
-                // Reset progress only on FIRST visibility
+                // Reset progress and mute only on FIRST visibility
                 if (!this._initializedVideos.has(video)) {
                   video.currentTime = 0;
+                  video.muted = true;
                 }
 
-                // Apply mute preference immediately (not relying solely on one-shot listener)
-                // Start muted for autoplay compliance, then unmuted after play begins
-                video.muted = true;
-
-                // After a short delay for autoplay policy, apply the real preference
-                setTimeout(() => {
-                  if (this._initializedVideos.has(video) || !video.paused) {
-                    applyMutePreference();
-                  }
-                }, 100);
-
-                // Clear flag after a longer delay to allow volumechange events to settle
-                setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 150);
-              } else {
-                // Initial video: apply mute preference after it starts playing
-                setTimeout(() => { applyMutePreference(); }, 200);
+                // Clear flag after a short delay to allow volumechange event to pass
+                setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
               }
 
               // Only auto-play if setting is enabled (and not the initial video)
