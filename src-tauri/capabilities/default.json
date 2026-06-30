@@ -7,6 +7,31 @@
   ],
   "permissions": [
     "core:default",
+    "fs:default",
+    "dialog:default",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$DOWNLOAD/**/*" },
+        { "path": "$DOWNLOAD" },
+        { "path": "$DESKTOP/**/*" },
+        { "path": "$DOCUMENT/**/*" },
+        { "path": "$DATA/**/*" },
+        { "path": "$HOME/**/*" },
+        { "path": "$APPDATA/**/*" },
+        { "path": "$APPLOCALDATA/**/*" },
+        { "path": "$LOCALDATA/**/*" },
+        { "path": "$PICTURE/**/*" },
+        { "path": "$VIDEO/**/*" },
+        { "path": "$PUBLIC/**/*" },
+        { "path": "$EXE/**/*" },
+        { "path": "$FONT/**/*" },
+        { "path": "$TEMPLATE/**/*" },
+        { "path": "$CACHE/**/*" },
+        { "path": "$LOG/**/*" },
+        { "path": "$TEMP/**/*" }
+      ]
+    },
     {
       "identifier": "http:default",
       "allow": [

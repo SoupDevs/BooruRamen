@@ -619,6 +619,7 @@ import { useSettingsStore } from '../stores/settings';
 import { useInteractionsStore } from '../stores/interactions';
 import StorageService from '../services/StorageService';
 import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSystem';
+import * as DownloadService from '../services/DownloadService';
 
 import BooruService from '../services/BooruService';
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from '../services/BooruAdapters';
@@ -823,27 +824,16 @@ export default {
       this.saveSettings();
     },
     async browseDownloadFolder() {
-      // Use the File System Access API if available (Chromium browsers)
-      if (window.showDirectoryPicker) {
-        try {
-          const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-          this.downloadLocation = dirHandle.name;
-          this.folderStatus = { ok: true, message: `Selected: ${dirHandle.name}` };
-          this.saveDownloadSettings();
-        } catch (err) {
-          // User cancelled the picker
-          if (err.name !== 'AbortError') {
-            this.folderStatus = { ok: false, message: 'Could not open folder picker. Enter the path manually.' };
-          }
-        }
-      } else {
-        // Fallback: prompt the user
-        const path = prompt('Enter download folder path:', this.downloadLocation || '~/Downloads/BooruRamen');
-        if (path !== null) {
-          this.downloadLocation = path;
-          this.saveDownloadSettings();
-        }
+      const result = await DownloadService.browseDownloadFolder();
+      if (result.ok && result.path) {
+        this.downloadLocation = result.path;
+        this.folderStatus = { ok: true, message: result.message };
+        this.saveDownloadSettings();
+      } else if (result.message && result.message !== 'Folder selection cancelled.' && result.message !== 'Cancelled.') {
+        this.folderStatus = { ok: false, message: result.message };
       }
+      // Clear status after a few seconds
+      setTimeout(() => { this.folderStatus = null; }, 5000);
     },
 
     async saveAvoidedTags() {
