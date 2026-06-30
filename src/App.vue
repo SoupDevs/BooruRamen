@@ -503,6 +503,14 @@ export default {
       this.accumulatedWatchTime = 0;
       this.startWatchTimeTracking();
 
+      // Remove old play/pause listeners from previous video element
+      if (this._videoPlayPauseCleanup && this._currentPlayPauseVideoEl) {
+        this._currentPlayPauseVideoEl.removeEventListener('play', this._onDirectPlay);
+        this._currentPlayPauseVideoEl.removeEventListener('pause', this._onDirectPause);
+        this._currentPlayPauseVideoEl.removeEventListener('timeupdate', this._onDirectTimeUpdate);
+        this._videoPlayPauseCleanup = null;
+      }
+
       this.currentPost = post;
       this.currentVideoElement = videoEl;
 
@@ -538,6 +546,25 @@ export default {
         if (shouldMute !== this.muted) {
           this.muted = shouldMute;
         }
+
+        // Directly listen to video element for play/pause/time updates
+        // This keeps the controls in sync regardless of FeedView's event filtering
+        this._onDirectPlay = () => { this.isPlaying = true; };
+        this._onDirectPause = () => { this.isPlaying = false; };
+        this._onDirectTimeUpdate = (e) => {
+          const v = e.target;
+          if (v.duration && !isNaN(v.duration)) {
+            this.videoProgress = (v.currentTime / v.duration) * 100;
+          }
+        };
+        videoEl.addEventListener('play', this._onDirectPlay);
+        videoEl.addEventListener('pause', this._onDirectPause);
+        videoEl.addEventListener('timeupdate', this._onDirectTimeUpdate);
+        this._currentPlayPauseVideoEl = videoEl;
+        this._videoPlayPauseCleanup = true;
+
+        // Reflect current playback state immediately
+        this.isPlaying = !videoEl.paused;
       }
       
       if (this.debugMode && post) {
@@ -773,11 +800,12 @@ export default {
     },
     seekVideo(e) {
         if (!this.currentVideoElement) return;
-        const rect = e.target.getBoundingClientRect();
+        const duration = this.currentVideoElement.duration;
+        if (!duration || isNaN(duration)) return;
+        const rect = this.$refs.progressBar.getBoundingClientRect();
         const x = e.clientX - rect.left;
-        const width = rect.width;
-        const percentage = x / width;
-        const time = percentage * this.currentVideoElement.duration;
+        const percentage = Math.max(0, Math.min(x / rect.width, 1));
+        const time = percentage * duration;
         this.currentVideoElement.currentTime = time;
         this.videoProgress = percentage * 100;
     },
@@ -787,16 +815,16 @@ export default {
         document.addEventListener('mouseup', this.stopProgressDrag);
     },
     handleProgressDrag(e) {
-        if (!this.isProgressDragging || !this.$refs.progressBar) return;
+        if (!this.isProgressDragging || !this.$refs.progressBar || !this.currentVideoElement) return;
+        const duration = this.currentVideoElement.duration;
+        if (!duration || isNaN(duration)) return;
         const rect = this.$refs.progressBar.getBoundingClientRect();
         let x = e.clientX - rect.left;
         x = Math.max(0, Math.min(x, rect.width));
         const percentage = x / rect.width;
         this.videoProgress = percentage * 100;
-        if (this.currentVideoElement) {
-             const time = percentage * this.currentVideoElement.duration;
-             this.currentVideoElement.currentTime = time;
-        }
+        const time = percentage * duration;
+        this.currentVideoElement.currentTime = time;
     },
     stopProgressDrag() {
         this.isProgressDragging = false;
@@ -894,7 +922,13 @@ export default {
   },
   beforeUnmount() {
       window.removeEventListener('keydown', this.handleKeydown);
-  }
+      // Clean up direct video listeners
+      if (this._videoPlayPauseCleanup && this._currentPlayPauseVideoEl) {
+        this._currentPlayPauseVideoEl.removeEventListener('play', this._onDirectPlay);
+        this._currentPlayPauseVideoEl.removeEventListener('pause', this._onDirectPause);
+        this._currentPlayPauseVideoEl.removeEventListener('timeupdate', this._onDirectTimeUpdate);
+      }
+  },
 }
 </script>
 
