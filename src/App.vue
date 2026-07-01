@@ -271,6 +271,60 @@
       />
     </div>
     <BottomNavBar @navigate-feed="navigateToFeed" />
+    <!-- Download indicator overlay -->
+    <div
+      v-if="downloadState !== 'idle'"
+      class="fixed inset-0 z-[100] flex items-center justify-center pointer-events-none"
+    >
+      <div class="bg-gray-900/95 backdrop-blur-md rounded-2xl p-6 max-w-xs w-full mx-4 shadow-2xl border border-gray-700 pointer-events-auto">
+        <div class="flex items-center gap-3 mb-3">
+          <svg
+            v-if="downloadState === 'downloading'"
+            class="w-6 h-6 text-pink-500 animate-spin flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.25" />
+            <path d="M22 12a10 10 0 01-10 10" stroke-linecap="round" />
+          </svg>
+          <svg
+            v-else-if="downloadState === 'complete'"
+            class="w-6 h-6 text-green-400 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+          >
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <svg
+            v-else-if="downloadState === 'error'"
+            class="w-6 h-6 text-red-400 flex-shrink-0"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-medium text-white truncate">
+              {{ downloadState === 'downloading' ? 'Downloading...' : downloadState === 'complete' ? 'Downloaded!' : 'Download Failed' }}
+            </p>
+            <p class="text-xs text-gray-400 truncate">{{ downloadFilename || downloadMessage }}</p>
+          </div>
+        </div>
+        <div v-if="downloadState === 'downloading'" class="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+          <div
+            class="bg-pink-500 h-full rounded-full transition-all duration-300"
+            :style="{ width: downloadProgress + '%' }"
+          ></div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -340,6 +394,12 @@ export default {
       recommendationSystem,
       
       debugDetails: null, // Store for calculated debug info
+
+      // Download indicator state
+      downloadState: 'idle',
+      downloadMessage: '',
+      downloadProgress: 0,
+      downloadFilename: '',
     };
   },
   watch: {

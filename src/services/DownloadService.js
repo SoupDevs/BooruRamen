@@ -12,10 +12,13 @@
  * Handles downloading post files to the user's filesystem.
  * Works in three contexts:
  *   1. Tauri desktop (Windows/macOS/Linux) — uses native fs + dialog plugins
- *   2. Tauri mobile (Android/iOS) — uses native dialog for folder selection,
- *      then writes via the fs plugin (scoped storage on Android)
+ *   2. Tauri mobile (Android/iOS) — uses downloadDir() from path API as the base,
+ *      fs plugin for writing. Folder picker via SAF dialog.
  *   3. Browser (web) — uses File System Access API when available,
  *      falls back to anchor-download with subpath encoded in filename
+ *
+ * Status callbacks via setStatusCallback(fn):
+ *   fn({ state: 'idle'|'downloading'|'complete'|'error', message, progress, filename })
  */
 
 import { useSettingsStore } from '../stores/settings';
@@ -25,6 +28,7 @@ import { useSettingsStore } from '../stores/settings';
 // ---------------------------------------------------------------------------
 
 let _isTauri = null;
+let _isMobile = null;
 
 export function isTauri() {
   if (_isTauri !== null) return _isTauri;
@@ -32,12 +36,28 @@ export function isTauri() {
   return _isTauri;
 }
 
+export function isMobile() {
+  if (_isMobile !== null) return _isMobile;
+  if (!isTauri()) {
+    _isMobile = false;
+    return false;
+  }
+  try {
+    const ua = navigator.userAgent || '';
+    _isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  } catch {
+    _isMobile = false;
+  }
+  return _isMobile;
+}
+
 // ---------------------------------------------------------------------------
-// Lazy-loaded Tauri plugins (only imported when running inside Tauri)
+// Lazy-loaded Tauri plugins
 // ---------------------------------------------------------------------------
 
 let _tauriFs = null;
 let _tauriDialog = null;
+let _tauriPath = null;
 
 async function getTauriFs() {
   if (_tauriFs !== null) return _tauriFs;
@@ -59,18 +79,44 @@ async function getTauriDialog() {
   return _tauriDialog;
 }
 
+async function getTauriPath() {
+  if (_tauriPath !== null) return _tauriPath;
+  try {
+    _tauriPath = await import('@tauri-apps/api/path');
+  } catch {
+    _tauriPath = false;
+  }
+  return _tauriPath;
+}
+
+// ---------------------------------------------------------------------------
+// Status callback (set by App.vue for UI indicator)
+// ---------------------------------------------------------------------------
+
+let _statusCallback = null;
+
+export function setStatusCallback(fn) {
+  _statusCallback = fn;
+}
+
+function reportStatus(state, message = '', progress = 0, filename = '') {
+  if (_statusCallback) {
+    _statusCallback({ state, message, progress, filename });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the effective download location.
- * Returns the user-configured path or the platform default.
+ * Resolve the effective download base location.
  */
-export function getDownloadLocation() {
+export async function getDownloadLocation() {
   const store = useSettingsStore();
   if (store.downloadLocation) {
-    return store.downloadLocation;
+    const expanded = await expandPath(store.downloadLocation);
+    return expanded;
   }
   return getDefaultDownloadPath();
 }
@@ -78,17 +124,29 @@ export function getDownloadLocation() {
 /**
  * Get the default download path for the current platform.
  */
-export function getDefaultDownloadPath() {
+export async function getDefaultDownloadPath() {
+  if (isTauri()) {
+    const tp = await getTauriPath();
+    if (tp) {
+      try {
+        return await tp.downloadDir();
+      } catch {
+        try {
+          return await tp.documentDir();
+        } catch {
+          return await tp.appLocalDataDir();
+        }
+      }
+    }
+  }
   return '~/Downloads/BooruRamen';
 }
 
 /**
- * Resolve the full file path for a post download,
- * accounting for separate subfolders if enabled.
- * Returns a path like "BooruRamen/Liked/danbooru_12345.png"
- * (relative to the chosen base directory).
+ * Resolve the relative file path for a post download.
+ * Returns something like "Liked/danbooru_12345.png"
  */
-export function resolvePostPath(post, interactionType = 'liked') {
+export function resolvePostSubPath(post, interactionType = 'liked') {
   const store = useSettingsStore();
   const parts = [];
 
@@ -100,8 +158,7 @@ export function resolvePostPath(post, interactionType = 'liked') {
     }
   }
 
-  const filename = buildFilename(post);
-  parts.push(filename);
+  parts.push(buildFilename(post));
   return parts.join('/');
 }
 
@@ -123,154 +180,172 @@ function getFileExtensionFromUrl(url) {
   if (!url) return null;
   try {
     const pathname = new URL(url).pathname;
-    const match = pathname.match(/\.(\w+)$/);
+    const match = pathname.match(/\.(\w+)(?:\?.*)?$/);
     return match ? match[1] : null;
   } catch {
     return null;
   }
 }
 
+/**
+ * Expand a path that starts with ~ to the user's home directory.
+ */
+async function expandPath(inputPath) {
+  if (!inputPath || !inputPath.startsWith('~/')) return inputPath;
+
+  try {
+    const tp = await getTauriPath();
+    if (tp) {
+      const homeDir = await tp.homeDir();
+      return inputPath.replace('~', homeDir);
+    }
+  } catch {
+    // fallback
+  }
+  return inputPath;
+}
+
+/**
+ * Ensure a directory exists, creating parent dirs as needed.
+ */
+async function ensureDir(dirPath) {
+  const fs = await getTauriFs();
+  if (!fs) return;
+
+  try {
+    await fs.mkdir(dirPath, { recursive: true });
+  } catch {
+    // Already exists or cannot create
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Tauri native download (desktop + mobile)
+// Tauri download (desktop + mobile unified)
 // ---------------------------------------------------------------------------
 
 /**
  * Download a post using the Tauri fs plugin.
- * Writes the file to <downloadLocation>/<resolvePostPath result>.
- * Creates intermediate directories as needed.
  */
 async function downloadPostTauri(post, interactionType) {
-  const fs = await getTauriFs();
-  const dialog = await getTauriDialog();
-  if (!fs) {
-    throw new Error('Tauri fs plugin not available');
-  }
-
   const store = useSettingsStore();
-  const basePath = store.downloadLocation || getDefaultDownloadPath();
-  const relativePath = resolvePostPath(post, interactionType);
 
-  // Expand ~ to home directory
-  const expandedBase = await expandPath(basePath);
+  reportStatus('downloading', 'Preparing download...', 5, buildFilename(post));
 
-  // Ensure the base directory exists
-  try {
-    await fs.mkdir(expandedBase, { recursive: true });
-  } catch {
-    // Directory may already exist — that's fine
-  }
+  const basePath = await getDownloadLocation();
+  const subPath = resolvePostSubPath(post, interactionType);
+
+  reportStatus('downloading', 'Creating directories...', 10, buildFilename(post));
+
+  // Ensure base directory exists
+  await ensureDir(basePath);
 
   // Ensure subdirectory exists if separate folders is enabled
-  const fullPath = `${expandedBase}/${relativePath}`;
-  const dirPart = fullPath.substring(0, fullPath.lastIndexOf('/'));
-  if (dirPart && dirPart !== expandedBase) {
-    try {
-      await fs.mkdir(dirPart, { recursive: true });
-    } catch {
-      // Already exists
-    }
+  if (store.downloadSeparateFolders) {
+    const subDir = `${basePath}/${interactionType === 'liked' ? 'Liked' : 'Favorited'}`;
+    await ensureDir(subDir);
   }
 
-  // Fetch the file bytes using the unified httpClient (uses Tauri HTTP in production)
+  const fullPath = `${basePath}/${subPath}`;
+
+  reportStatus('downloading', 'Fetching file...', 20, buildFilename(post));
+
+  // Fetch the file bytes using our unified httpClient (Tauri HTTP plugin in production)
   const { httpFetch } = await import('../services/httpClient');
   const response = await httpFetch(post.file_url);
   if (!response.ok) {
     throw new Error(`Failed to fetch ${post.file_url}: ${response.status}`);
   }
+
+  reportStatus('downloading', 'Receiving data...', 40, buildFilename(post));
+
   const bytes = new Uint8Array(await response.arrayBuffer());
 
-  // Write to disk
+  reportStatus('downloading', 'Writing to disk...', 80, buildFilename(post));
+
+  const fs = await getTauriFs();
+  if (!fs) throw new Error('FS plugin not available');
+
   await fs.writeFile(fullPath, bytes);
 
+  reportStatus('complete', `Saved: ${subPath}`, 100, buildFilename(post));
+
   console.log(`[DownloadService] Saved to ${fullPath}`);
-  return true;
-}
-
-/**
- * Expand a path that starts with ~ to the user's home directory.
- * Uses Tauri's path API when available, otherwise returns as-is.
- */
-async function expandPath(inputPath) {
-  if (!inputPath.startsWith('~/')) return inputPath;
-
-  try {
-    const pathApi = await import('@tauri-apps/api/path');
-    const homeDir = await pathApi.homeDir();
-    return inputPath.replace('~', homeDir);
-  } catch {
-    // Fallback: return as-is (Tauri fs will handle it relative to BaseDirectory)
-    return inputPath;
-  }
+  return { success: true, path: fullPath };
 }
 
 // ---------------------------------------------------------------------------
 // Browser download (File System Access API)
 // ---------------------------------------------------------------------------
 
-// Cache the directory handle across downloads in the same session
 let _browserDirHandle = null;
 
-/**
- * Browser download using the File System Access API.
- * Stores the directory handle so subsequent downloads go to the same place.
- */
 async function downloadPostBrowserFS(post, interactionType) {
   const store = useSettingsStore();
 
-  // If the user changed the location or we don't have a handle, we need a new one
   if (!_browserDirHandle) {
-    // We can't silently get a handle — user must pick via browseDownloadFolder first
-    // Fall back to anchor download
     return downloadPostBrowserAnchor(post, interactionType);
   }
 
-  // Verify we still have permission
   const opts = { mode: 'readwrite' };
-  if ((await _browserDirHandle.queryPermission(opts)) !== 'granted') {
-    if ((await _browserDirHandle.requestPermission(opts)) !== 'granted') {
-      return downloadPostBrowserAnchor(post, interactionType);
+  try {
+    if ((await _browserDirHandle.queryPermission(opts)) !== 'granted') {
+      if ((await _browserDirHandle.requestPermission(opts)) !== 'granted') {
+        return downloadPostBrowserAnchor(post, interactionType);
+      }
     }
+  } catch {
+    return downloadPostBrowserAnchor(post, interactionType);
   }
 
-  // Build subdirectory if needed
+  reportStatus('downloading', 'Fetching file...', 20, buildFilename(post));
+
+  const response = await fetch(post.file_url);
+  if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+
+  reportStatus('downloading', 'Receiving data...', 40, buildFilename(post));
+
+  const blob = await response.blob();
+
   let parentHandle = _browserDirHandle;
+
   if (store.downloadSeparateFolders) {
     const subName = interactionType === 'liked' ? 'Liked' : 'Favorited';
     parentHandle = await _browserDirHandle.getDirectoryHandle(subName, { create: true });
   }
 
-  // Fetch the file
-  const response = await fetch(post.file_url);
-  if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
-  const blob = await response.blob();
-
-  // Write via File System Access API
   const filename = buildFilename(post);
   const fileHandle = await parentHandle.getFileHandle(filename, { create: true });
+
+  reportStatus('downloading', 'Writing to disk...', 80, filename);
+
   const writable = await fileHandle.createWritable();
   await writable.write(blob);
   await writable.close();
 
-  return true;
+  reportStatus('complete', `Saved: ${filename}`, 100, filename);
+  return { success: true, path: filename };
 }
 
-/**
- * Fallback browser download using anchor element.
- * Encodes the subpath in the filename since browsers ignore path in download attr.
- */
 async function downloadPostBrowserAnchor(post, interactionType) {
   const store = useSettingsStore();
+
+  reportStatus('downloading', 'Fetching file...', 30, buildFilename(post));
+
   const response = await fetch(post.file_url);
   if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+
+  reportStatus('downloading', 'Receiving data...', 60, buildFilename(post));
+
   const blob = await response.blob();
 
   const filename = buildFilename(post);
-  // If separate folders is on, prefix the filename so the user knows the intended subfolder
   let downloadName = filename;
   if (store.downloadSeparateFolders) {
     const subName = interactionType === 'liked' ? 'Liked' : 'Favorited';
     downloadName = `${subName}_${filename}`;
   }
+
+  reportStatus('downloading', 'Saving...', 90, filename);
 
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -280,7 +355,9 @@ async function downloadPostBrowserAnchor(post, interactionType) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  return true;
+
+  reportStatus('complete', `Saved: ${filename}`, 100, filename);
+  return { success: true, path: downloadName };
 }
 
 // ---------------------------------------------------------------------------
@@ -292,32 +369,40 @@ async function downloadPostBrowserAnchor(post, interactionType) {
  *
  * @param {Object} post - The post object with file_url, id, file_ext, etc.
  * @param {string} interactionType - 'liked' or 'favorited'
- * @returns {Promise<boolean>} Whether the download was initiated successfully.
+ * @returns {Promise<{success: boolean, path?: string, error?: string}>}
  */
 export async function downloadPost(post, interactionType = 'liked') {
   if (!post || !post.file_url) {
     console.warn('DownloadService: Post has no file_url, cannot download.');
-    return false;
+    reportStatus('error', 'No file URL', 0, '');
+    return { success: false };
   }
 
   const store = useSettingsStore();
 
   // Don't download if neither auto-download setting is enabled
   if (!store.downloadLiked && !store.downloadFavorited) {
-    return false;
+    return { success: false };
   }
 
+  reportStatus('downloading', 'Starting download...', 0, buildFilename(post));
+
   try {
+    let result;
     if (isTauri()) {
-      return await downloadPostTauri(post, interactionType);
+      result = await downloadPostTauri(post, interactionType);
     } else if (window.showDirectoryPicker && _browserDirHandle) {
-      return await downloadPostBrowserFS(post, interactionType);
+      result = await downloadPostBrowserFS(post, interactionType);
     } else {
-      return await downloadPostBrowserAnchor(post, interactionType);
+      result = await downloadPostBrowserAnchor(post, interactionType);
     }
+    setTimeout(() => reportStatus('idle'), 2000);
+    return result;
   } catch (error) {
     console.error('DownloadService: Download failed:', error);
-    return false;
+    reportStatus('error', error.message || 'Download failed', 0, buildFilename(post));
+    setTimeout(() => reportStatus('idle'), 4000);
+    return { success: false, error: error.message };
   }
 }
 
@@ -333,12 +418,26 @@ export function shouldAutoDownload(interactionType) {
 }
 
 /**
+ * Get information about where downloads will go (for display in UI).
+ */
+export async function getDownloadInfo() {
+  const store = useSettingsStore();
+  const base = await getDownloadLocation();
+  return {
+    basePath: base,
+    separateFolders: store.downloadSeparateFolders,
+    platform: isMobile() ? 'mobile' : (isTauri() ? 'desktop' : 'browser'),
+  };
+}
+
+/**
  * Open a folder picker appropriate for the current platform.
+ *
  * @returns {Promise<{ok: boolean, path: string|null, message: string}>}
  */
 export async function browseDownloadFolder() {
-  // --- Tauri (desktop + mobile) ---
-  if (isTauri()) {
+  // --- Tauri desktop ---
+  if (isTauri() && !isMobile()) {
     const dialog = await getTauriDialog();
     if (!dialog) {
       return { ok: false, path: null, message: 'Dialog plugin not available.' };
@@ -359,13 +458,35 @@ export async function browseDownloadFolder() {
     }
   }
 
+  // --- Tauri mobile (Android/iOS) ---
+  if (isTauri() && isMobile()) {
+    const dialog = await getTauriDialog();
+    if (!dialog) {
+      return { ok: false, path: null, message: 'Dialog plugin not available.' };
+    }
+    try {
+      const selected = await dialog.open({
+        directory: true,
+        multiple: false,
+        title: 'Select Download Folder',
+        recursive: true,
+      });
+      if (selected) {
+        return { ok: true, path: selected, message: `Selected: ${selected}` };
+      }
+      return { ok: false, path: null, message: 'Folder selection cancelled.' };
+    } catch (err) {
+      return { ok: false, path: null, message: `Could not open folder picker: ${err.message}` };
+    }
+  }
+
   // --- Browser with File System Access API (Chromium desktop) ---
   if (window.showDirectoryPicker) {
     try {
       const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
       _browserDirHandle = dirHandle;
-      // We can only store the name for display; the actual handle is cached in memory
-      return { ok: true, path: dirHandle.name, message: `Selected: ${dirHandle.name}` };
+      const name = dirHandle.name;
+      return { ok: true, path: name, message: `Selected: ${name}` };
     } catch (err) {
       if (err.name !== 'AbortError') {
         return { ok: false, path: null, message: 'Could not open folder picker. Enter the path manually.' };
@@ -383,28 +504,24 @@ export async function browseDownloadFolder() {
   return { ok: false, path: null, message: 'Cancelled.' };
 }
 
-/**
- * Get the cached browser directory handle (for checking if a folder has been picked).
- */
 export function getBrowserDirHandle() {
   return _browserDirHandle;
 }
 
-/**
- * Set the browser directory handle (e.g. after a successful browse).
- */
 export function setBrowserDirHandle(handle) {
   _browserDirHandle = handle;
 }
 
 export default {
   isTauri,
+  isMobile,
   getDownloadLocation,
   getDefaultDownloadPath,
-  resolvePostPath,
+  resolvePostSubPath,
   downloadPost,
   shouldAutoDownload,
-  browseDownloadFolder,
+  getDownloadInfo,
   getBrowserDirHandle,
   setBrowserDirHandle,
+  setStatusCallback,
 };
