@@ -24,6 +24,7 @@ export default defineConfig({
   },
   // Tauri CLI expects a fixed port, fail if that port is not available
   server: {
+    host: true,
     port: 5173,
     strictPort: true,
     proxy: {

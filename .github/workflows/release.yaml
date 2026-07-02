@@ -27,6 +27,7 @@ jobs:
         with:
           tag-prefix: 'v'
           commit-message: 'ci: version bump to v%s [skip ci]'
+          version-type: 'patch'
         env:
           GITHUB_TOKEN: ${{ secrets.ADMIN_PAT }}
 
