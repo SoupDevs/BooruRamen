@@ -62,6 +62,16 @@
           </div>
 
           <div v-if="debugDetails">
+            <!-- ML training status -->
+            <p v-if="debugDetails.mlActive !== undefined" class="text-xs">
+              <span class="text-gray-400">ML:</span>
+              <span :class="debugDetails.mlActive ? 'text-green-400' : 'text-yellow-400'">
+                {{ debugDetails.mlActive
+                  ? 'active (' + debugDetails.mlInteractionCount + ' samples)'
+                  : 'cold start (' + debugDetails.mlInteractionCount + '/' + debugDetails.mlTrainThreshold + ' interactions)' }}
+              </span>
+            </p>
+
             <!-- Primary Score -->
             <p v-if="debugDetails.mlScore !== null && debugDetails.mlScore !== undefined">
               <span class="text-pink-400 font-bold">ML Score:</span> {{ debugDetails.mlScore?.toFixed(3) }}

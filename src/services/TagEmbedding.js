@@ -244,15 +244,10 @@ class TagEmbedding {
     // Clear pending set before rebuild so we don't re-trigger on every interaction
     this.pendingTags.clear();
 
-    // If very few tags, just use random embeddings
+    // If very few tags, just use small deterministic random embeddings
     if (n < 10) {
-      const rng = mulberry32(42);
       for (const tag of tags) {
-        const vec = new Float32Array(this.dim);
-        for (let i = 0; i < this.dim; i++) {
-          vec[i] = (rng() * 2 - 1) * 0.1;
-        }
-        this.embeddings.set(tag, vec);
+        this.embeddings.set(tag, this._randomProjection(tag, 0.1));
       }
       this.isBuilt = true;
       return;
@@ -260,19 +255,11 @@ class TagEmbedding {
 
     // Compute PMI-based embeddings using random projection
     // For each tag t, embedding = Σ_cooc PMI(t, cooc) * random_proj(cooc)
-    const rng = mulberry32(12345);
 
     // Pre-generate random projection vectors for each tag
     const randomProjections = new Map();
     for (const tag of tags) {
-      const seed = hashString(tag);
-      const tagRng = mulberry32(seed);
-      const proj = new Float32Array(this.dim);
-      for (let i = 0; i < this.dim; i++) {
-        // Sparse random projection: only 25% non-zero entries
-        proj[i] = tagRng() < 0.25 ? (tagRng() * 2 - 1) : 0;
-      }
-      randomProjections.set(tag, proj);
+      randomProjections.set(tag, this._randomProjection(tag));
     }
 
     // Compute total co-occurrence weight for normalization
@@ -289,8 +276,9 @@ class TagEmbedding {
       const pTag = (this.tagFrequency.get(tag) || 1) / this.totalPosts;
       const coocs = this.tagCooccurrence.get(tag);
       if (!coocs || coocs.size === 0) {
-        // No co-occurrence data: use random projection of self
-        this.embeddings.set(tag, randomProjections.get(tag).slice());
+        // No co-occurrence data: small self projection so random vectors
+        // don't dominate averages over learned PMI embeddings
+        this.embeddings.set(tag, this._randomProjection(tag, 0.1));
         continue;
       }
 
@@ -337,27 +325,12 @@ class TagEmbedding {
 
   /**
    * Incrementally update embeddings for a subset of tags.
+   * Uses the same PMI + random-projection scheme as _buildEmbeddings so
+   * incremental updates and full rebuilds produce the same geometry.
    */
   _updateEmbeddingsForTags(tagSet) {
     if (tagSet.size === 0) return;
 
-    const rng = mulberry32(12345);
-    const allTags = Array.from(this.tagFrequency.keys());
-
-    // Re-generate random projections for affected tags
-    for (const tag of tagSet) {
-      if (!this.embeddings.has(tag)) {
-        const seed = hashString(tag);
-        const tagRng = mulberry32(seed);
-        const vec = new Float32Array(this.dim);
-        for (let i = 0; i < this.dim; i++) {
-          vec[i] = tagRng() < 0.25 ? (tagRng() * 2 - 1) : 0;
-        }
-        this.embeddings.set(tag, vec);
-      }
-    }
-
-    // Rebuild from co-occurrence for affected tags
     let totalCoocWeight = 0;
     for (const [, coocs] of this.tagCooccurrence) {
       for (const count of coocs.values()) {
@@ -367,26 +340,33 @@ class TagEmbedding {
     if (totalCoocWeight === 0) totalCoocWeight = 1;
 
     for (const tag of tagSet) {
+      if (!this.tagFrequency.has(tag)) continue;
+
       const pTag = (this.tagFrequency.get(tag) || 1) / Math.max(1, this.totalPosts);
       const coocs = this.tagCooccurrence.get(tag);
+
+      if (!coocs || coocs.size === 0) {
+        if (!this.embeddings.has(tag)) {
+          this.embeddings.set(tag, this._randomProjection(tag, 0.1));
+        }
+        continue;
+      }
 
       const vec = new Float32Array(this.dim);
       let norm = 0;
 
-      if (coocs && coocs.size > 0) {
-        for (const [coocTag, count] of coocs) {
-          const pCooc = (this.tagFrequency.get(coocTag) || 1) / Math.max(1, this.totalPosts);
-          const pJoint = count / totalCoocWeight;
-          let pmi = Math.log((pJoint + 1e-10) / (pTag * pCooc + 1e-10));
-          if (pmi < 0) pmi = 0;
+      for (const [coocTag, count] of coocs) {
+        const pCooc = (this.tagFrequency.get(coocTag) || 1) / Math.max(1, this.totalPosts);
+        const pJoint = count / totalCoocWeight;
+        let pmi = Math.log((pJoint + 1e-10) / (pTag * pCooc + 1e-10));
+        if (pmi < 0) pmi = 0;
 
-          const coocVec = this.embeddings.get(coocTag);
-          if (coocVec) {
-            for (let i = 0; i < this.dim; i++) {
-              vec[i] += pmi * coocVec[i];
-            }
-            norm += pmi;
+        if (pmi > 0) {
+          const proj = this._randomProjection(coocTag);
+          for (let i = 0; i < this.dim; i++) {
+            vec[i] += pmi * proj[i];
           }
+          norm += pmi;
         }
       }
 
@@ -394,10 +374,25 @@ class TagEmbedding {
         for (let i = 0; i < this.dim; i++) {
           vec[i] /= norm;
         }
+        this.embeddings.set(tag, vec);
+      } else if (!this.embeddings.has(tag)) {
+        this.embeddings.set(tag, this._randomProjection(tag, 0.1));
       }
-
-      this.embeddings.set(tag, vec);
     }
+  }
+
+  /**
+   * Deterministic sparse random projection for a tag (25% non-zero entries).
+   * Seeded by the tag name so the same tag always maps to the same vector.
+   */
+  _randomProjection(tag, scale = 1) {
+    const seed = hashString(tag);
+    const rng = mulberry32(seed);
+    const vec = new Float32Array(this.dim);
+    for (let i = 0; i < this.dim; i++) {
+      vec[i] = rng() < 0.25 ? (rng() * 2 - 1) * scale : 0;
+    }
+    return vec;
   }
 
   /**
@@ -453,13 +448,50 @@ class TagEmbedding {
    * @returns {Float32Array}
    */
   _getFallbackEmbedding(tag) {
-    const seed = hashString(tag);
-    const rng = mulberry32(seed);
-    const vec = new Float32Array(this.dim);
-    for (let i = 0; i < this.dim; i++) {
-      vec[i] = rng() < 0.25 ? (rng() * 2 - 1) * 0.1 : 0;
+    return this._randomProjection(tag, 0.1);
+  }
+
+  /**
+   * Compute a post's content embedding from its tags.
+   *
+   * Differences from getAverageEmbedding:
+   * - Noise tags (highres, solo, ...) are excluded.
+   * - Tags are weighted by inverse document frequency so ubiquitous tags
+   *   don't drown out specific content tags.
+   * - When at least one tag has a learned embedding, unknown tags are
+   *   excluded entirely — their random fallback vectors are orthogonal
+   *   noise that dilutes the average toward zero similarity.
+   * @param {string[]} tags
+   * @returns {Float32Array|null}
+   */
+  getPostEmbedding(tags) {
+    if (!tags || tags.length === 0) return null;
+
+    const contentTags = tags.filter(t => t && !this._isNoiseTag(t));
+    const pool = contentTags.length > 0 ? contentTags : tags.filter(t => t);
+    if (pool.length === 0) return null;
+
+    const known = pool.filter(t => this.embeddings.has(t));
+    const useTags = known.length > 0 ? known : pool;
+
+    const result = new Float32Array(this.dim);
+    let totalWeight = 0;
+
+    for (const tag of useTags) {
+      const emb = this.embeddings.get(tag) || this._getFallbackEmbedding(tag);
+      const freq = this.tagFrequency.get(tag) || 0;
+      const idf = Math.log(1 + (this.totalPosts + 1) / (1 + freq));
+      for (let i = 0; i < this.dim; i++) {
+        result[i] += emb[i] * idf;
+      }
+      totalWeight += idf;
     }
-    return vec;
+
+    if (totalWeight <= 0) return null;
+    for (let i = 0; i < this.dim; i++) {
+      result[i] /= totalWeight;
+    }
+    return result;
   }
 
   /**

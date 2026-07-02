@@ -3,37 +3,45 @@
  * Lightweight Multi-Layer Perceptron for post engagement prediction.
  *
  * Architecture:
- *   Input (40 features) → Dense(32, ReLU) → Dense(16, ReLU) → Dense(1, Sigmoid)
+ *   Input (82 features) → Dense(32, ReLU) → Dense(16, ReLU) → Dense(1, Sigmoid)
  *
  * Features per post:
- *   - User top-tag embedding average (32d) — what the user likes
- *   - Post tag embedding average (32d) — what the post contains
- *   - Cosine similarity between user and post embeddings (1d)
- *   - Rating preference score (1d)
- *   - Media type preference (1d)
- *   - Tag overlap ratio (1d)
- *   - Post metadata features (3d): score, media type, file extension
+ *   - [0..31]  User top-tag embedding, affinity-weighted, unit-normalized (32d)
+ *   - [32..63] Post tag embedding, IDF-weighted, unit-normalized (32d)
+ *   - [64]     Cosine similarity between user and post embeddings (raw space)
+ *   - [65]     Rating preference score
+ *   - [66]     Media type preference
+ *   - [67]     Tag overlap ratio
+ *   - [68..71] Post metadata: normalized score, is-video, resolution, tag count
+ *   - [72..81] Top-tag affinity features (per-tag preference signal)
  *
- * Total: 32 + 32 + 1 + 1 + 1 + 1 + 3 = 71 → we use a reduced 40-dim input
- * by projecting embeddings to 16d each via a learned projection matrix.
+ * Embeddings are fed to the MLP raw (no projection layer) — earlier versions
+ * projected user/post embeddings through two *different* untrained random
+ * matrices, which scrambled alignment between them and made the similarity
+ * feature pure noise.
  *
- * Training: Online SGD with momentum. Model weights stored in IndexedDB.
+ * Training: Online SGD with momentum, plus a small replay buffer that gets
+ * one extra shuffled epoch on each flush so sparse signals (likes, dislikes)
+ * aren't seen just once. Model weights stored in IndexedDB.
  * Cold-start: When < TRAIN_THRESHOLD interactions, falls back to heuristic scoring.
  */
 
 import StorageService from '../services/StorageService';
 import tagEmbedding from './TagEmbedding';
 
-const INPUT_DIM = 50;  // 40 original + 10 top-tag affinity features
+const EMB_DIM = 32;              // must match TagEmbedding EMBEDDING_DIM
+const INPUT_DIM = 82;            // 2*32 embeddings + 8 scalars + 10 top-tag affinities
 const HIDDEN1 = 32;
 const HIDDEN2 = 16;
 const OUTPUT_DIM = 1;
 const TRAIN_THRESHOLD = 20;      // minimum interactions before ML kicks in
-const LEARNING_RATE = 0.01;
+const LEARNING_RATE = 0.02;
 const MOMENTUM = 0.9;
 const L2_LAMBDA = 0.0001;
 const BATCH_SIZE = 16;
+const REPLAY_EPOCHS = 2;         // shuffled passes over the replay buffer per flush
 const TOP_TAG_FEATURES = 10;      // number of top user tag affinities to expose as features
+const REPLAY_CAP = 300;          // max training samples kept for replay epochs
 const MIN_LOSS = 0.05;           // early stopping threshold
 
 // Interaction type to label mapping (engagement score in [0, 1])
@@ -44,6 +52,34 @@ const INTERACTION_LABELS = {
   view: 0.3,          // base for a quick view
   timeSpent: 0.5,     // will be adjusted by duration
 };
+
+// timeSpent below this is a swipe-away: label it as a negative signal
+// instead of dropping it — skips are the main source of negative examples.
+const SKIP_THRESHOLD_MS = 2000;
+const SKIP_LABEL = 0.1;
+
+// Gradient importance per interaction type. Explicit actions are rare but
+// carry far more preference signal than ambient watch-time samples; without
+// weighting, the flood of mid-label timeSpent samples drowns them out and
+// predictions collapse toward the dataset mean.
+const SAMPLE_WEIGHTS = {
+  favorite: 3.0,
+  like: 2.5,
+  dislike: 3.0,
+  view: 1.0,
+  timeSpent: 1.0,
+  timeSpentSkip: 1.5,
+};
+
+/**
+ * Map a timeSpent duration to an engagement label.
+ * < 2s reads as "skipped"; 2s..30s ramps 0.3 → 0.9.
+ */
+function timeSpentLabel(valueMs) {
+  const seconds = valueMs / 1000;
+  if (valueMs < SKIP_THRESHOLD_MS) return SKIP_LABEL;
+  return Math.min(0.9, 0.3 + ((seconds - 2) / 28) * 0.6);
+}
 
 class MLScorer {
   constructor() {
@@ -62,10 +98,6 @@ class MLScorer {
     this.vW3 = null;
     this.vB3 = null;
 
-    // Projection matrices for embeddings (learned during training)
-    this.projUser = null;  // [tagDim][16]
-    this.projPost = null;  // [tagDim][16]
-
     // Feature normalization params
     this.featureMeans = null;
     this.featureStds = null;
@@ -75,6 +107,7 @@ class MLScorer {
     this.isTrained = false;
     this.trainingHistory = [];  // loss history for monitoring
     this.pendingBatch = [];     // accumulate samples for mini-batch
+    this.replayBuffer = [];     // recent samples re-trained on each flush
 
     this._initializeWeights();
   }
@@ -117,19 +150,6 @@ class MLScorer {
     this.vW3 = this._zeroLikeW(this.weights3);
     this.vB3 = new Float32Array(OUTPUT_DIM);
 
-    // Initialize projection matrices (identity-like for stability)
-    const tagDim = tagEmbedding.dim;
-    this.projUser = [];
-    this.projPost = [];
-    for (let i = 0; i < tagDim; i++) {
-      this.projUser[i] = new Float32Array(16);
-      this.projPost[i] = new Float32Array(16);
-      for (let j = 0; j < 16; j++) {
-        this.projUser[i][j] = (Math.random() * 2 - 1) * 0.05;
-        this.projPost[i][j] = (Math.random() * 2 - 1) * 0.05;
-      }
-    }
-
     // Default normalization
     this.featureMeans = new Float32Array(INPUT_DIM);
     this.featureStds = new Float32Array(INPUT_DIM).fill(1);
@@ -170,36 +190,12 @@ class MLScorer {
     this.bias2 = this._deserializeVector(data.bias2);
     this.weights3 = this._deserializeMatrix(data.weights3);
     this.bias3 = this._deserializeVector(data.bias3);
-    this.projUser = this._deserializeMatrix(data.projUser);
-    this.projPost = this._deserializeMatrix(data.projPost);
     this.featureMeans = this._deserializeVector(data.featureMeans);
     this.featureStds = this._deserializeVector(data.featureStds);
     this.interactionCount = data.interactionCount || 0;
     this.trainingHistory = data.trainingHistory || [];
-
-    // Migrate weights1 if input dimension changed (e.g., 40 -> 50 features)
-    if (this.weights1 && this.weights1.length < INPUT_DIM) {
-      const oldDim = this.weights1.length;
-      const newRows = [];
-      for (let i = oldDim; i < INPUT_DIM; i++) {
-        const row = new Float32Array(HIDDEN1);
-        const scale = Math.sqrt(2.0 / (INPUT_DIM + HIDDEN1));
-        for (let j = 0; j < HIDDEN1; j++) {
-          row[j] = (Math.random() * 2 - 1) * scale;
-        }
-        newRows.push(row);
-      }
-      this.weights1 = [...this.weights1, ...newRows];
-      // Pad feature stats
-      if (this.featureMeans && this.featureMeans.length < INPUT_DIM) {
-        const extra = new Float32Array(INPUT_DIM - this.featureMeans.length);
-        this.featureMeans = new Float32Array([...this.featureMeans, ...extra]);
-      }
-      if (this.featureStds && this.featureStds.length < INPUT_DIM) {
-        const extra = new Float32Array(INPUT_DIM - this.featureStds.length).fill(1);
-        this.featureStds = new Float32Array([...this.featureStds, ...extra]);
-      }
-    }
+    // Note: no dimension migration — feature semantics changed between
+    // versions, so init() re-initializes on any INPUT_DIM mismatch.
   }
 
   _deserializeMatrix(data) {
@@ -223,8 +219,6 @@ class MLScorer {
       bias2: this._serializeVector(this.bias2),
       weights3: this._serializeMatrix(this.weights3),
       bias3: this._serializeVector(this.bias3),
-      projUser: this._serializeMatrix(this.projUser),
-      projPost: this._serializeMatrix(this.projPost),
       featureMeans: this._serializeVector(this.featureMeans),
       featureStds: this._serializeVector(this.featureStds),
       interactionCount: this.interactionCount,
@@ -245,13 +239,12 @@ class MLScorer {
   /**
    * Extract feature vector from a post given the user's tag preferences.
    * @param {Object} post - Post object with tag_string
-   * @param {Map} userTagScores - User's tag affinity scores
+   * @param {Map|Object} userTagScores - User's tag affinity scores
    * @param {Object} userProfile - { ratingPreferences, mediaTypePreferences }
-   * @returns {Float32Array} - 40-dim feature vector
+   * @returns {Float32Array} - 82-dim feature vector
    */
   extractFeatures(post, userTagScores, userProfile) {
     const features = new Float32Array(INPUT_DIM);
-    const tagDim = tagEmbedding.dim;
 
     // Normalize userTagScores to an entries array (handles both Map and plain objects)
     let userEntries = [];
@@ -263,62 +256,47 @@ class MLScorer {
       }
     }
 
-    // Get user interest embedding (projected to 16d)
-    const userTags = userEntries
+    // User interest embedding: top positive-affinity tags, weighted by affinity.
+    // Negative-affinity tags are excluded — negative weights in a weighted
+    // average corrupt the direction of the profile vector.
+    const topUserEntries = userEntries
+      .filter(([, score]) => score > 0)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 20)
-      .map(([tag]) => tag);
+      .slice(0, 20);
+    const userTags = topUserEntries.map(([tag]) => tag);
+    const userEmb = tagEmbedding.getAverageEmbedding(userTags, new Map(topUserEntries));
 
-    // Convert to Map for getAverageEmbedding if needed
-    const userTagWeights = userTagScores instanceof Map
-      ? userTagScores
-      : new Map(userEntries);
-    const userEmb = tagEmbedding.getAverageEmbedding(userTags, userTagWeights);
-    const userProj = new Float32Array(16);
-    if (userEmb) {
-      for (let i = 0; i < 16; i++) {
-        let sum = 0;
-        for (let j = 0; j < tagDim; j++) {
-          sum += userEmb[j] * this.projUser[j][i];
-        }
-        userProj[i] = sum;
-      }
-    }
-    for (let i = 0; i < 16; i++) features[i] = userProj[i];
-
-    // Get post tag embedding (projected to 16d)
+    // Post content embedding: IDF-weighted, noise tags excluded
     const postTags = (post.tag_string || '').split(' ').filter(t => t);
-    const postEmb = tagEmbedding.getAverageEmbedding(postTags);
-    const postProj = new Float32Array(16);
-    if (postEmb) {
-      for (let i = 0; i < 16; i++) {
-        let sum = 0;
-        for (let j = 0; j < tagDim; j++) {
-          sum += postEmb[j] * this.projPost[j][i];
-        }
-        postProj[i] = sum;
-      }
-    }
-    for (let i = 0; i < 16; i++) features[16 + i] = postProj[i];
+    const postEmb = tagEmbedding.getPostEmbedding(postTags);
 
-    // Cosine similarity between user and post embeddings
-    let dot = 0, normU = 0, normP = 0;
-    for (let i = 0; i < 16; i++) {
-      dot += userProj[i] * postProj[i];
-      normU += userProj[i] * userProj[i];
-      normP += postProj[i] * postProj[i];
+    // Raw embeddings, unit-normalized, fed directly to the MLP
+    const writeUnitVec = (emb, offset) => {
+      if (!emb) return;
+      let norm = 0;
+      for (let i = 0; i < EMB_DIM; i++) norm += emb[i] * emb[i];
+      norm = Math.sqrt(norm);
+      if (norm < 1e-8) return;
+      for (let i = 0; i < EMB_DIM; i++) features[offset + i] = emb[i] / norm;
+    };
+    writeUnitVec(userEmb, 0);
+    writeUnitVec(postEmb, EMB_DIM);
+
+    // Cosine similarity in the shared embedding space
+    // (dot of the unit vectors written above; 0 if either is missing)
+    let cos = 0;
+    for (let i = 0; i < EMB_DIM; i++) {
+      cos += features[i] * features[EMB_DIM + i];
     }
-    features[32] = (Math.sqrt(normU) * Math.sqrt(normP) > 0)
-      ? dot / (Math.sqrt(normU) * Math.sqrt(normP))
-      : 0;
+    features[64] = cos;
 
     // Rating preference
     const rating = post.rating || 'g';
-    features[33] = (userProfile?.ratingPreferences?.[rating] || 0);
+    features[65] = (userProfile?.ratingPreferences?.[rating] || 0);
 
     // Media type preference
     const isVideo = ['mp4', 'webm'].includes(post.file_ext);
-    features[34] = isVideo
+    features[66] = isVideo
       ? (userProfile?.mediaTypePreferences?.video || 0)
       : (userProfile?.mediaTypePreferences?.image || 0);
 
@@ -329,31 +307,28 @@ class MLScorer {
       for (const tag of postTags) {
         if (userTagSet.has(tag)) overlap++;
       }
-      features[35] = overlap / postTags.length;
+      features[67] = overlap / postTags.length;
     } else {
-      features[35] = 0;
+      features[67] = 0;
     }
 
     // Post metadata features
-    features[36] = Math.min(1, (post.score || 0) / 100);  // normalized post score
-    features[37] = isVideo ? 1 : 0;                        // is video
-    features[38] = Math.min(1, ((post.width || 0) * (post.height || 0)) / (1920 * 1080));  // resolution
-    features[39] = post.tag_string ? Math.min(1, post.tag_string.split(' ').length / 50) : 0;  // tag count
+    features[68] = Math.min(1, (post.score || 0) / 100);  // normalized post score
+    features[69] = isVideo ? 1 : 0;                        // is video
+    features[70] = Math.min(1, ((post.width || 0) * (post.height || 0)) / (1920 * 1080));  // resolution
+    features[71] = postTags.length > 0 ? Math.min(1, postTags.length / 50) : 0;  // tag count
 
-    // Top-tag affinity features (indices 40..49): direct per-tag preference signal
+    // Top-tag affinity features (indices 72..81): direct per-tag preference signal
     // For each of the user's top-N tags, if the post contains it, set the affinity score
     // This lets the model learn explicit tag preferences from the user's top tags
-    const topTagEntries = userEntries
-      .filter(([tag, score]) => score > 0)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, TOP_TAG_FEATURES);
+    const topTagEntries = topUserEntries.slice(0, TOP_TAG_FEATURES);
     const postTagSet = new Set(postTags);
     for (let i = 0; i < TOP_TAG_FEATURES; i++) {
       if (i < topTagEntries.length) {
         const [tag] = topTagEntries[i];
-        features[40 + i] = postTagSet.has(tag) ? topTagEntries[i][1] : 0;
+        features[72 + i] = postTagSet.has(tag) ? topTagEntries[i][1] : 0;
       } else {
-        features[40 + i] = 0;
+        features[72 + i] = 0;
       }
     }
 
@@ -435,16 +410,29 @@ class MLScorer {
    * @param {Object} userProfile
    */
   addTrainingSample(post, interactionType, value, userTagScores, userProfile) {
+    // Undo events (un-like, un-favorite, clearing a dislike) carry no
+    // preference signal — training on them poisons the labels: e.g. liking
+    // a post also logs a dislike-clear, which would train label 0.0 on a
+    // post the user just liked.
+    if ((interactionType === 'like' || interactionType === 'favorite' || interactionType === 'dislike') && !value) {
+      return;
+    }
+
     // Compute label
     let label = INTERACTION_LABELS[interactionType];
+    let weight = SAMPLE_WEIGHTS[interactionType] || 1.0;
     if (interactionType === 'timeSpent') {
-      // Normalize time spent: 0-30s maps to 0.3-0.9
-      label = Math.min(0.9, 0.3 + (value / 30000) * 0.6);
+      label = timeSpentLabel(value);
+      if (label === SKIP_LABEL) weight = SAMPLE_WEIGHTS.timeSpentSkip;
     }
     if (label === undefined) return;
 
     const features = this.extractFeatures(post, userTagScores, userProfile);
-    this.pendingBatch.push({ features, label });
+    this.pendingBatch.push({ features, label, weight });
+    this.replayBuffer.push({ features, label, weight });
+    if (this.replayBuffer.length > REPLAY_CAP) {
+      this.replayBuffer.shift();
+    }
     this.interactionCount++;
 
     // Train when batch is full
@@ -459,10 +447,12 @@ class MLScorer {
   }
 
   /**
-   * Train on the pending mini-batch using SGD with momentum.
+   * Train on a mini-batch using SGD with momentum.
+   * Defaults to the pending batch; pass samples to train a replay batch.
    */
-  _trainBatch() {
-    if (this.pendingBatch.length === 0) return;
+  _trainBatch(samples = null) {
+    const batch = samples || this.pendingBatch;
+    if (batch.length === 0) return;
 
     // Accumulate gradients
     const gW1 = this._zeroLikeW(this.weights1);
@@ -474,7 +464,7 @@ class MLScorer {
 
     let totalLoss = 0;
 
-    for (const { features, label } of this.pendingBatch) {
+    for (const { features, label, weight = 1 } of batch) {
       // Forward pass (cache activations)
       const h1 = new Float32Array(HIDDEN1);
       for (let j = 0; j < HIDDEN1; j++) {
@@ -500,13 +490,13 @@ class MLScorer {
       }
       const prediction = 1 / (1 + Math.exp(-output));
 
-      // Binary cross-entropy loss
+      // Binary cross-entropy loss (importance-weighted)
       const eps = 1e-7;
       const loss = -(label * Math.log(prediction + eps) + (1 - label) * Math.log(1 - prediction + eps));
-      totalLoss += loss;
+      totalLoss += loss * weight;
 
       // Backward pass
-      const dOutput = prediction - label;  // derivative of BCE with sigmoid
+      const dOutput = (prediction - label) * weight;  // derivative of weighted BCE with sigmoid
 
       // Gradients for layer 3
       for (let i = 0; i < HIDDEN2; i++) {
@@ -549,7 +539,7 @@ class MLScorer {
     }
 
     // Average gradients and apply SGD with momentum
-    const batchSize = this.pendingBatch.length;
+    const batchSize = batch.length;
     const lr = LEARNING_RATE / batchSize;
 
     for (let i = 0; i < INPUT_DIM; i++) {
@@ -596,16 +586,39 @@ class MLScorer {
       this.trainingHistory.shift();
     }
 
-    // Clear batch
-    this.pendingBatch = [];
+    // Clear batch when training the pending queue
+    if (!samples) {
+      this.pendingBatch = [];
+    }
   }
 
   /**
-   * Force training on any remaining samples in the pending batch.
+   * Force training on any remaining samples in the pending batch, then run
+   * one shuffled epoch over the replay buffer. Interactions arrive one at a
+   * time, so without replay each sample influences the weights only once —
+   * far too little for rare, high-signal events like likes and dislikes.
    */
   flushTraining() {
     if (this.pendingBatch.length > 0) {
       this._trainBatch();
+    }
+    for (let e = 0; e < REPLAY_EPOCHS; e++) {
+      this._trainReplayEpoch();
+    }
+  }
+
+  _trainReplayEpoch() {
+    if (this.replayBuffer.length < BATCH_SIZE) return;
+
+    // Fisher-Yates shuffle of a copy
+    const shuffled = [...this.replayBuffer];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    for (let start = 0; start + BATCH_SIZE <= shuffled.length; start += BATCH_SIZE) {
+      this._trainBatch(shuffled.slice(start, start + BATCH_SIZE));
     }
   }
 
@@ -618,6 +631,7 @@ class MLScorer {
     this.isTrained = false;
     this.trainingHistory = [];
     this.pendingBatch = [];
+    this.replayBuffer = [];
   }
 
   /**
@@ -646,8 +660,7 @@ class MLScorer {
       HIDDEN1 * HIDDEN2 * 4 +    // weights2
       HIDDEN2 * 4 +              // bias2
       HIDDEN2 * OUTPUT_DIM * 4 + // weights3
-      OUTPUT_DIM * 4 +           // bias3
-      tagEmbedding.dim * 16 * 8  // projection matrices (2x)
+      OUTPUT_DIM * 4             // bias3
     );
   }
 
@@ -686,26 +699,26 @@ class MLScorer {
         ? Array.from(userTagScores.entries())
         : Object.entries(userTagScores))
       : [];
-    const userTags = userEntries
+    // Same embeddings the scoring path uses: affinity-weighted user profile,
+    // IDF-weighted post content
+    const topUserEntries = userEntries
+      .filter(([, score]) => score > 0)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 20)
-      .map(([tag]) => tag);
-    const userEmb = tagEmbedding.getAverageEmbedding(userTags);
+      .slice(0, 20);
+    const userTags = topUserEntries.map(([tag]) => tag);
+    const userEmb = tagEmbedding.getAverageEmbedding(userTags, new Map(topUserEntries));
     const postTags = (post.tag_string || '').split(' ').filter(t => t);
-    const postEmb = tagEmbedding.getAverageEmbedding(postTags);
+    const postEmb = tagEmbedding.getPostEmbedding(postTags);
 
-    // Compute cosine similarity
-    let dot = 0, normU = 0, normP = 0;
-    if (userEmb && postEmb) {
-      for (let i = 0; i < tagEmbedding.dim; i++) {
-        dot += userEmb[i] * postEmb[i];
-        normU += userEmb[i] * userEmb[i];
-        normP += postEmb[i] * postEmb[i];
-      }
+    let normU = 0, normP = 0;
+    if (userEmb) {
+      for (let i = 0; i < tagEmbedding.dim; i++) normU += userEmb[i] * userEmb[i];
     }
-    const similarity = (Math.sqrt(normU) * Math.sqrt(normP) > 0)
-      ? dot / (Math.sqrt(normU) * Math.sqrt(normP))
-      : 0;
+    if (postEmb) {
+      for (let i = 0; i < tagEmbedding.dim; i++) normP += postEmb[i] * postEmb[i];
+    }
+    // The cosine similarity the model actually sees
+    const similarity = features[64];
 
     // Tag overlap
     let overlap = 0;
@@ -725,19 +738,19 @@ class MLScorer {
       tagOverlapRatio: overlapRatio,
       userEmbeddingStrength: Math.sqrt(normU),
       postEmbeddingStrength: Math.sqrt(normP),
-      ratingPreference: features[33] || 0,
-      mediaTypePreference: features[34] || 0,
-      postScore: features[36] || 0,
+      ratingPreference: features[65] || 0,
+      mediaTypePreference: features[66] || 0,
+      postScore: features[68] || 0,
       isVideo: post.file_ext ? ['mp4', 'webm'].includes(post.file_ext) : false,
       tagCount: postTags.length,
       topTagAffinities: Array.from({ length: TOP_TAG_FEATURES }, (_, i) => ({
-        featureIndex: 40 + i,
-        value: features[40 + i] || 0,
+        featureIndex: 72 + i,
+        value: features[72 + i] || 0,
       })).filter(t => t.value > 0),
     };
   }
 }
 
-export { MLScorer };
+export { MLScorer, TRAIN_THRESHOLD };
 export const mlScorer = new MLScorer();
 export default mlScorer;
