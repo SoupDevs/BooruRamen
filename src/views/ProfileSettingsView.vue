@@ -353,6 +353,7 @@
                   @change="saveDownloadSettings"
                 />
                 <button
+                  v-if="!isAndroid"
                   @click="browseDownloadFolder"
                   class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-white text-sm font-medium transition whitespace-nowrap"
                 >
@@ -360,6 +361,7 @@
                 </button>
               </div>
               <p v-if="folderStatus" class="text-xs mt-2" :class="folderStatus.ok ? 'text-green-400' : 'text-red-400'">{{ folderStatus.message }}</p>
+              <p class="text-xs text-gray-500 mt-2">Leave empty to use the default: a BooruRamen folder inside your Downloads folder.</p>
             </div>
 
             <!-- Save Liked Posts -->
@@ -622,6 +624,7 @@ import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSys
 
 import BooruService from '../services/BooruService';
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from '../services/BooruAdapters';
+import DownloadService from '../services/DownloadService';
 import { X, Check, AlertCircle } from 'lucide-vue-next';
 
 export default {
@@ -683,6 +686,9 @@ export default {
     ]),
     appVersion() {
       return __APP_VERSION__;
+    },
+    isAndroid() {
+      return DownloadService.isAndroid();
     },
     currentPage() {
       return this.navigationStack.length > 0
@@ -823,27 +829,27 @@ export default {
       this.saveSettings();
     },
     async browseDownloadFolder() {
-      // Use the File System Access API if available (Chromium browsers)
-      if (window.showDirectoryPicker) {
+      // In Tauri, use the native folder picker (returns a full path)
+      if (DownloadService.isTauri()) {
         try {
-          const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-          this.downloadLocation = dirHandle.name;
-          this.folderStatus = { ok: true, message: `Selected: ${dirHandle.name}` };
-          this.saveDownloadSettings();
-        } catch (err) {
-          // User cancelled the picker
-          if (err.name !== 'AbortError') {
-            this.folderStatus = { ok: false, message: 'Could not open folder picker. Enter the path manually.' };
+          const { open } = await import('@tauri-apps/plugin-dialog');
+          const defaultPath = await DownloadService.getDownloadLocation();
+          const selected = await open({ directory: true, defaultPath });
+          if (selected) {
+            this.downloadLocation = selected;
+            this.folderStatus = { ok: true, message: `Selected: ${selected}` };
+            this.saveDownloadSettings();
           }
+        } catch (err) {
+          console.error('Folder picker failed:', err);
+          this.folderStatus = { ok: false, message: 'Could not open folder picker. Enter the path manually.' };
         }
-      } else {
-        // Fallback: prompt the user
-        const path = prompt('Enter download folder path:', this.downloadLocation || '~/Downloads/BooruRamen');
-        if (path !== null) {
-          this.downloadLocation = path;
-          this.saveDownloadSettings();
-        }
+        return;
       }
+
+      // Browser: the download location is controlled by the browser itself,
+      // so a picker here is only informational. Let the user type a path.
+      this.folderStatus = { ok: false, message: 'Folder browsing is only available in the app. Enter the path manually.' };
     },
 
     async saveAvoidedTags() {
