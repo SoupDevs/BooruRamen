@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(where:*)",
-      "Bash(where convert:*)"
+      "Bash(where convert:*)",
+      "Bash(gh issue *)",
+      "PowerShell(gh --version)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(npx eslint *)"
     ]
   }
 }

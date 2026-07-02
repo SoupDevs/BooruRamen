@@ -36,7 +36,13 @@ export const useSettingsStore = defineStore('settings', {
     actions: {
         async initialize() {
             if (this.initialized) return
+            // Multiple callers (App + views) can race here on cold start; share one load
+            if (this._initPromise) return this._initPromise
+            this._initPromise = this._doInitialize()
+            return this._initPromise
+        },
 
+        async _doInitialize() {
             const saved = await StorageService.loadAppSettings()
 
             if (saved) {

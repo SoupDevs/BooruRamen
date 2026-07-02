@@ -252,7 +252,10 @@ export default {
         this.currentPostIndex = closestPostIndex;
         const currentPost = this.posts[this.currentPostIndex];
         if (currentPost) {
-          const videoEl = this.$refs.videoPlayer?.[this.currentPostIndex];
+          // Video elements are registered by setVideoRef, keyed by post id
+          // (there is no "videoPlayer" ref; the old lookup always returned undefined,
+          // leaving the playback controls with no video to drive)
+          const videoEl = this._videoElements?.[currentPost.id] || null;
           this.$emit('current-post-changed', currentPost, videoEl);
           await StorageService.trackPostView(currentPost.id, currentPost, currentPost.source);
         }

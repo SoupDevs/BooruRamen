@@ -26,7 +26,7 @@
       <div v-if="visibleStartIndex > 0" class="w-full shrink-0 pointer-events-none" :style="[{ height: topSpacerHeight }, spacerTransitionStyle]"></div>
 
       <div
-        v-for="(post, visibleIdx) in visiblePosts"
+        v-for="post in visiblePosts"
         :key="getCompositeKey(post)"
         class="w-full snap-start snap-always flex justify-center relative shrink-0"
         :class="commentsSheetHeight > 0 ? 'items-end' : 'items-center'"
@@ -34,39 +34,50 @@
         v-observe-visibility
       >
         <!-- Post media -->
-        <div class="relative max-h-full max-w-full">
+        <div class="relative h-full max-w-full flex items-center justify-center">
           <img
             v-if="['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(getFileExtension(post))"
             :src="post.file_url"
             :alt="post.tags || 'Post image'"
-            class="max-w-full object-contain transition-[max-height] duration-300"
-            :style="{ maxHeight: mediaMaxHeight }"
+            class="max-w-full max-h-full object-contain"
             :referrerpolicy="post.file_url && post.file_url.includes('gelbooru') ? 'no-referrer' : 'strict-origin-when-cross-origin'"
             @error="(e) => console.error('Image load error:', post.file_url, e)"
           />
-          <video
-            v-else-if="getFileExtension(post) === 'mp4' || getFileExtension(post) === 'webm' || isVideoPost(post)"
-            :src="getVideoSrc(post)"
-            :ref="(el) => setVideoRef(el, post)"
-            :poster="post.preview_url || post.sample_url"
-            autoplay
-            :loop="loopVideos && !(autoScroll && autoScrollWaitForVideo)"
-            playsinline
-            muted
-            class="max-w-full transition-[max-height] duration-300"
-            :style="{ maxHeight: mediaMaxHeight }"
-            :preload="(visibleStartIndex + visibleIdx) === currentPostIndex || (visibleStartIndex + visibleIdx) === currentPostIndex + 1 ? 'auto' : 'metadata'"
-            @click="togglePlayPause"
-            @play="onVideoPlay($event, post)"
-            @pause="onVideoPause($event, post)"
-            @timeupdate="onVideoTimeUpdate($event, post)"
-            @volumechange="onVideoVolumeChange($event, post)"
-            @loadstart="onVideoLoadStart(post)"
-            @waiting="onVideoWaiting(post)"
-            @playing="onVideoPlaying(post)"
-            @canplay="onVideoCanPlay(post)"
-            @error="onVideoError(post)"
-          ></video>
+          <!-- No poster and no autoplay: offscreen videos buffer (preload="auto") but never
+               play — the IntersectionObserver starts playback from 0 when a post enters view.
+               A paused <video> is NEVER visible: Android's webview draws its own overlay
+               play-glyph on paused videos (#148), so until playback starts we show a canvas
+               holding the decoded first frame instead — pixel-identical, seamless swap. -->
+          <template v-else-if="isVideoPost(post)">
+            <video
+              :src="getVideoSrc(post)"
+              :ref="(el) => setVideoRef(el, post)"
+              :loop="loopVideos && !(autoScroll && autoScrollWaitForVideo)"
+              playsinline
+              muted
+              class="max-w-full max-h-full"
+              :class="{ 'opacity-0': !videoActiveStates[getCompositeKey(post)] }"
+              preload="auto"
+              @loadeddata="onVideoLoadedData($event, post)"
+              @click="togglePlayPause"
+              @play="onVideoPlay($event, post)"
+              @pause="onVideoPause($event, post)"
+              @timeupdate="onVideoTimeUpdate($event, post)"
+              @volumechange="onVideoVolumeChange($event, post)"
+              @loadstart="onVideoLoadStart(post)"
+              @waiting="onVideoWaiting(post)"
+              @playing="onVideoPlaying(post)"
+              @canplay="onVideoCanPlay(post)"
+              @error="onVideoError(post)"
+            ></video>
+            <!-- First-frame stand-in while the video is not actively playing.
+                 pointer-events-none so taps fall through to the video underneath. -->
+            <canvas
+              v-show="!videoActiveStates[getCompositeKey(post)]"
+              :ref="(el) => setCanvasRef(el, post)"
+              class="absolute inset-0 m-auto max-w-full max-h-full pointer-events-none"
+            ></canvas>
+          </template>
           <!-- Custom Loading Spinner -->
           <div 
             v-if="videoLoadingStates[getCompositeKey(post)]" 
@@ -131,6 +142,7 @@ export default {
       isProgrammaticVolumeChange: false, // Flag to ignore volumechange events during programmatic updates
       isResizing: false, // Flag to suspend scroll tracking during CSS animation
       videoLoadingStates: {}, // Map of composite key -> loading boolean
+      videoActiveStates: {}, // Map of composite key -> true while video is actively playing in view (video visible, first-frame canvas hidden)
       videoErrorStates: {}, // Map of composite key -> error boolean (CDN blocked)
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
       _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
@@ -170,18 +182,8 @@ export default {
     }
   },
   computed: {
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'ratings']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
-
-    // Calculate max height for media based on comments sheet
-    mediaMaxHeight() {
-      // Base: 100vh - 4rem (nav bar) - comments sheet height
-      const baseHeight = 'calc(100vh - 4rem)';
-      if (this.commentsSheetHeight > 0) {
-        return `calc(100vh - 4rem - ${this.commentsSheetHeight}px)`;
-      }
-      return baseHeight;
-    },
 
     // Container style that adjusts height for comments sheet
     feedContainerStyle() {
@@ -193,13 +195,14 @@ export default {
       };
     },
 
-    // Post container style - each post takes full height of the adjusted feed
+    // Post container style - each post must be EXACTLY the scroll container's height.
+    // Using 100% (not a 100vh calc) keeps scroll-snap positions at exact multiples of
+    // clientHeight, which the index math in determineCurrentPost/_onWheel relies on.
+    // A viewport-based height drifts from clientHeight (nav bar + safe-area insets),
+    // desyncing currentPostIndex from the visible post after enough scrolling.
     postContainerStyle() {
       return {
-        height: this.commentsSheetHeight > 0
-          ? `calc(100vh - 4rem - ${this.commentsSheetHeight}px)`
-          : 'calc(100vh - 4rem)',
-        transition: 'height 0.35s cubic-bezier(0.32, 0.72, 0, 1)'
+        height: '100%'
       };
     },
     spacerTransitionStyle() {
@@ -221,11 +224,13 @@ export default {
     },
 
     // --- Virtual Scrolling Computed Properties ---
+    // Asymmetric window: scrolling down is the dominant direction, so keep more
+    // buffered runway ahead (rendered videos preload="auto" but never play offscreen)
     visibleStartIndex() {
       return Math.max(0, this.currentPostIndex - 2);
     },
     visibleEndIndex() {
-      return Math.min(this.posts.length - 1, this.currentPostIndex + 2);
+      return Math.min(this.posts.length - 1, this.currentPostIndex + 3);
     },
     visiblePosts() {
       if (!this.posts.length) return [];
@@ -233,23 +238,20 @@ export default {
     },
     topSpacerHeight() {
       if (this.visibleStartIndex === 0) return '0px';
-      const perPostHeight = this.commentsSheetHeight > 0 
-        ? `100vh - 4rem - ${this.commentsSheetHeight}px` 
-        : `100vh - 4rem`;
-      return `calc((${perPostHeight}) * ${this.visibleStartIndex})`;
+      // Percentages resolve against the scroll container's height, so spacers stay
+      // exactly N posts tall and scroll positions remain multiples of clientHeight.
+      return `calc(100% * ${this.visibleStartIndex})`;
     },
     bottomSpacerHeight() {
       const remainingPosts = Math.max(0, this.posts.length - 1 - this.visibleEndIndex);
       if (remainingPosts === 0) return '0px';
-      const perPostHeight = this.commentsSheetHeight > 0 
-        ? `100vh - 4rem - ${this.commentsSheetHeight}px` 
-        : `100vh - 4rem`;
-      return `calc((${perPostHeight}) * ${remainingPosts})`;
+      return `calc(100% * ${remainingPosts})`;
     }
   },
   // beforeUpdate removed to prevent clearing refs and causing infinite loops/resetting state
   async created() {
     this.videoElements = {}; // Non-reactive to prevent infinite render loops
+    this.videoCanvases = {}; // Non-reactive: first-frame canvas elements by composite key
     this.recommendationSystem = recommendationSystem;
     // Initialize recommendation system (async)
     await this.recommendationSystem.initialize();
@@ -298,6 +300,10 @@ export default {
     async fetchPosts(newSearch = false) {
       if (this.isFetching) return;
       this.isFetching = true;
+
+      // Settings load asynchronously at app startup; the first fetch must wait for
+      // them or it runs against defaults and ignores the saved media filter (#150)
+      await useSettingsStore().initialize();
       if (newSearch || this.posts.length === 0) {
         this.loading = true;
       }
@@ -368,12 +374,14 @@ export default {
           
           const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
             postsPerFetch: 20,
-            selectedRatings: ratings ? ratings.split(',') : ['general'],
+            selectedRatings: ratings ? ratings.split(',') : (this.ratings && this.ratings.length ? this.ratings : ['general']),
             whitelist: activeWhitelist,
             blacklist: activeBlacklist,
-            existingPostIds: blockedKeys, 
-            wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : true,
-            wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : true,
+            existingPostIds: blockedKeys,
+            // Fall back to the saved settings (not hardcoded true) so filters apply
+            // on first load, before the user ever hits "Apply Settings" (#150)
+            wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : this.mediaType.images,
+            wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : this.mediaType.videos,
           });
           
           if (batch.length > 0) {
@@ -479,18 +487,34 @@ export default {
         postElements.forEach(el => this.observer.observe(el));
     },
     setVideoRef(el, post) {
+      const key = this.getCompositeKey(post);
       if (el) {
-        const key = this.getCompositeKey(post);
         // Only initialize settings if this is a NEW element for this post
         // This prevents resetting muted=true during re-renders (e.g. volume updates)
         if (!this.videoElements[key] || this.videoElements[key] !== el) {
             this.videoElements[key] = el;
+            el._compositeKey = key; // For reverse lookup in the IntersectionObserver
             el.volume = this.volume;
             // If defaultMuted is ON, start muted. If OFF, inherit current mute state.
             // Use muted=true for initial autoplay compliance, IntersectionObserver will set correct state when visible.
             el.muted = true; // Safe default for autoplay
             el.currentTime = 0; // Reset progress to prevent carryover
+            // Fresh element hasn't started playback — keep it hidden behind the
+            // first-frame canvas so the webview's paused-video glyph can't show (#148)
+            if (this.videoActiveStates[key]) this.videoActiveStates[key] = false;
         }
+      } else if (this.videoElements[key] && !this.videoElements[key].isConnected) {
+        // Post left the virtual window: drop the detached element so lookups
+        // never hand a stale <video> to the playback controls
+        delete this.videoElements[key];
+      }
+    },
+    setCanvasRef(el, post) {
+      const key = this.getCompositeKey(post);
+      if (el) {
+        this.videoCanvases[key] = el;
+      } else if (this.videoCanvases[key] && !this.videoCanvases[key].isConnected) {
+        delete this.videoCanvases[key];
       }
     },
     
@@ -623,6 +647,22 @@ export default {
       this._stopAutoScrollTimer();
       this._removeVideoEndedListener();
     },
+    onVideoLoadedData(event, post) {
+      // First frame is decoded — capture it into the stand-in canvas so scrolling
+      // shows real content instead of the webview's paused-video placeholder (#148)
+      const key = this.getCompositeKey(post);
+      const video = event.target;
+      const canvas = this.videoCanvases[key];
+      if (canvas && video.videoWidth > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        try {
+          canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        } catch (e) {
+          // Drawing can fail on exotic sources; canvas stays transparent (black bg)
+        }
+      }
+    },
     onVideoLoadStart(post) {
       const key = this.getCompositeKey(post);
       // Clear existing timeout
@@ -649,6 +689,9 @@ export default {
         delete this.videoLoadingTimeouts[key];
       }
       this.videoLoadingStates[key] = false;
+      // Playback started: reveal the video and hide the first-frame stand-in.
+      // The canvas holds frame 0 and playback starts at 0, so the swap is seamless.
+      this.videoActiveStates[key] = true;
     },
     onVideoCanPlay(post) {
       const key = this.getCompositeKey(post);
@@ -696,10 +739,6 @@ export default {
           
           if (entry.isIntersecting) {
             if (video) {
-              // For the first video on initial load (no user scroll yet),
-              // let native autoplay handle everything — don't interfere.
-              const isInitialVideo = this.currentPostIndex === 0 && !this._hasUserScrolled;
-
               // Helper to apply mute preference once video is playing
               const applyMutePreference = () => {
                 const shouldMute = this.defaultMuted ? true : this.isMuted;
@@ -719,26 +758,34 @@ export default {
                 video.addEventListener('playing', onPlaying);
               }
 
-              if (!isInitialVideo) {
-                // Set flag to prevent volumechange event from overwriting store
-                this.isProgrammaticVolumeChange = true;
+              // Set flag to prevent volumechange event from overwriting store
+              this.isProgrammaticVolumeChange = true;
 
-                // Reset progress and mute only on FIRST visibility
-                if (!this._initializedVideos.has(video)) {
-                  video.currentTime = 0;
-                  video.muted = true;
-                }
-
-                // Clear flag after a short delay to allow volumechange event to pass
-                setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
+              // Reset progress and mute only on FIRST visibility — videos never
+              // play offscreen (no autoplay attribute), so they always start at 0
+              if (!this._initializedVideos.has(video)) {
+                video.currentTime = 0;
+                video.muted = true;
               }
 
-              // Only auto-play if setting is enabled (and not the initial video)
-              if (this.autoplayVideos && !isInitialVideo) {
-                // Video revealed by scrolling — call play() to start playback
+              // Clear flag after a short delay to allow volumechange event to pass
+              setTimeout(() => { this.isProgrammaticVolumeChange = false; }, 50);
+
+              // The observer owns playback: play() is only ever called here,
+              // when a post actually enters the viewport
+              if (this.autoplayVideos) {
                 const attemptPlay = () => {
+                  // Already playing: play() resolves without a new 'playing' event, so
+                  // apply the mute preference here or the video stays muted despite
+                  // the user unmuting.
+                  if (!video.paused && !video.ended) {
+                    this._initializedVideos.add(video);
+                    applyMutePreference();
+                    return;
+                  }
                   video.play().then(() => {
                     this._initializedVideos.add(video);
+                    applyMutePreference();
                   }).catch(() => {
                     // Retry once after a short delay
                     setTimeout(() => {
@@ -771,8 +818,8 @@ export default {
                     }
                   }, 3000);
                 }
-              } else if (!this.autoplayVideos) {
-                // Even without autoplay, honor user's mute preference after element is ready
+              } else {
+                // Autoplay disabled: still honor the user's mute preference
                 const shouldMute = this.defaultMuted ? true : this.isMuted;
                 video.muted = shouldMute;
               }
@@ -782,6 +829,11 @@ export default {
               video.pause();
               // Remove from initialized set so next time it enters view, it resets to start
               this._initializedVideos.delete(video);
+              // Back behind the first-frame canvas: the paused element must never be
+              // visible or the webview draws its overlay play glyph (#148)
+              if (video._compositeKey) {
+                this.videoActiveStates[video._compositeKey] = false;
+              }
               // Set flag before muting to prevent event feedback
               this.isProgrammaticVolumeChange = true;
               // Only mute if we aren't already muted (reduce spam)
