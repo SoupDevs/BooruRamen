@@ -79,6 +79,33 @@ async fn download_file(app: tauri::AppHandle, url: String, path: String) -> Resu
   }
 }
 
+/// Delete everything inside the configured download directory (but not the
+/// directory itself). The webview cannot touch the filesystem directly.
+#[tauri::command]
+async fn clear_downloads(path: String) -> Result<(), String> {
+  let dir = std::path::Path::new(&path);
+  if dir.parent().is_none() {
+    return Err("Refusing to clear a filesystem root".to_string());
+  }
+  if !dir.exists() {
+    return Ok(());
+  }
+  if !dir.is_dir() {
+    return Err("Download location is not a directory".to_string());
+  }
+
+  for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+    let entry_path = entry.map_err(|e| e.to_string())?.path();
+    let result = if entry_path.is_dir() {
+      std::fs::remove_dir_all(&entry_path)
+    } else {
+      std::fs::remove_file(&entry_path)
+    };
+    result.map_err(|e| e.to_string())?;
+  }
+  Ok(())
+}
+
 async fn perform_download(url: &str, path: &str) -> Result<(), String> {
   use std::io::Write;
 
@@ -125,7 +152,7 @@ pub fn run() {
     .plugin(tauri_plugin_http::init())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_notification::init())
-    .invoke_handler(tauri::generate_handler![download_file])
+    .invoke_handler(tauri::generate_handler![download_file, clear_downloads])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

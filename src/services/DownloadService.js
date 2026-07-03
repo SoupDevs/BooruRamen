@@ -214,6 +214,21 @@ export async function downloadPost(post, interactionType = 'liked') {
 }
 
 /**
+ * Delete everything inside the configured download directory.
+ * Only available in Tauri; the browser has no filesystem access.
+ */
+export async function clearDownloads() {
+  if (!isTauri()) {
+    console.warn('DownloadService: Clearing downloads is only available in the app.');
+    return false;
+  }
+  const dir = await getDownloadLocation();
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('clear_downloads', { path: dir });
+  return true;
+}
+
+/**
  * Check if a post should be auto-downloaded based on the interaction type
  * and the current settings.
  */
@@ -232,5 +247,6 @@ export default {
   resolveDownloadDir,
   resolvePostPath,
   downloadPost,
+  clearDownloads,
   shouldAutoDownload,
 };
