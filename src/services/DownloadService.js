@@ -165,18 +165,37 @@ function getFileExtensionFromUrl(url) {
 async function notify(body) {
   if (!isTauri()) return;
   try {
-    const { isPermissionGranted, requestPermission, sendNotification } =
-      await import('@tauri-apps/plugin-notification');
-    let granted = await isPermissionGranted();
+    const api = await import('@tauri-apps/plugin-notification');
+    let granted = await api.isPermissionGranted();
     if (!granted) {
-      granted = (await requestPermission()) === 'granted';
+      granted = (await api.requestPermission()) === 'granted';
     }
-    if (granted) {
-      sendNotification({ title: 'BooruRamen', body });
+    if (!granted) return;
+
+    if (isAndroid()) {
+      // Android 8+ silently drops notifications without a channel.
+      await ensureAndroidChannel(api);
+      await api.sendNotification({ title: 'BooruRamen', body, channelId: DOWNLOAD_CHANNEL_ID });
+    } else {
+      await api.sendNotification({ title: 'BooruRamen', body });
     }
   } catch (error) {
     console.warn('DownloadService: Notification failed:', error);
   }
+}
+
+const DOWNLOAD_CHANNEL_ID = 'downloads';
+let androidChannelCreated = false;
+
+async function ensureAndroidChannel(api) {
+  if (androidChannelCreated) return;
+  await api.createChannel({
+    id: DOWNLOAD_CHANNEL_ID,
+    name: 'Downloads',
+    description: 'Download status for saved posts',
+    importance: api.Importance.Default,
+  });
+  androidChannelCreated = true;
 }
 
 /**
