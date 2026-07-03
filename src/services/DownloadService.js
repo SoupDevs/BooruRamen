@@ -159,50 +159,11 @@ function getFileExtensionFromUrl(url) {
 }
 
 /**
- * Show a system notification (desktop toast / Android notification).
- * Failures are logged and swallowed so they never break a download.
- */
-async function notify(body) {
-  if (!isTauri()) return;
-  try {
-    const api = await import('@tauri-apps/plugin-notification');
-    let granted = await api.isPermissionGranted();
-    if (!granted) {
-      granted = (await api.requestPermission()) === 'granted';
-    }
-    if (!granted) return;
-
-    if (isAndroid()) {
-      // Android 8+ silently drops notifications without a channel.
-      await ensureAndroidChannel(api);
-      await api.sendNotification({ title: 'BooruRamen', body, channelId: DOWNLOAD_CHANNEL_ID });
-    } else {
-      await api.sendNotification({ title: 'BooruRamen', body });
-    }
-  } catch (error) {
-    console.warn('DownloadService: Notification failed:', error);
-  }
-}
-
-const DOWNLOAD_CHANNEL_ID = 'downloads';
-let androidChannelCreated = false;
-
-async function ensureAndroidChannel(api) {
-  if (androidChannelCreated) return;
-  await api.createChannel({
-    id: DOWNLOAD_CHANNEL_ID,
-    name: 'Downloads',
-    description: 'Download status for saved posts',
-    importance: api.Importance.Default,
-  });
-  androidChannelCreated = true;
-}
-
-/**
  * Download a post's file to the user's filesystem.
  * In Tauri the download runs entirely on the Rust side (only the URL and
  * destination path cross the IPC bridge) so large videos don't stall the
- * WebView. In the browser it falls back to an anchor download.
+ * WebView; the Rust command also handles the download notifications.
+ * In the browser it falls back to an anchor download.
  *
  * @param {Object} post - The post object with file_url, id, file_ext, etc.
  * @param {string} interactionType - 'liked' or 'favorited'
@@ -215,18 +176,14 @@ export async function downloadPost(post, interactionType = 'liked') {
   }
 
   if (isTauri()) {
-    const filename = buildFilename(post);
     const filePath = await resolvePostPath(post, interactionType);
-    notify(`Downloading ${filename}…`);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('download_file', { url: post.file_url, path: filePath });
       console.log(`DownloadService: Saved ${filePath}`);
-      notify(`Saved ${filename}`);
       return true;
     } catch (error) {
       console.error('DownloadService: Download failed:', error);
-      notify(`Failed to download ${filename}`);
       return false;
     }
   }
