@@ -159,9 +159,31 @@ function getFileExtensionFromUrl(url) {
 }
 
 /**
+ * Show a system notification (desktop toast / Android notification).
+ * Failures are logged and swallowed so they never break a download.
+ */
+async function notify(body) {
+  if (!isTauri()) return;
+  try {
+    const { isPermissionGranted, requestPermission, sendNotification } =
+      await import('@tauri-apps/plugin-notification');
+    let granted = await isPermissionGranted();
+    if (!granted) {
+      granted = (await requestPermission()) === 'granted';
+    }
+    if (granted) {
+      sendNotification({ title: 'BooruRamen', body });
+    }
+  } catch (error) {
+    console.warn('DownloadService: Notification failed:', error);
+  }
+}
+
+/**
  * Download a post's file to the user's filesystem.
- * In Tauri the file is written directly into the configured directory
- * (created if missing). In the browser it falls back to an anchor download.
+ * In Tauri the download runs entirely on the Rust side (only the URL and
+ * destination path cross the IPC bridge) so large videos don't stall the
+ * WebView. In the browser it falls back to an anchor download.
  *
  * @param {Object} post - The post object with file_url, id, file_ext, etc.
  * @param {string} interactionType - 'liked' or 'favorited'
@@ -173,27 +195,30 @@ export async function downloadPost(post, interactionType = 'liked') {
     return false;
   }
 
+  if (isTauri()) {
+    const filename = buildFilename(post);
+    const filePath = await resolvePostPath(post, interactionType);
+    notify(`Downloading ${filename}…`);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('download_file', { url: post.file_url, path: filePath });
+      console.log(`DownloadService: Saved ${filePath}`);
+      notify(`Saved ${filename}`);
+      return true;
+    } catch (error) {
+      console.error('DownloadService: Download failed:', error);
+      notify(`Failed to download ${filename}`);
+      return false;
+    }
+  }
+
   try {
-    // httpFetch uses the Tauri HTTP plugin in-app (bypasses CORS on file CDNs)
+    // Browser fallback: anchor-click download handled by the browser.
     const response = await httpFetch(post.file_url);
     if (!response.ok) {
       console.error(`DownloadService: Failed to fetch ${post.file_url} - ${response.status}`);
       return false;
     }
-
-    if (isTauri()) {
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      const dir = await resolveDownloadDir(interactionType);
-      const filePath = joinPath(dir, buildFilename(post));
-
-      const { mkdir, writeFile } = await import('@tauri-apps/plugin-fs');
-      await mkdir(dir, { recursive: true });
-      await writeFile(filePath, bytes);
-      console.log(`DownloadService: Saved ${filePath}`);
-      return true;
-    }
-
-    // Browser fallback: anchor-click download handled by the browser.
     const blob = await response.blob();
     const filename = buildFilename(post);
     const url = URL.createObjectURL(blob);

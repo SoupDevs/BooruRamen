@@ -8,18 +8,7 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    {
-      "identifier": "fs:allow-mkdir",
-      "allow": [{ "path": "**" }]
-    },
-    {
-      "identifier": "fs:allow-write-file",
-      "allow": [{ "path": "**" }]
-    },
-    {
-      "identifier": "fs:allow-exists",
-      "allow": [{ "path": "**" }]
-    },
+    "notification:default",
     {
       "identifier": "http:default",
       "allow": [
