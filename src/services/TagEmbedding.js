@@ -89,6 +89,20 @@ class TagEmbedding {
   }
 
   /**
+   * Reset all learned co-occurrence data so embeddings rebuild from
+   * scratch. Keeps isBuilt true: the instance stays usable and simply
+   * re-learns from interactions that arrive after the reset.
+   */
+  reset() {
+    this.embeddings = new Map();
+    this.pendingTags = new Set();
+    this.tagCooccurrence = new Map();
+    this.tagFrequency = new Map();
+    this.totalPosts = 0;
+    this.pendingInteractions = [];
+  }
+
+  /**
    * Serialize for storage.
    */
   toSnapshot() {

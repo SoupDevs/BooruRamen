@@ -516,11 +516,30 @@
       </div>
     </div>
 
+    <!-- Success Splash Modal -->
+    <div v-if="showSuccessModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
+      <div class="bg-gray-800 rounded-lg max-w-sm w-full p-6 shadow-xl border border-gray-700">
+        <div class="flex items-start gap-3 mb-2">
+          <div class="w-8 h-8 rounded-full bg-green-600/20 flex items-center justify-center flex-shrink-0">
+            <Check class="w-5 h-5 text-green-400" />
+          </div>
+          <h3 class="text-xl font-bold">{{ successTitle }}</h3>
+        </div>
+        <p class="text-gray-300 mb-6">{{ successMessage }}</p>
+        <button
+          @click="showSuccessModal = false"
+          class="w-full px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded text-white font-medium transition"
+        >
+          OK
+        </button>
+      </div>
+    </div>
+
     <!-- Refresh Feed Modal -->
     <div v-if="showRefreshModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
       <div class="bg-gray-800 rounded-lg max-w-sm w-full p-6 shadow-xl border border-gray-700">
         <h3 class="text-xl font-bold mb-2">Start fresh?</h3>
-        <p class="text-gray-300 mb-6">We'll clear your history and reset your recommendations so you can discover new content.</p>
+        <p class="text-gray-300 mb-6">We'll reset your recommendations so you can discover new content. Your history, likes, and favorites won't be touched.</p>
         <div class="flex gap-3">
           <button
             @click="closeRefreshModal"
@@ -573,6 +592,10 @@ export default {
       modalMessage: '',
       modalWarning: '',
       pendingAction: null,
+      pendingSuccessMessage: '',
+      showSuccessModal: false,
+      successTitle: '',
+      successMessage: '',
       showRefreshModal: false,
       avoidedTagsInput: '',
       saveMessage: '',
@@ -854,23 +877,34 @@ export default {
     resetAvoidedTags() {
       this.avoidedTagsInput = COMMON_TAGS.join(' ');
     },
-    confirmAction(title, message, action, warning = '') {
+    confirmAction(title, message, action, warning = '', successMessage = '') {
       this.modalTitle = title;
       this.modalMessage = message;
       this.modalWarning = warning;
       this.pendingAction = action;
+      this.pendingSuccessMessage = successMessage;
       this.showModal = true;
     },
-    executeAction() {
-      if (this.pendingAction) {
-        this.pendingAction();
-        this.pendingAction = null;
-      }
+    async executeAction() {
+      const action = this.pendingAction;
+      const successMessage = this.pendingSuccessMessage;
+      const title = this.modalTitle;
+      this.pendingAction = null;
+      this.pendingSuccessMessage = '';
       this.showModal = false;
+      if (action) {
+        await action();
+        if (successMessage) {
+          this.successTitle = title;
+          this.successMessage = successMessage;
+          this.showSuccessModal = true;
+        }
+      }
     },
     closeModal() {
       this.showModal = false;
       this.pendingAction = null;
+      this.pendingSuccessMessage = '';
     },
     showRefreshFeedModal() {
       this.showRefreshModal = true;
@@ -879,9 +913,14 @@ export default {
       this.showRefreshModal = false;
     },
     async executeRefreshFeed() {
-      await RecommendationSystem.resetRecommendations();
-      this.showRefreshModal = false;
-      this.$router.replace({ name: 'Home', query: { ...this.$route.query, refresh: Date.now().toString() } });
+      try {
+        await RecommendationSystem.resetRecommendations();
+        this.$router.replace({ name: 'Home', query: { ...this.$route.query, refresh: Date.now().toString() } });
+      } catch (error) {
+        console.error('Failed to reset recommendations:', error);
+      } finally {
+        this.showRefreshModal = false;
+      }
     },
     async testAuth(source) {
       this.isTestingAuth = true;
@@ -987,21 +1026,27 @@ export default {
       this.confirmAction(
         'Clear History',
         'Are you sure you want to clear your entire viewing history?',
-        async () => { await StorageService.clearHistory(); }
+        async () => { await StorageService.clearHistory(); },
+        '',
+        'Your viewing history has been cleared.'
       );
     },
     wipeLikes() {
       this.confirmAction(
         'Clear Likes',
         'Are you sure you want to clear all your liked posts?',
-        async () => { await StorageService.clearLikes(); }
+        async () => { await StorageService.clearLikes(); },
+        '',
+        'All of your liked posts have been cleared.'
       );
     },
     wipeFavorites() {
       this.confirmAction(
         'Clear Favorites',
         'Are you sure you want to clear all your favorited posts?',
-        async () => { await StorageService.clearFavorites(); }
+        async () => { await StorageService.clearFavorites(); },
+        '',
+        'All of your favorited posts have been cleared.'
       );
     },
     async wipeDownloads() {
@@ -1021,7 +1066,8 @@ export default {
           await DownloadService.clearDownloads();
           await StorageService.clearDownloads();
         },
-        'This action cannot be undone.'
+        'This action cannot be undone.',
+        'The downloads folder has been cleared.'
       );
     },
     wipeAll() {
@@ -1030,8 +1076,9 @@ export default {
         'Are you sure you want to clear ALL your data?',
         async () => {
           await StorageService.clearAllData();
-          window.location.reload();
-        }
+        },
+        '',
+        'All app data has been cleared.'
       );
     },
   },

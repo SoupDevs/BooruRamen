@@ -100,7 +100,9 @@ class RecommendationWorkerCore {
   resetExploreSession() {
     this.strategyCursors = {};
     this.exhaustedStrategies = new Set();
-    this.banditExplorer.endSession();
+    // ML components only exist after initialize(); a reset triggered from
+    // the settings page can arrive before the feed ever initialized them
+    if (this.banditExplorer) this.banditExplorer.endSession();
   }
 
   applyDecay(hoursPassed) {
@@ -427,10 +429,14 @@ class RecommendationWorkerCore {
     this.postScoreCache.clear();
     this.resetExploreSession();
 
-    // Reset ML components
+    // Reset ML components so the model retrains only from interactions
+    // made after this point. The persisted snapshot below intentionally
+    // omits mlModel/banditState/tagEmbeddings, so the reset also survives
+    // an app restart.
     if (this.mlInitialized) {
       this.mlScorer.reset();
       this.banditExplorer.reset();
+      this.tagEmbedding.reset();
     }
 
     await StorageService.storeProfileSnapshot({
