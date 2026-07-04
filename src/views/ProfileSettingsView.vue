@@ -1051,11 +1051,11 @@ export default {
     },
     async wipeDownloads() {
       if (!DownloadService.isTauri()) {
-        this.confirmAction(
-          'Clear Downloads Folder',
-          'Clearing the downloads folder is only available in the app. In the browser, downloaded files are managed by your browser.',
-          () => {}
-        );
+        // Browser build: the browser manages downloaded files, so there is
+        // no app folder to clear — just explain that with a splash.
+        this.successTitle = 'Clear Downloads Folder';
+        this.successMessage = 'Nothing to clear here: in the browser version, downloaded files are managed by your browser. Clearing the downloads folder is only available in the app.';
+        this.showSuccessModal = true;
         return;
       }
       const dir = await DownloadService.getDownloadLocation();
