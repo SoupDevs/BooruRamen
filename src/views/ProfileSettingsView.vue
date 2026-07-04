@@ -353,6 +353,7 @@
                   @change="saveDownloadSettings"
                 />
                 <button
+                  v-if="!isAndroid"
                   @click="browseDownloadFolder"
                   class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-white text-sm font-medium transition whitespace-nowrap"
                 >
@@ -360,6 +361,7 @@
                 </button>
               </div>
               <p v-if="folderStatus" class="text-xs mt-2" :class="folderStatus.ok ? 'text-green-400' : 'text-red-400'">{{ folderStatus.message }}</p>
+              <p class="text-xs text-gray-500 mt-2">Leave empty to use the default: a BooruRamen folder inside your Downloads folder.</p>
             </div>
 
             <!-- Save Liked Posts -->
@@ -496,7 +498,11 @@
     <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
       <div class="bg-gray-800 rounded-lg max-w-sm w-full p-6 shadow-xl border border-gray-700">
         <h3 class="text-xl font-bold mb-2">{{ modalTitle }}</h3>
-        <p class="text-gray-300 mb-6">{{ modalMessage }}</p>
+        <p class="text-gray-300" :class="modalWarning ? 'mb-3' : 'mb-6'">{{ modalMessage }}</p>
+        <div v-if="modalWarning" class="flex items-start gap-2 bg-yellow-500/10 border border-yellow-600/40 rounded-md p-3 mb-6">
+          <AlertCircle class="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+          <p class="text-yellow-400 text-sm">{{ modalWarning }}</p>
+        </div>
         <div class="flex gap-3">
           <button
             @click="closeModal"
@@ -622,6 +628,7 @@ import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSys
 
 import BooruService from '../services/BooruService';
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from '../services/BooruAdapters';
+import DownloadService from '../services/DownloadService';
 import { X, Check, AlertCircle } from 'lucide-vue-next';
 
 export default {
@@ -634,6 +641,7 @@ export default {
       showModal: false,
       modalTitle: '',
       modalMessage: '',
+      modalWarning: '',
       pendingAction: null,
       showRefreshModal: false,
       avoidedTagsInput: '',
@@ -683,6 +691,9 @@ export default {
     ]),
     appVersion() {
       return __APP_VERSION__;
+    },
+    isAndroid() {
+      return DownloadService.isAndroid();
     },
     currentPage() {
       return this.navigationStack.length > 0
@@ -823,27 +834,27 @@ export default {
       this.saveSettings();
     },
     async browseDownloadFolder() {
-      // Use the File System Access API if available (Chromium browsers)
-      if (window.showDirectoryPicker) {
+      // In Tauri, use the native folder picker (returns a full path)
+      if (DownloadService.isTauri()) {
         try {
-          const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-          this.downloadLocation = dirHandle.name;
-          this.folderStatus = { ok: true, message: `Selected: ${dirHandle.name}` };
-          this.saveDownloadSettings();
-        } catch (err) {
-          // User cancelled the picker
-          if (err.name !== 'AbortError') {
-            this.folderStatus = { ok: false, message: 'Could not open folder picker. Enter the path manually.' };
+          const { open } = await import('@tauri-apps/plugin-dialog');
+          const defaultPath = await DownloadService.getDownloadLocation();
+          const selected = await open({ directory: true, defaultPath });
+          if (selected) {
+            this.downloadLocation = selected;
+            this.folderStatus = { ok: true, message: `Selected: ${selected}` };
+            this.saveDownloadSettings();
           }
+        } catch (err) {
+          console.error('Folder picker failed:', err);
+          this.folderStatus = { ok: false, message: 'Could not open folder picker. Enter the path manually.' };
         }
-      } else {
-        // Fallback: prompt the user
-        const path = prompt('Enter download folder path:', this.downloadLocation || '~/Downloads/BooruRamen');
-        if (path !== null) {
-          this.downloadLocation = path;
-          this.saveDownloadSettings();
-        }
+        return;
       }
+
+      // Browser: the download location is controlled by the browser itself,
+      // so a picker here is only informational. Let the user type a path.
+      this.folderStatus = { ok: false, message: 'Folder browsing is only available in the app. Enter the path manually.' };
     },
 
     async saveAvoidedTags() {
@@ -972,9 +983,10 @@ export default {
     resetAvoidedTags() {
       this.avoidedTagsInput = COMMON_TAGS.join(' ');
     },
-    confirmAction(title, message, action) {
+    confirmAction(title, message, action, warning = '') {
       this.modalTitle = title;
       this.modalMessage = message;
+      this.modalWarning = warning;
       this.pendingAction = action;
       this.showModal = true;
     },
@@ -1121,11 +1133,24 @@ export default {
         async () => { await StorageService.clearFavorites(); }
       );
     },
-    wipeDownloads() {
+    async wipeDownloads() {
+      if (!DownloadService.isTauri()) {
+        this.confirmAction(
+          'Clear Downloads Folder',
+          'Clearing the downloads folder is only available in the app. In the browser, downloaded files are managed by your browser.',
+          () => {}
+        );
+        return;
+      }
+      const dir = await DownloadService.getDownloadLocation();
       this.confirmAction(
         'Clear Downloads Folder',
-        'Are you sure you want to clear the downloads folder?',
-        async () => { await StorageService.clearDownloads(); }
+        `Are you sure you want to delete all files in "${dir}"?`,
+        async () => {
+          await DownloadService.clearDownloads();
+          await StorageService.clearDownloads();
+        },
+        'This action cannot be undone.'
       );
     },
     wipeAll() {
