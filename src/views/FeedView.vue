@@ -182,7 +182,7 @@ export default {
     }
   },
   computed: {
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'ratings']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Container style that adjusts height for comments sheet
@@ -364,7 +364,7 @@ export default {
           });
         };
 
-        const { ratings, whitelist, blacklist } = this.$route.query;
+        const { whitelist, blacklist } = this.$route.query;
 
         const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
         const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
@@ -374,7 +374,8 @@ export default {
           
           const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
             postsPerFetch: 20,
-            selectedRatings: ratings ? ratings.split(',') : (this.ratings && this.ratings.length ? this.ratings : ['general']),
+            // Ratings are no longer user-configurable: always query general
+            selectedRatings: ['general'],
             whitelist: activeWhitelist,
             blacklist: activeBlacklist,
             existingPostIds: blockedKeys,

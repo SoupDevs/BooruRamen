@@ -14,8 +14,9 @@ export const useSettingsStore = defineStore('settings', {
         loopVideos: true,
         mediaType: { images: false, videos: true },
         ratings: ['general'],
-        // Which ratings are enabled in profile settings (controls visibility in sidebar)
-        enabledRatings: ['general'],
+        // Tag query overrides: applied to every outgoing search query
+        tagAlwaysInclude: [],
+        tagNeverInclude: [],
         whitelistTags: ['meme'],
         blacklistTags: [],
         activeSource: { type: 'danbooru', url: 'https://danbooru.donmai.us', name: 'Danbooru' },
@@ -52,7 +53,10 @@ export const useSettingsStore = defineStore('settings', {
                     activeSource: saved.settings && saved.settings.activeSource ? saved.settings.activeSource : this.activeSource,
                     customSources: saved.settings && saved.settings.customSources ? saved.settings.customSources : this.customSources,
                     avoidedTags: saved.settings && saved.settings.avoidedTags ? saved.settings.avoidedTags : this.avoidedTags,
-                    enabledRatings: saved.settings && saved.settings.enabledRatings ? saved.settings.enabledRatings : this.enabledRatings,
+                    // Ratings are no longer user-configurable: always query general
+                    ratings: ['general'],
+                    tagAlwaysInclude: saved.settings && Array.isArray(saved.settings.tagAlwaysInclude) ? saved.settings.tagAlwaysInclude : this.tagAlwaysInclude,
+                    tagNeverInclude: saved.settings && Array.isArray(saved.settings.tagNeverInclude) ? saved.settings.tagNeverInclude : this.tagNeverInclude,
                     downloadLocation: saved.settings && saved.settings.downloadLocation !== undefined ? saved.settings.downloadLocation : this.downloadLocation,
                     downloadLiked: saved.settings && saved.settings.downloadLiked !== undefined ? saved.settings.downloadLiked : this.downloadLiked,
                     downloadFavorited: saved.settings && saved.settings.downloadFavorited !== undefined ? saved.settings.downloadFavorited : this.downloadFavorited,
@@ -69,32 +73,9 @@ export const useSettingsStore = defineStore('settings', {
             this.saveSettings()
         },
 
-        toggleRating(rating) {
-            const index = this.ratings.indexOf(rating)
-            if (index > -1) {
-                this.ratings.splice(index, 1)
-            } else {
-                this.ratings.push(rating)
-            }
-            this.saveSettings()
-        },
-
-        toggleEnabledRating(rating) {
-            const index = this.enabledRatings.indexOf(rating)
-            if (index > -1) {
-                this.enabledRatings.splice(index, 1)
-            } else {
-                this.enabledRatings.push(rating)
-            }
-            // Sync: also toggle in active ratings
-            const activeIndex = this.ratings.indexOf(rating)
-            if (index > -1 && activeIndex > -1) {
-                // Disabling: also turn off in sidebar
-                this.ratings.splice(activeIndex, 1)
-            } else if (index === -1 && activeIndex === -1) {
-                // Enabling: auto-enable in sidebar too
-                this.ratings.push(rating)
-            }
+        setTagOverrides({ alwaysInclude, neverInclude }) {
+            if (Array.isArray(alwaysInclude)) this.tagAlwaysInclude = alwaysInclude
+            if (Array.isArray(neverInclude)) this.tagNeverInclude = neverInclude
             this.saveSettings()
         },
 
@@ -140,7 +121,8 @@ export const useSettingsStore = defineStore('settings', {
                     loopVideos: this.loopVideos,
                     mediaType: this.mediaType,
                     ratings: this.ratings,
-                    enabledRatings: this.enabledRatings,
+                    tagAlwaysInclude: this.tagAlwaysInclude,
+                    tagNeverInclude: this.tagNeverInclude,
                     whitelistTags: this.whitelistTags,
                     blacklistTags: this.blacklistTags,
                     activeSource: this.activeSource,
