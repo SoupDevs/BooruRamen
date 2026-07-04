@@ -1,7 +1,6 @@
 import StorageService from '../services/StorageService';
-import { TagEmbedding } from '../services/TagEmbedding';
 import tagEmbedding from '../services/TagEmbedding';
-import { MLScorer } from '../services/MLScorer';
+import { MLScorer, TRAIN_THRESHOLD } from '../services/MLScorer';
 import { BanditExplorer } from '../services/BanditExplorer';
 
 // Constants for recommendation system
@@ -77,7 +76,10 @@ class RecommendationWorkerCore {
     if (this.mlInitialized) return;
 
     try {
-      this.tagEmbedding = new TagEmbedding();
+      // Use the module singleton: MLScorer imports the same singleton for
+      // feature extraction, so training a separate instance here would leave
+      // the scorer reading from an empty, untrained embedding table.
+      this.tagEmbedding = tagEmbedding;
       this.mlScorer = new MLScorer();
       this.banditExplorer = new BanditExplorer();
 
@@ -98,7 +100,9 @@ class RecommendationWorkerCore {
   resetExploreSession() {
     this.strategyCursors = {};
     this.exhaustedStrategies = new Set();
-    this.banditExplorer.endSession();
+    // ML components only exist after initialize(); a reset triggered from
+    // the settings page can arrive before the feed ever initialized them
+    if (this.banditExplorer) this.banditExplorer.endSession();
   }
 
   applyDecay(hoursPassed) {
@@ -156,16 +160,35 @@ class RecommendationWorkerCore {
       return;
     }
 
+    // Normalize now so ML feature extraction during training sees the
+    // current tag affinities instead of last update's (or empty) scores
+    this.normalizeScores();
+
+    // A fresh or reset ML model (e.g., after a feature-layout change) has
+    // seen none of the stored history — the incremental path only feeds it
+    // interactions newer than the last snapshot. Flag it for a backfill.
+    const mlNeedsBackfill = this.mlInitialized && isIncremental && this.mlScorer.interactionCount === 0;
+    const backfillUpTo = this.lastUpdateTime;
+
     // Process interactions for both heuristic profile and ML
     interactions.forEach(interaction => {
+      // Undo events (un-like, un-favorite, clearing a dislike) carry no
+      // preference signal. Processing them poisons the profile: a like is
+      // logged together with a dislike-clear, whose -1.0 weight would cancel
+      // the like's +1.0 on every tag.
+      const isToggle = interaction.type === 'like' || interaction.type === 'favorite' || interaction.type === 'dislike';
+      if (isToggle && !interaction.value) return;
+
       const ageInHours = (now - interaction.timestamp) / (1000 * 60 * 60);
       const recencyWeight = Math.exp(-0.05 * ageInHours);
       let weight = INTERACTION_WEIGHTS[interaction.type] || 0;
-      weight *= recencyWeight;
 
       if (interaction.type === 'timeSpent') {
-        weight *= (interaction.value / 1000);
+        const seconds = interaction.value / 1000;
+        // A sub-2s view is a swipe-away: mildly negative preference signal
+        weight = seconds < 2 ? -0.2 : weight * seconds;
       }
+      weight *= recencyWeight;
 
       if (interaction.metadata && interaction.metadata.post) {
         this.updateProfileWithPost(interaction.metadata.post, weight);
@@ -174,13 +197,16 @@ class RecommendationWorkerCore {
         if (this.mlInitialized) {
           this.tagEmbedding.addInteraction(interaction);
 
-          // Compute label for ML training
+          // Compute label for bandit reward (mirrors MLScorer's labels)
           let label = 0.5;
-          if (interaction.type === 'like' && interaction.value > 0) label = 0.8;
-          else if (interaction.type === 'favorite' && interaction.value > 0) label = 1.0;
+          if (interaction.type === 'like') label = 0.8;
+          else if (interaction.type === 'favorite') label = 1.0;
           else if (interaction.type === 'dislike') label = 0.0;
           else if (interaction.type === 'timeSpent') {
-            label = Math.min(0.9, 0.3 + (interaction.value / 30000) * 0.6);
+            const seconds = interaction.value / 1000;
+            label = seconds < 2
+              ? 0.1
+              : Math.min(0.9, 0.3 + ((seconds - 2) / 28) * 0.6);
           }
 
           this.mlScorer.addTrainingSample(
@@ -212,6 +238,13 @@ class RecommendationWorkerCore {
       }
     });
 
+    // Retrain a fresh/reset ML model from stored history. Only the scorer
+    // needs this — tag embeddings and the heuristic profile persist in the
+    // snapshot independently of the model weights.
+    if (mlNeedsBackfill) {
+      await this._backfillMLTraining(resetTimestamp, backfillUpTo);
+    }
+
     // Flush any remaining training samples
     if (this.mlInitialized) {
       const wasTrained = this.mlScorer.isTrained;
@@ -226,6 +259,44 @@ class RecommendationWorkerCore {
 
     this.lastUpdateTime = now;
     await this._saveProfileSnapshot();
+  }
+
+  /**
+   * Feed stored interaction history to the ML scorer as training samples.
+   * Used when the model was re-initialized (feature-layout change) but the
+   * user already has interaction history — without this the model would sit
+   * untrained (and the feed unscored by ML) until enough new interactions
+   * accumulate.
+   * @param {number} resetTimestamp - Ignore interactions before this time
+   * @param {number} upToTimestamp - Ignore interactions after this time
+   *   (newer ones were just processed by the regular incremental loop)
+   */
+  async _backfillMLTraining(resetTimestamp, upToTimestamp) {
+    let history = await StorageService.getInteractions();
+    history = history.filter(i =>
+      i.timestamp > (resetTimestamp || 0) &&
+      (!upToTimestamp || i.timestamp <= upToTimestamp) &&
+      i.metadata?.post
+    );
+    if (history.length === 0) return;
+
+    console.log(`[ML] Backfilling scorer from ${history.length} stored interactions`);
+    for (const interaction of history) {
+      this.mlScorer.addTrainingSample(
+        interaction.metadata.post,
+        interaction.type,
+        interaction.value,
+        this.tagScores,
+        {
+          ratingPreferences: this.ratingPreferences,
+          mediaTypePreferences: this.mediaTypePreferences,
+        }
+      );
+    }
+    this.mlScorer.flushTraining();
+    if (this.mlScorer.isTrained) {
+      this.postScoreCache.clear();
+    }
   }
 
   /**
@@ -343,6 +414,23 @@ class RecommendationWorkerCore {
     this.lastUpdateTime = Date.now();
   }
 
+  /**
+   * Wipe all in-memory recommendation and ML state without writing anything
+   * to storage. Used by "Clear All Data": the caller clears IndexedDB, and
+   * this makes the live session match the now-empty disk, as if the app had
+   * been freshly installed.
+   */
+  factoryReset() {
+    this.initializeDefaultProfile();
+    this.postScoreCache.clear();
+    this.resetExploreSession();
+    if (this.mlInitialized) {
+      this.mlScorer.reset();
+      this.banditExplorer.reset();
+      this.tagEmbedding.reset();
+    }
+  }
+
   async resetRecommendations() {
     const resetTime = Date.now();
     await StorageService.storePreferences({ recommendationResetTime: resetTime });
@@ -358,10 +446,14 @@ class RecommendationWorkerCore {
     this.postScoreCache.clear();
     this.resetExploreSession();
 
-    // Reset ML components
+    // Reset ML components so the model retrains only from interactions
+    // made after this point. The persisted snapshot below intentionally
+    // omits mlModel/banditState/tagEmbeddings, so the reset also survives
+    // an app restart.
     if (this.mlInitialized) {
       this.mlScorer.reset();
       this.banditExplorer.reset();
+      this.tagEmbedding.reset();
     }
 
     await StorageService.storeProfileSnapshot({
@@ -402,7 +494,7 @@ class RecommendationWorkerCore {
     let score;
 
     // Use ML scorer when trained
-    if (this.mlScorer.isTrained) {
+    if (this.mlInitialized && this.mlScorer.isTrained) {
       score = this.mlScorer.scorePost(
         post,
         this.tagScores,
@@ -435,17 +527,18 @@ class RecommendationWorkerCore {
   _embeddingScore(post) {
     if (!this.tagScores || Object.keys(this.tagScores).length === 0) return 0;
 
-    // Build user interest embedding from top tags
+    // Build user interest embedding from top positive-affinity tags
     const userEntries = Object.entries(this.tagScores)
+      .filter(([, score]) => score > 0)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 20);
     const userTags = userEntries.map(([tag]) => tag);
     const userTagWeights = new Map(userEntries);
     const userEmb = tagEmbedding.getAverageEmbedding(userTags, userTagWeights);
 
-    // Build post tag embedding
+    // Build post tag embedding (IDF-weighted, noise tags excluded)
     const postTags = (post.tag_string || '').split(' ').filter(t => t);
-    const postEmb = tagEmbedding.getAverageEmbedding(postTags);
+    const postEmb = tagEmbedding.getPostEmbedding(postTags);
 
     if (!userEmb || !postEmb) return 0.1;
 
@@ -480,6 +573,9 @@ class RecommendationWorkerCore {
       mlFeatures: null,
       mlTagContributions: null,
       contributingTags: [],
+      mlActive: this.mlInitialized && this.mlScorer.isTrained,
+      mlInteractionCount: this.mlInitialized ? this.mlScorer.interactionCount : 0,
+      mlTrainThreshold: TRAIN_THRESHOLD,
     };
 
     // Get per-tag heuristic scores for reference (sorted by tag affinity)
@@ -494,7 +590,7 @@ class RecommendationWorkerCore {
     details.contributingTags = contributors.slice(0, 10);
 
     // Add ML-specific breakdown when trained
-    if (this.mlScorer.isTrained) {
+    if (this.mlInitialized && this.mlScorer.isTrained) {
       const userProfile = {
         ratingPreferences: this.ratingPreferences,
         mediaTypePreferences: this.mediaTypePreferences,
@@ -749,6 +845,9 @@ class RecommendationWorkerCore {
   }
 
   getMLStats() {
+    if (!this.mlInitialized) {
+      return { tagEmbeddings: null, mlScorer: null, bandit: null };
+    }
     return {
       tagEmbeddings: this.tagEmbedding.getStats(),
       mlScorer: this.mlScorer.getStats(),
@@ -780,6 +879,10 @@ self.onmessage = async (e) => {
         break;
       case 'resetRecommendations':
         await core.resetRecommendations();
+        result = true;
+        break;
+      case 'factoryReset':
+        core.factoryReset();
         result = true;
         break;
       case 'trackInteraction':
@@ -836,7 +939,7 @@ self.onmessage = async (e) => {
         result = core.getMLStats();
         break;
       case 'findSimilarTags':
-        result = this.tagEmbedding.findSimilarTags(payload.query, payload.topK || 10, new Set(payload.exclude || []));
+        result = tagEmbedding.findSimilarTags(payload.query, payload.topK || 10, new Set(payload.exclude || []));
         break;
       default:
         throw new Error(`Unknown message type: ${type}`);

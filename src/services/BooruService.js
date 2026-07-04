@@ -76,8 +76,44 @@ class BooruService {
         }
     }
 
+    /**
+     * Apply the user's tag query overrides to a tag string right before it is
+     * sent to the booru source: strip "Never Include" tags from the query and
+     * append "Always Include" tags that are missing. If a tag appears in both
+     * lists, Never Include wins.
+     * @param {string} tags - Space-separated tag query
+     * @returns {Promise<string>} - The adjusted tag query
+     */
+    async applyTagOverrides(tags) {
+        const saved = await StorageService.loadAppSettings();
+        const settings = saved && saved.settings ? saved.settings : {};
+        const alwaysInclude = Array.isArray(settings.tagAlwaysInclude) ? settings.tagAlwaysInclude : [];
+        const neverInclude = Array.isArray(settings.tagNeverInclude) ? settings.tagNeverInclude : [];
+
+        if (alwaysInclude.length === 0 && neverInclude.length === 0) {
+            return tags;
+        }
+
+        let tokens = (tags || '').split(/\s+/).filter(t => t.length > 0);
+        tokens = tokens.filter(t => !neverInclude.includes(t));
+
+        for (const tag of alwaysInclude) {
+            if (!neverInclude.includes(tag) && !tokens.includes(tag)) {
+                tokens.push(tag);
+            }
+        }
+
+        const result = tokens.join(' ');
+        if (result !== (tags || '')) {
+            console.log(`Tag overrides applied: "${tags}" -> "${result}"`);
+        }
+        return result;
+    }
+
     async getPosts(params) {
         if (this.adapters.length === 0) await this.initialize();
+
+        params = { ...params, tags: await this.applyTagOverrides(params.tags) };
 
         // If only one adapter, behave simply
         if (this.adapters.length === 1) {

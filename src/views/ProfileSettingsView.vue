@@ -52,7 +52,7 @@
                 </div>
                 <div class="text-left">
                   <div class="font-medium">Content</div>
-                  <div class="text-xs text-gray-400">Sources, tags, ratings</div>
+                  <div class="text-xs text-gray-400">Sources, tags, query overrides</div>
                 </div>
               </div>
               <svg viewBox="0 0 24 24" class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" stroke-width="2">
@@ -152,48 +152,44 @@
               <p v-if="saveMessage" class="text-green-400 text-xs mt-2 text-right">{{ saveMessage }}</p>
             </div>
 
-            <!-- Ratings (inline, no sub-page) -->
+            <!-- Tag Query Overrides (inline, no sub-page) -->
             <div class="p-4 bg-gray-800 rounded-lg">
               <div class="mb-3">
-                <label class="font-medium">Ratings</label>
+                <label class="font-medium">Tag Query Overrides</label>
                 <p class="text-xs text-gray-400 mt-1">
-                  Enable rating categories to make their toggles available in the feed settings sidebar.
+                  Modify every search query right before it is sent to the booru source.
+                  Separate tags with spaces.
                 </p>
               </div>
-              <!-- 18+ Warning (always visible) -->
-              <div class="mb-3 p-3 bg-yellow-900/40 border border-yellow-600/50 rounded-lg">
-                <div class="flex items-start gap-2">
-                  <svg viewBox="0 0 24 24" class="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-                  </svg>
-                  <div class="text-xs text-yellow-300">
-                    <p class="font-semibold">Age Restricted Content</p>
-                    <p class="mt-1 text-yellow-400">Enabling ratings beyond General may allow 18+ sexual or other adult content. You must be 18 or older to enable these ratings.</p>
-                  </div>
-                </div>
+              <div class="mb-3">
+                <label class="text-sm font-medium">Always Include</label>
+                <p class="text-xs text-gray-500 mt-0.5 mb-1">Added to the query if not already present.</p>
+                <textarea
+                  v-model="alwaysIncludeInput"
+                  class="w-full h-16 bg-gray-900 border border-gray-700 rounded p-2 text-sm text-gray-200 focus:border-pink-500 focus:outline-none"
+                  placeholder="e.g. meme animated..."
+                  @keydown.space.stop
+                ></textarea>
               </div>
-              <div class="space-y-3">
-                <div
-                  v-for="rating in allRatings"
-                  :key="rating.id"
-                  class="flex items-center justify-between"
+              <div class="mb-3">
+                <label class="text-sm font-medium">Never Include</label>
+                <p class="text-xs text-gray-500 mt-0.5 mb-1">Removed from the query before it is sent.</p>
+                <textarea
+                  v-model="neverIncludeInput"
+                  class="w-full h-16 bg-gray-900 border border-gray-700 rounded p-2 text-sm text-gray-200 focus:border-pink-500 focus:outline-none"
+                  placeholder="e.g. meme comic..."
+                  @keydown.space.stop
+                ></textarea>
+              </div>
+              <div class="flex justify-end">
+                <button
+                  @click="saveTagOverrides"
+                  class="px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded text-white text-sm font-medium transition"
                 >
-                  <div>
-                    <span class="text-sm font-medium capitalize">{{ rating.label }}</span>
-                    <p class="text-xs text-gray-500">{{ rating.description }}</p>
-                  </div>
-                  <button
-                    @click="handleRatingToggle(rating.id)"
-                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
-                    :class="enabledRatings.includes(rating.id) ? 'bg-pink-600' : 'bg-gray-600'"
-                  >
-                    <span
-                      class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
-                      :class="enabledRatings.includes(rating.id) ? 'translate-x-6' : 'translate-x-1'"
-                    ></span>
-                  </button>
-                </div>
+                  Save Overrides
+                </button>
               </div>
+              <p v-if="overrideSaveMessage" class="text-green-400 text-xs mt-2 text-right">{{ overrideSaveMessage }}</p>
             </div>
           </div>
         </div>
@@ -353,6 +349,7 @@
                   @change="saveDownloadSettings"
                 />
                 <button
+                  v-if="!isAndroid"
                   @click="browseDownloadFolder"
                   class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-white text-sm font-medium transition whitespace-nowrap"
                 >
@@ -360,6 +357,7 @@
                 </button>
               </div>
               <p v-if="folderStatus" class="text-xs mt-2" :class="folderStatus.ok ? 'text-green-400' : 'text-red-400'">{{ folderStatus.message }}</p>
+              <p class="text-xs text-gray-500 mt-2">Leave empty to use the default: a BooruRamen folder inside your Downloads folder.</p>
             </div>
 
             <!-- Save Liked Posts -->
@@ -496,7 +494,11 @@
     <div v-if="showModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
       <div class="bg-gray-800 rounded-lg max-w-sm w-full p-6 shadow-xl border border-gray-700">
         <h3 class="text-xl font-bold mb-2">{{ modalTitle }}</h3>
-        <p class="text-gray-300 mb-6">{{ modalMessage }}</p>
+        <p class="text-gray-300" :class="modalWarning ? 'mb-3' : 'mb-6'">{{ modalMessage }}</p>
+        <div v-if="modalWarning" class="flex items-start gap-2 bg-yellow-500/10 border border-yellow-600/40 rounded-md p-3 mb-6">
+          <AlertCircle class="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+          <p class="text-yellow-400 text-sm">{{ modalWarning }}</p>
+        </div>
         <div class="flex gap-3">
           <button
             @click="closeModal"
@@ -514,11 +516,30 @@
       </div>
     </div>
 
+    <!-- Success Splash Modal -->
+    <div v-if="showSuccessModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
+      <div class="bg-gray-800 rounded-lg max-w-sm w-full p-6 shadow-xl border border-gray-700">
+        <div class="flex items-start gap-3 mb-2">
+          <div class="w-8 h-8 rounded-full bg-green-600/20 flex items-center justify-center flex-shrink-0">
+            <Check class="w-5 h-5 text-green-400" />
+          </div>
+          <h3 class="text-xl font-bold">{{ successTitle }}</h3>
+        </div>
+        <p class="text-gray-300 mb-6">{{ successMessage }}</p>
+        <button
+          @click="showSuccessModal = false"
+          class="w-full px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded text-white font-medium transition"
+        >
+          OK
+        </button>
+      </div>
+    </div>
+
     <!-- Refresh Feed Modal -->
     <div v-if="showRefreshModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
       <div class="bg-gray-800 rounded-lg max-w-sm w-full p-6 shadow-xl border border-gray-700">
         <h3 class="text-xl font-bold mb-2">Start fresh?</h3>
-        <p class="text-gray-300 mb-6">We'll clear your history and reset your recommendations so you can discover new content.</p>
+        <p class="text-gray-300 mb-6">We'll reset your recommendations so you can discover new content. Your history, likes, and favorites won't be touched.</p>
         <div class="flex gap-3">
           <button
             @click="closeRefreshModal"
@@ -536,72 +557,6 @@
       </div>
     </div>
 
-    <!-- Age Confirmation Modal -->
-    <transition name="age-modal">
-      <div v-if="showAgeModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
-        <div class="bg-gray-800 rounded-lg max-w-md w-full p-8 shadow-xl border border-gray-700">
-          <div class="flex items-start gap-3 mb-6">
-            <svg viewBox="0 0 24 24" class="w-8 h-8 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-            </svg>
-            <div>
-              <h3 class="text-xl font-bold mb-1">Age Restricted Content</h3>
-              <p class="text-sm text-gray-400">Enabling ratings beyond General may allow 18+ sexual or other adult content. You must confirm you are 18 or older to enable these ratings.</p>
-            </div>
-          </div>
-
-          <div class="mb-6">
-            <label class="text-sm font-medium block mb-2">Date of Birth</label>
-            <div class="grid grid-cols-3 gap-2">
-              <div>
-                <select
-                  v-model="ageMonth"
-                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
-                >
-                  <option value="" disabled>Month</option>
-                  <option v-for="m in 12" :key="m" :value="m">{{ m }}</option>
-                </select>
-              </div>
-              <div>
-                <select
-                  v-model="ageDay"
-                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
-                >
-                  <option value="" disabled>Day</option>
-                  <option v-for="d in 31" :key="d" :value="d">{{ d }}</option>
-                </select>
-              </div>
-              <div>
-                <select
-                  v-model="ageYear"
-                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
-                >
-                  <option value="" disabled>Year</option>
-                  <option v-for="y in ageYearOptions" :key="y" :value="y">{{ y }}</option>
-                </select>
-              </div>
-            </div>
-            <p v-if="ageError" class="text-red-400 text-xs mt-2">{{ ageError }}</p>
-          </div>
-
-          <div class="flex gap-3">
-            <button
-              @click="cancelAgeConfirmation"
-              class="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded text-white font-medium transition"
-            >
-              Cancel
-            </button>
-            <button
-              @click="confirmAge"
-              class="flex-1 px-4 py-2.5 bg-pink-600 hover:bg-pink-700 rounded text-white font-medium transition"
-            >
-              Confirm
-            </button>
-          </div>
-        </div>
-      </div>
-    </transition>
-
     <!-- About/License Note -->
     <div class="mt-16 pb-8 text-center border-t border-gray-800 pt-8 opacity-40">
       <p class="text-sm font-semibold text-gray-400">BooruRamen v{{ appVersion }}</p>
@@ -617,11 +572,13 @@
 import { mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { useInteractionsStore } from '../stores/interactions';
+import { usePlayerStore } from '../stores/player';
 import StorageService from '../services/StorageService';
 import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSystem';
 
 import BooruService from '../services/BooruService';
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from '../services/BooruAdapters';
+import DownloadService from '../services/DownloadService';
 import { X, Check, AlertCircle } from 'lucide-vue-next';
 
 export default {
@@ -634,10 +591,20 @@ export default {
       showModal: false,
       modalTitle: '',
       modalMessage: '',
+      modalWarning: '',
       pendingAction: null,
+      pendingSuccessMessage: '',
+      showSuccessModal: false,
+      successTitle: '',
+      successMessage: '',
       showRefreshModal: false,
       avoidedTagsInput: '',
       saveMessage: '',
+
+      // Tag query overrides
+      alwaysIncludeInput: '',
+      neverIncludeInput: '',
+      overrideSaveMessage: '',
 
       // Navigation
       navigationStack: [],
@@ -657,32 +624,19 @@ export default {
 
       // Folder picker status
       folderStatus: null,
-
-      // Age confirmation
-      showAgeModal: false,
-      pendingRatingId: null,
-      ageMonth: '',
-      ageDay: '',
-      ageYear: '',
-      ageError: '',
-
-      // Rating definitions
-      allRatings: [
-        { id: 'general', label: 'General', description: 'Safe for all ages' },
-        { id: 'sensitive', label: 'Sensitive', description: 'May contain slightly suggestive content' },
-        { id: 'questionable', label: 'Questionable', description: 'May contain explicit themes' },
-        { id: 'explicit', label: 'Explicit', description: 'Contains adult content' },
-      ],
     };
   },
   computed: {
     ...mapWritableState(useSettingsStore, [
       'disableHistory', 'debugMode', 'customSources', 'activeSource',
-      'enabledRatings', 'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders',
-      'confirmedDateOfBirth'
+      'tagAlwaysInclude', 'tagNeverInclude',
+      'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders'
     ]),
     appVersion() {
       return __APP_VERSION__;
+    },
+    isAndroid() {
+      return DownloadService.isAndroid();
     },
     currentPage() {
       return this.navigationStack.length > 0
@@ -699,19 +653,13 @@ export default {
       };
       return titles[this.currentPage] || 'Settings';
     },
-    showRatingWarning() {
-      return this.enabledRatings.some(r => r !== 'general');
-    },
-    ageYearOptions() {
-      const currentYear = new Date().getFullYear();
-      const years = [];
-      for (let y = currentYear; y >= currentYear - 120; y--) {
-        years.push(y);
-      }
-      return years;
-    },
   },
   async mounted() {
+    // Ensure the settings store is loaded before reading override tags
+    await useSettingsStore().initialize();
+    this.alwaysIncludeInput = (this.tagAlwaysInclude || []).join(' ');
+    this.neverIncludeInput = (this.tagNeverInclude || []).join(' ');
+
     const preferences = await StorageService.getPreferences();
 
     if (preferences.avoidedTags && Array.isArray(preferences.avoidedTags)) {
@@ -741,7 +689,7 @@ export default {
     this.checkAllAuthStatus();
   },
   methods: {
-    ...mapActions(useSettingsStore, ['updateSettings', 'saveSettings', 'toggleEnabledRating']),
+    ...mapActions(useSettingsStore, ['updateSettings', 'saveSettings', 'setTagOverrides']),
 
     // Navigation
     navigateTo(page) {
@@ -753,60 +701,18 @@ export default {
       }
     },
 
-    // Rating toggle with age gate
-    handleRatingToggle(ratingId) {
-      // Disabling: always allow
-      if (this.enabledRatings.includes(ratingId)) {
-        this.toggleEnabledRating(ratingId);
-        return;
-      }
-      // Enabling general: no age check needed
-      if (ratingId === 'general') {
-        this.toggleEnabledRating(ratingId);
-        return;
-      }
-      // Enabling non-general: check if DOB already confirmed and stored
-      if (this.confirmedDateOfBirth) {
-        this.toggleEnabledRating(ratingId);
-        return;
-      }
-      // First time enabling non-general: show age confirmation
-      this.pendingRatingId = ratingId;
-      this.ageMonth = '';
-      this.ageDay = '';
-      this.ageYear = '';
-      this.ageError = '';
-      this.showAgeModal = true;
-    },
-    confirmAge() {
-      if (!this.ageMonth || !this.ageDay || !this.ageYear) {
-        this.ageError = 'Please enter your full date of birth.';
-        return;
-      }
-      const now = new Date();
-      const birthDate = new Date(this.ageYear, this.ageMonth - 1, this.ageDay);
-      let age = now.getFullYear() - birthDate.getFullYear();
-      const monthDiff = now.getMonth() - birthDate.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      if (age < 18) {
-        this.ageError = 'You must be 18 or older to enable ratings beyond General.';
-        return;
-      }
-      // Age confirmed: persist DOB to store
-      this.confirmedDateOfBirth = `${this.ageYear}-${String(this.ageMonth).padStart(2, '0')}-${String(this.ageDay).padStart(2, '0')}`;
-      this.saveSettings();
-      this.showAgeModal = false;
-      if (this.pendingRatingId) {
-        this.toggleEnabledRating(this.pendingRatingId);
-        this.pendingRatingId = null;
-      }
-    },
-    cancelAgeConfirmation() {
-      this.showAgeModal = false;
-      this.pendingRatingId = null;
-      this.ageError = '';
+    // Tag query overrides
+    saveTagOverrides() {
+      const parseTags = (input) => [...new Set(
+        input.split(/[\s,]+/).map(t => t.trim()).filter(t => t.length > 0)
+      )];
+      const alwaysInclude = parseTags(this.alwaysIncludeInput);
+      const neverInclude = parseTags(this.neverIncludeInput);
+      this.setTagOverrides({ alwaysInclude, neverInclude });
+      this.alwaysIncludeInput = alwaysInclude.join(' ');
+      this.neverIncludeInput = neverInclude.join(' ');
+      this.overrideSaveMessage = 'Overrides saved!';
+      setTimeout(() => { this.overrideSaveMessage = ''; }, 3000);
     },
 
     toggleHistory() {
@@ -823,27 +729,27 @@ export default {
       this.saveSettings();
     },
     async browseDownloadFolder() {
-      // Use the File System Access API if available (Chromium browsers)
-      if (window.showDirectoryPicker) {
+      // In Tauri, use the native folder picker (returns a full path)
+      if (DownloadService.isTauri()) {
         try {
-          const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-          this.downloadLocation = dirHandle.name;
-          this.folderStatus = { ok: true, message: `Selected: ${dirHandle.name}` };
-          this.saveDownloadSettings();
-        } catch (err) {
-          // User cancelled the picker
-          if (err.name !== 'AbortError') {
-            this.folderStatus = { ok: false, message: 'Could not open folder picker. Enter the path manually.' };
+          const { open } = await import('@tauri-apps/plugin-dialog');
+          const defaultPath = await DownloadService.getDownloadLocation();
+          const selected = await open({ directory: true, defaultPath });
+          if (selected) {
+            this.downloadLocation = selected;
+            this.folderStatus = { ok: true, message: `Selected: ${selected}` };
+            this.saveDownloadSettings();
           }
+        } catch (err) {
+          console.error('Folder picker failed:', err);
+          this.folderStatus = { ok: false, message: 'Could not open folder picker. Enter the path manually.' };
         }
-      } else {
-        // Fallback: prompt the user
-        const path = prompt('Enter download folder path:', this.downloadLocation || '~/Downloads/BooruRamen');
-        if (path !== null) {
-          this.downloadLocation = path;
-          this.saveDownloadSettings();
-        }
+        return;
       }
+
+      // Browser: the download location is controlled by the browser itself,
+      // so a picker here is only informational. Let the user type a path.
+      this.folderStatus = { ok: false, message: 'Folder browsing is only available in the app. Enter the path manually.' };
     },
 
     async saveAvoidedTags() {
@@ -972,22 +878,34 @@ export default {
     resetAvoidedTags() {
       this.avoidedTagsInput = COMMON_TAGS.join(' ');
     },
-    confirmAction(title, message, action) {
+    confirmAction(title, message, action, warning = '', successMessage = '') {
       this.modalTitle = title;
       this.modalMessage = message;
+      this.modalWarning = warning;
       this.pendingAction = action;
+      this.pendingSuccessMessage = successMessage;
       this.showModal = true;
     },
-    executeAction() {
-      if (this.pendingAction) {
-        this.pendingAction();
-        this.pendingAction = null;
-      }
+    async executeAction() {
+      const action = this.pendingAction;
+      const successMessage = this.pendingSuccessMessage;
+      const title = this.modalTitle;
+      this.pendingAction = null;
+      this.pendingSuccessMessage = '';
       this.showModal = false;
+      if (action) {
+        await action();
+        if (successMessage) {
+          this.successTitle = title;
+          this.successMessage = successMessage;
+          this.showSuccessModal = true;
+        }
+      }
     },
     closeModal() {
       this.showModal = false;
       this.pendingAction = null;
+      this.pendingSuccessMessage = '';
     },
     showRefreshFeedModal() {
       this.showRefreshModal = true;
@@ -996,9 +914,14 @@ export default {
       this.showRefreshModal = false;
     },
     async executeRefreshFeed() {
-      await RecommendationSystem.resetRecommendations();
-      this.showRefreshModal = false;
-      this.$router.replace({ name: 'Home', query: { ...this.$route.query, refresh: Date.now().toString() } });
+      try {
+        await RecommendationSystem.resetRecommendations();
+        this.$router.replace({ name: 'Home', query: { ...this.$route.query, refresh: Date.now().toString() } });
+      } catch (error) {
+        console.error('Failed to reset recommendations:', error);
+      } finally {
+        this.showRefreshModal = false;
+      }
     },
     async testAuth(source) {
       this.isTestingAuth = true;
@@ -1104,38 +1027,71 @@ export default {
       this.confirmAction(
         'Clear History',
         'Are you sure you want to clear your entire viewing history?',
-        async () => { await StorageService.clearHistory(); }
+        async () => { await StorageService.clearHistory(); },
+        '',
+        'Your viewing history has been cleared.'
       );
     },
     wipeLikes() {
       this.confirmAction(
         'Clear Likes',
         'Are you sure you want to clear all your liked posts?',
-        async () => { await StorageService.clearLikes(); }
+        async () => { await StorageService.clearLikes(); },
+        '',
+        'All of your liked posts have been cleared.'
       );
     },
     wipeFavorites() {
       this.confirmAction(
         'Clear Favorites',
         'Are you sure you want to clear all your favorited posts?',
-        async () => { await StorageService.clearFavorites(); }
+        async () => { await StorageService.clearFavorites(); },
+        '',
+        'All of your favorited posts have been cleared.'
       );
     },
-    wipeDownloads() {
+    async wipeDownloads() {
+      if (!DownloadService.isTauri()) {
+        // Browser build: the browser manages downloaded files, so there is
+        // no app folder to clear — just explain that with a splash.
+        this.successTitle = 'Clear Downloads Folder';
+        this.successMessage = 'Nothing to clear here: in the browser version, downloaded files are managed by your browser. Clearing the downloads folder is only available in the app.';
+        this.showSuccessModal = true;
+        return;
+      }
+      const dir = await DownloadService.getDownloadLocation();
       this.confirmAction(
         'Clear Downloads Folder',
-        'Are you sure you want to clear the downloads folder?',
-        async () => { await StorageService.clearDownloads(); }
+        `Are you sure you want to delete all files in "${dir}"?`,
+        async () => {
+          await DownloadService.clearDownloads();
+          await StorageService.clearDownloads();
+        },
+        'This action cannot be undone.',
+        'The downloads folder has been cleared.'
       );
     },
     wipeAll() {
       this.confirmAction(
         'Clear All Data',
-        'Are you sure you want to clear ALL your data?',
+        'Are you sure you want to clear ALL your data? This resets the app to a fresh install.',
         async () => {
           await StorageService.clearAllData();
-          window.location.reload();
-        }
+          // Also wipe all in-memory state so nothing lingers in this session
+          // (or silently re-saves itself to the freshly cleared database)
+          await RecommendationSystem.factoryReset();
+          const settingsStore = useSettingsStore();
+          settingsStore.$reset();
+          settingsStore.initialized = true;
+          useInteractionsStore().$reset();
+          usePlayerStore().$reset();
+          BooruService.setActiveSources(
+            [{ type: 'danbooru', url: 'https://danbooru.donmai.us', name: 'Danbooru' }],
+            false
+          );
+        },
+        '',
+        'All app data has been cleared and the app has been reset to defaults.'
       );
     },
   },
@@ -1153,22 +1109,6 @@ export default {
 }
 .slide-leave-to {
   transform: translateX(-30px);
-  opacity: 0;
-}
-
-/* Age modal: scale up from center */
-.age-modal-enter-active {
-  transition: transform 0.3s ease, opacity 0.3s ease;
-}
-.age-modal-leave-active {
-  transition: transform 0.2s ease, opacity 0.2s ease;
-}
-.age-modal-enter-from {
-  transform: scale(0.85);
-  opacity: 0;
-}
-.age-modal-leave-to {
-  transform: scale(0.9);
   opacity: 0;
 }
 </style>

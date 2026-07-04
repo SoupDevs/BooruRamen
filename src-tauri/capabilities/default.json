@@ -7,6 +7,7 @@
   ],
   "permissions": [
     "core:default",
+    "dialog:default",
     {
       "identifier": "http:default",
       "allow": [
@@ -26,10 +27,16 @@
           "url": "https://safebooru.org/*"
         },
         {
+          "url": "https://*.safebooru.org/*"
+        },
+        {
           "url": "https://konachan.com/*"
         },
         {
           "url": "https://yande.re/*"
+        },
+        {
+          "url": "https://*.yande.re/*"
         }
       ]
     }

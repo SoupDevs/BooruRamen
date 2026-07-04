@@ -18,14 +18,8 @@ export const postFilterMixin = {
 
       const { settings } = appSettings;
 
-      const ratingCodeMap = {
-        'general': 'g',
-        'sensitive': 's',
-        'questionable': 'q',
-        'explicit': 'e'
-      };
-      const allowedRatingCodes = settings.ratings.map(r => ratingCodeMap[r]);
-
+      // No rating filter here: history/likes/favorites show posts of any
+      // rating the user already saw, since the feed only queries general now.
       return posts.filter(post => {
         if (!post) return false;
 
@@ -33,11 +27,6 @@ export const postFilterMixin = {
         const isVideo = ['mp4', 'webm'].includes(post.file_ext);
         const isImage = !isVideo;
         if ((isImage && !settings.mediaType.images) || (isVideo && !settings.mediaType.videos)) {
-          return false;
-        }
-
-        // Filter by Rating
-        if (!allowedRatingCodes.includes(post.rating)) {
           return false;
         }
 

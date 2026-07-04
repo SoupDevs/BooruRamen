@@ -103,6 +103,11 @@ class RecommendationSystem {
     return this.callWorker('resetRecommendations');
   }
 
+  async factoryReset() {
+    this.strategyCursors = {};
+    return this.callWorker('factoryReset');
+  }
+
   async trackInteraction(postId, interactionType, value, postData, updateImmediately = false) {
     return this.callWorker('trackInteraction', { postId, interactionType, value, postData, updateImmediately });
   }
