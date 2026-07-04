@@ -26,8 +26,14 @@ jobs:
         uses: phips28/gh-action-bump-version@master
         with:
           tag-prefix: 'v'
-          commit-message: 'ci: version bump to v%s [skip ci]'
-          version-type: 'patch'
+          commit-message: 'ci: version bump to v{{version}} [skip ci]'
+          # Bump type comes from the commit messages in the push:
+          # "[major]"/"BREAKING CHANGE" -> major, "feat:"/"[minor]" -> minor,
+          # anything else -> patch. (A hardcoded version-type would override
+          # this detection and force every release to be a patch.)
+          major-wording: 'BREAKING CHANGE,[major]'
+          minor-wording: 'feat:,feat(,[minor]'
+          default: 'patch'
         env:
           GITHUB_TOKEN: ${{ secrets.ADMIN_PAT }}
 
