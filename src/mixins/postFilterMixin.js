@@ -24,7 +24,7 @@ export const postFilterMixin = {
         'questionable': 'q',
         'explicit': 'e'
       };
-      const allowedRatingCodes = settings.ratings.map(r => ratingCodeMap[r]);
+      const allowedRatingCodes = (settings.ratings || ['general']).map(r => ratingCodeMap[r]);
 
       return posts.filter(post => {
         if (!post) return false;

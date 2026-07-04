@@ -149,26 +149,6 @@
         </div>
       </div>
       
-      <!-- Rating selection (only show when multiple ratings enabled in profile settings) -->
-      <div v-if="visibleRatings.length > 1" class="mb-4">
-        <label class="text-sm font-medium block mb-2">Rating</label>
-        <div class="space-y-2">
-          <div v-for="rating in visibleRatings" :key="rating" class="flex items-center justify-between">
-            <label class="text-sm capitalize">{{ rating }}</label>
-            <button 
-              @click="toggleRatingAction(rating)" 
-              class="relative inline-flex h-6 w-11 items-center rounded-full"
-              :class="ratings.includes(rating) ? 'bg-pink-600' : 'bg-gray-600'"
-            >
-              <span 
-                class="inline-block h-4 w-4 transform rounded-full bg-white transition"
-                :class="ratings.includes(rating) ? 'translate-x-6' : 'translate-x-1'"
-              ></span>
-            </button>
-          </div>
-        </div>
-      </div>
-      
       <!-- Tag management -->
       <div class="mb-4">
         <label class="text-sm font-medium block mb-2">Whitelist Tags</label>
@@ -263,23 +243,15 @@ export default {
   computed: {
     ...mapWritableState(useSettingsStore, [
       'autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos',
-      'mediaType', 'ratings', 'whitelistTags', 'blacklistTags', 'enabledRatings'
+      'mediaType', 'whitelistTags', 'blacklistTags'
     ]),
     ...mapWritableState(usePlayerStore, ['defaultMuted']),
-    visibleRatings() {
-      // Only show ratings in the sidebar that are enabled in profile settings
-      const allRatings = ['general', 'sensitive', 'questionable', 'explicit'];
-      return allRatings.filter(r => this.enabledRatings.includes(r));
-    },
   },
   methods: {
     ...mapActions(useSettingsStore, [
-      'toggleRating', 'addWhitelistTag', 'removeWhitelistTag',
+      'addWhitelistTag', 'removeWhitelistTag',
       'addBlacklistTag', 'removeBlacklistTag'
     ]),
-    toggleRatingAction(rating) {
-      this.toggleRating(rating);
-    },
     handleAddWhitelist() {
       if (this.newWhitelistTag) {
         this.addWhitelistTag(this.newWhitelistTag);

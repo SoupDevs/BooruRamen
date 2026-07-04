@@ -52,7 +52,7 @@
                 </div>
                 <div class="text-left">
                   <div class="font-medium">Content</div>
-                  <div class="text-xs text-gray-400">Sources, tags, ratings</div>
+                  <div class="text-xs text-gray-400">Sources, tags, query overrides</div>
                 </div>
               </div>
               <svg viewBox="0 0 24 24" class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" stroke-width="2">
@@ -152,48 +152,44 @@
               <p v-if="saveMessage" class="text-green-400 text-xs mt-2 text-right">{{ saveMessage }}</p>
             </div>
 
-            <!-- Ratings (inline, no sub-page) -->
+            <!-- Tag Query Overrides (inline, no sub-page) -->
             <div class="p-4 bg-gray-800 rounded-lg">
               <div class="mb-3">
-                <label class="font-medium">Ratings</label>
+                <label class="font-medium">Tag Query Overrides</label>
                 <p class="text-xs text-gray-400 mt-1">
-                  Enable rating categories to make their toggles available in the feed settings sidebar.
+                  Modify every search query right before it is sent to the booru source.
+                  Separate tags with spaces.
                 </p>
               </div>
-              <!-- 18+ Warning (always visible) -->
-              <div class="mb-3 p-3 bg-yellow-900/40 border border-yellow-600/50 rounded-lg">
-                <div class="flex items-start gap-2">
-                  <svg viewBox="0 0 24 24" class="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-                  </svg>
-                  <div class="text-xs text-yellow-300">
-                    <p class="font-semibold">Age Restricted Content</p>
-                    <p class="mt-1 text-yellow-400">Enabling ratings beyond General may allow 18+ sexual or other adult content. You must be 18 or older to enable these ratings.</p>
-                  </div>
-                </div>
+              <div class="mb-3">
+                <label class="text-sm font-medium">Always Include</label>
+                <p class="text-xs text-gray-500 mt-0.5 mb-1">Added to the query if not already present.</p>
+                <textarea
+                  v-model="alwaysIncludeInput"
+                  class="w-full h-16 bg-gray-900 border border-gray-700 rounded p-2 text-sm text-gray-200 focus:border-pink-500 focus:outline-none"
+                  placeholder="e.g. meme animated..."
+                  @keydown.space.stop
+                ></textarea>
               </div>
-              <div class="space-y-3">
-                <div
-                  v-for="rating in allRatings"
-                  :key="rating.id"
-                  class="flex items-center justify-between"
+              <div class="mb-3">
+                <label class="text-sm font-medium">Never Include</label>
+                <p class="text-xs text-gray-500 mt-0.5 mb-1">Removed from the query before it is sent.</p>
+                <textarea
+                  v-model="neverIncludeInput"
+                  class="w-full h-16 bg-gray-900 border border-gray-700 rounded p-2 text-sm text-gray-200 focus:border-pink-500 focus:outline-none"
+                  placeholder="e.g. meme comic..."
+                  @keydown.space.stop
+                ></textarea>
+              </div>
+              <div class="flex justify-end">
+                <button
+                  @click="saveTagOverrides"
+                  class="px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded text-white text-sm font-medium transition"
                 >
-                  <div>
-                    <span class="text-sm font-medium capitalize">{{ rating.label }}</span>
-                    <p class="text-xs text-gray-500">{{ rating.description }}</p>
-                  </div>
-                  <button
-                    @click="handleRatingToggle(rating.id)"
-                    class="relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
-                    :class="enabledRatings.includes(rating.id) ? 'bg-pink-600' : 'bg-gray-600'"
-                  >
-                    <span
-                      class="inline-block h-4 w-4 transform rounded-full bg-white transition-transform"
-                      :class="enabledRatings.includes(rating.id) ? 'translate-x-6' : 'translate-x-1'"
-                    ></span>
-                  </button>
-                </div>
+                  Save Overrides
+                </button>
               </div>
+              <p v-if="overrideSaveMessage" class="text-green-400 text-xs mt-2 text-right">{{ overrideSaveMessage }}</p>
             </div>
           </div>
         </div>
@@ -542,72 +538,6 @@
       </div>
     </div>
 
-    <!-- Age Confirmation Modal -->
-    <transition name="age-modal">
-      <div v-if="showAgeModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-80 backdrop-blur-sm">
-        <div class="bg-gray-800 rounded-lg max-w-md w-full p-8 shadow-xl border border-gray-700">
-          <div class="flex items-start gap-3 mb-6">
-            <svg viewBox="0 0 24 24" class="w-8 h-8 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-            </svg>
-            <div>
-              <h3 class="text-xl font-bold mb-1">Age Restricted Content</h3>
-              <p class="text-sm text-gray-400">Enabling ratings beyond General may allow 18+ sexual or other adult content. You must confirm you are 18 or older to enable these ratings.</p>
-            </div>
-          </div>
-
-          <div class="mb-6">
-            <label class="text-sm font-medium block mb-2">Date of Birth</label>
-            <div class="grid grid-cols-3 gap-2">
-              <div>
-                <select
-                  v-model="ageMonth"
-                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
-                >
-                  <option value="" disabled>Month</option>
-                  <option v-for="m in 12" :key="m" :value="m">{{ m }}</option>
-                </select>
-              </div>
-              <div>
-                <select
-                  v-model="ageDay"
-                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
-                >
-                  <option value="" disabled>Day</option>
-                  <option v-for="d in 31" :key="d" :value="d">{{ d }}</option>
-                </select>
-              </div>
-              <div>
-                <select
-                  v-model="ageYear"
-                  class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-2.5 text-sm text-white focus:border-pink-500 focus:outline-none"
-                >
-                  <option value="" disabled>Year</option>
-                  <option v-for="y in ageYearOptions" :key="y" :value="y">{{ y }}</option>
-                </select>
-              </div>
-            </div>
-            <p v-if="ageError" class="text-red-400 text-xs mt-2">{{ ageError }}</p>
-          </div>
-
-          <div class="flex gap-3">
-            <button
-              @click="cancelAgeConfirmation"
-              class="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 rounded text-white font-medium transition"
-            >
-              Cancel
-            </button>
-            <button
-              @click="confirmAge"
-              class="flex-1 px-4 py-2.5 bg-pink-600 hover:bg-pink-700 rounded text-white font-medium transition"
-            >
-              Confirm
-            </button>
-          </div>
-        </div>
-      </div>
-    </transition>
-
     <!-- About/License Note -->
     <div class="mt-16 pb-8 text-center border-t border-gray-800 pt-8 opacity-40">
       <p class="text-sm font-semibold text-gray-400">BooruRamen v{{ appVersion }}</p>
@@ -647,6 +577,11 @@ export default {
       avoidedTagsInput: '',
       saveMessage: '',
 
+      // Tag query overrides
+      alwaysIncludeInput: '',
+      neverIncludeInput: '',
+      overrideSaveMessage: '',
+
       // Navigation
       navigationStack: [],
 
@@ -665,29 +600,13 @@ export default {
 
       // Folder picker status
       folderStatus: null,
-
-      // Age confirmation
-      showAgeModal: false,
-      pendingRatingId: null,
-      ageMonth: '',
-      ageDay: '',
-      ageYear: '',
-      ageError: '',
-
-      // Rating definitions
-      allRatings: [
-        { id: 'general', label: 'General', description: 'Safe for all ages' },
-        { id: 'sensitive', label: 'Sensitive', description: 'May contain slightly suggestive content' },
-        { id: 'questionable', label: 'Questionable', description: 'May contain explicit themes' },
-        { id: 'explicit', label: 'Explicit', description: 'Contains adult content' },
-      ],
     };
   },
   computed: {
     ...mapWritableState(useSettingsStore, [
       'disableHistory', 'debugMode', 'customSources', 'activeSource',
-      'enabledRatings', 'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders',
-      'confirmedDateOfBirth'
+      'tagAlwaysInclude', 'tagNeverInclude',
+      'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders'
     ]),
     appVersion() {
       return __APP_VERSION__;
@@ -710,19 +629,13 @@ export default {
       };
       return titles[this.currentPage] || 'Settings';
     },
-    showRatingWarning() {
-      return this.enabledRatings.some(r => r !== 'general');
-    },
-    ageYearOptions() {
-      const currentYear = new Date().getFullYear();
-      const years = [];
-      for (let y = currentYear; y >= currentYear - 120; y--) {
-        years.push(y);
-      }
-      return years;
-    },
   },
   async mounted() {
+    // Ensure the settings store is loaded before reading override tags
+    await useSettingsStore().initialize();
+    this.alwaysIncludeInput = (this.tagAlwaysInclude || []).join(' ');
+    this.neverIncludeInput = (this.tagNeverInclude || []).join(' ');
+
     const preferences = await StorageService.getPreferences();
 
     if (preferences.avoidedTags && Array.isArray(preferences.avoidedTags)) {
@@ -752,7 +665,7 @@ export default {
     this.checkAllAuthStatus();
   },
   methods: {
-    ...mapActions(useSettingsStore, ['updateSettings', 'saveSettings', 'toggleEnabledRating']),
+    ...mapActions(useSettingsStore, ['updateSettings', 'saveSettings', 'setTagOverrides']),
 
     // Navigation
     navigateTo(page) {
@@ -764,60 +677,18 @@ export default {
       }
     },
 
-    // Rating toggle with age gate
-    handleRatingToggle(ratingId) {
-      // Disabling: always allow
-      if (this.enabledRatings.includes(ratingId)) {
-        this.toggleEnabledRating(ratingId);
-        return;
-      }
-      // Enabling general: no age check needed
-      if (ratingId === 'general') {
-        this.toggleEnabledRating(ratingId);
-        return;
-      }
-      // Enabling non-general: check if DOB already confirmed and stored
-      if (this.confirmedDateOfBirth) {
-        this.toggleEnabledRating(ratingId);
-        return;
-      }
-      // First time enabling non-general: show age confirmation
-      this.pendingRatingId = ratingId;
-      this.ageMonth = '';
-      this.ageDay = '';
-      this.ageYear = '';
-      this.ageError = '';
-      this.showAgeModal = true;
-    },
-    confirmAge() {
-      if (!this.ageMonth || !this.ageDay || !this.ageYear) {
-        this.ageError = 'Please enter your full date of birth.';
-        return;
-      }
-      const now = new Date();
-      const birthDate = new Date(this.ageYear, this.ageMonth - 1, this.ageDay);
-      let age = now.getFullYear() - birthDate.getFullYear();
-      const monthDiff = now.getMonth() - birthDate.getMonth();
-      if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < birthDate.getDate())) {
-        age--;
-      }
-      if (age < 18) {
-        this.ageError = 'You must be 18 or older to enable ratings beyond General.';
-        return;
-      }
-      // Age confirmed: persist DOB to store
-      this.confirmedDateOfBirth = `${this.ageYear}-${String(this.ageMonth).padStart(2, '0')}-${String(this.ageDay).padStart(2, '0')}`;
-      this.saveSettings();
-      this.showAgeModal = false;
-      if (this.pendingRatingId) {
-        this.toggleEnabledRating(this.pendingRatingId);
-        this.pendingRatingId = null;
-      }
-    },
-    cancelAgeConfirmation() {
-      this.showAgeModal = false;
-      this.pendingRatingId = null;
-      this.ageError = '';
+    // Tag query overrides
+    saveTagOverrides() {
+      const parseTags = (input) => [...new Set(
+        input.split(/[\s,]+/).map(t => t.trim()).filter(t => t.length > 0)
+      )];
+      const alwaysInclude = parseTags(this.alwaysIncludeInput);
+      const neverInclude = parseTags(this.neverIncludeInput);
+      this.setTagOverrides({ alwaysInclude, neverInclude });
+      this.alwaysIncludeInput = alwaysInclude.join(' ');
+      this.neverIncludeInput = neverInclude.join(' ');
+      this.overrideSaveMessage = 'Overrides saved!';
+      setTimeout(() => { this.overrideSaveMessage = ''; }, 3000);
     },
 
     toggleHistory() {
@@ -1178,22 +1049,6 @@ export default {
 }
 .slide-leave-to {
   transform: translateX(-30px);
-  opacity: 0;
-}
-
-/* Age modal: scale up from center */
-.age-modal-enter-active {
-  transition: transform 0.3s ease, opacity 0.3s ease;
-}
-.age-modal-leave-active {
-  transition: transform 0.2s ease, opacity 0.2s ease;
-}
-.age-modal-enter-from {
-  transform: scale(0.85);
-  opacity: 0;
-}
-.age-modal-leave-to {
-  transform: scale(0.9);
   opacity: 0;
 }
 </style>

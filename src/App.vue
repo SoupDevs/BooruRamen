@@ -436,13 +436,11 @@ export default {
       'autoplayVideos',
       'loopVideos',
       'mediaType',
-      'ratings',
       'whitelistTags',
       'blacklistTags',
       'activeSource',
       'customSources',
       'debugMode',
-      'enabledRatings',
       'downloadLiked',
       'downloadFavorited'
     ]),
@@ -478,7 +476,6 @@ export default {
   methods: {
     // Map store actions
     ...mapActions(useSettingsStore, {
-        toggleRatingAction: 'toggleRating',
         addWhitelistTagAction: 'addWhitelistTag',
         removeWhitelistTag: 'removeWhitelistTag',
         addBlacklistTagAction: 'addBlacklistTag',
@@ -703,9 +700,6 @@ export default {
       }
     },
 
-    toggleRating(rating) {
-        this.toggleRatingAction(rating);
-    },
     addWhitelistTag() {
       this.addWhitelistTagAction(this.newWhitelistTag);
       this.newWhitelistTag = '';
@@ -742,7 +736,6 @@ export default {
 
     generateQueryFromSettings() {
       const query = {
-        ratings: this.ratings.join(','),
         images: this.mediaType.images ? '1' : '0',
         videos: this.mediaType.videos ? '1' : '0',
         whitelist: this.whitelistTags.join(','),
@@ -752,7 +745,6 @@ export default {
     },
 
     syncSettingsFromQuery(query) {
-      if (query.ratings) this.ratings = query.ratings.split(',');
       if (query.images !== undefined) this.mediaType.images = query.images !== '0';
       if (query.videos !== undefined) this.mediaType.videos = query.videos !== '0';
       if (query.whitelist) this.whitelistTags = query.whitelist.split(',');
