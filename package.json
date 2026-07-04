@@ -1,6 +1,7 @@
 {
   "name": "booruramen",
   "version": "0.6.3",
+  "author": "SoupDevs",
   "license": "GPL-3.0",
   "private": false,
   "scripts": {

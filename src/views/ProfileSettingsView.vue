@@ -1,6 +1,6 @@
 ﻿<!--
   BooruRamen - A personalized booru browser
-  Copyright (C) 2025 DottsGit
+  Copyright (C) 2025 SoupDevs
 
   This program is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
