@@ -37,6 +37,9 @@
         },
         {
           "url": "https://*.yande.re/*"
+        },
+        {
+          "url": "https://api.github.com/*"
         }
       ]
     }

@@ -281,6 +281,9 @@
       />
     </div>
     <BottomNavBar @navigate-feed="navigateToFeed" />
+
+    <!-- New release notification splash -->
+    <UpdateSplash />
   </div>
 </template>
 
@@ -290,6 +293,7 @@ import { mapState, mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from './stores/settings';
 import { usePlayerStore } from './stores/player';
 import { useInteractionsStore } from './stores/interactions';
+import { useUpdaterStore } from './stores/updater';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
 import recommendationSystem from './services/RecommendationSystem.js';
@@ -299,6 +303,7 @@ import BottomNavBar from './components/BottomNavBar.vue';
 import CommentsSheet from './components/CommentsSheet.vue';
 import PostDetailsSidebar from './components/PostDetailsSidebar.vue';
 import SettingsSidebar from './components/SettingsSidebar.vue';
+import UpdateSplash from './components/UpdateSplash.vue';
 
 export default {
   name: 'App',
@@ -313,6 +318,7 @@ export default {
     CommentsSheet,
     PostDetailsSidebar,
     SettingsSidebar,
+    UpdateSplash,
   },
   data() {
     return {
@@ -891,8 +897,14 @@ export default {
       if (Object.keys(this.$route.query).length > 0) {
           this.syncSettingsFromQuery(this.$route.query);
       }
-      
+
       window.addEventListener('keydown', this.handleKeydown);
+
+      // Check for a new release on app open. Only in the installed app:
+      // dev builds in the browser would always trail the published version.
+      if (DownloadService.isTauri()) {
+          useUpdaterStore().checkForUpdates({ manual: false });
+      }
   },
   beforeUnmount() {
       window.removeEventListener('keydown', this.handleKeydown);

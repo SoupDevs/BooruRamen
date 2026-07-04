@@ -8,6 +8,8 @@
 
 use tauri_plugin_notification::NotificationExt;
 
+mod updater;
+
 #[cfg(target_os = "android")]
 const DOWNLOAD_CHANNEL_ID: &str = "downloads";
 
@@ -152,7 +154,11 @@ pub fn run() {
     .plugin(tauri_plugin_http::init())
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_notification::init())
-    .invoke_handler(tauri::generate_handler![download_file, clear_downloads])
+    .invoke_handler(tauri::generate_handler![
+      download_file,
+      clear_downloads,
+      updater::install_update
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(
