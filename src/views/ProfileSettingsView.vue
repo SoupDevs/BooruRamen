@@ -572,6 +572,7 @@
 import { mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { useInteractionsStore } from '../stores/interactions';
+import { usePlayerStore } from '../stores/player';
 import StorageService from '../services/StorageService';
 import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSystem';
 
@@ -1073,12 +1074,24 @@ export default {
     wipeAll() {
       this.confirmAction(
         'Clear All Data',
-        'Are you sure you want to clear ALL your data?',
+        'Are you sure you want to clear ALL your data? This resets the app to a fresh install.',
         async () => {
           await StorageService.clearAllData();
+          // Also wipe all in-memory state so nothing lingers in this session
+          // (or silently re-saves itself to the freshly cleared database)
+          await RecommendationSystem.factoryReset();
+          const settingsStore = useSettingsStore();
+          settingsStore.$reset();
+          settingsStore.initialized = true;
+          useInteractionsStore().$reset();
+          usePlayerStore().$reset();
+          BooruService.setActiveSources(
+            [{ type: 'danbooru', url: 'https://danbooru.donmai.us', name: 'Danbooru' }],
+            false
+          );
         },
         '',
-        'All app data has been cleared.'
+        'All app data has been cleared and the app has been reset to defaults.'
       );
     },
   },

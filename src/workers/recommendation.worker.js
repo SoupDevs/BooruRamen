@@ -414,6 +414,23 @@ class RecommendationWorkerCore {
     this.lastUpdateTime = Date.now();
   }
 
+  /**
+   * Wipe all in-memory recommendation and ML state without writing anything
+   * to storage. Used by "Clear All Data": the caller clears IndexedDB, and
+   * this makes the live session match the now-empty disk, as if the app had
+   * been freshly installed.
+   */
+  factoryReset() {
+    this.initializeDefaultProfile();
+    this.postScoreCache.clear();
+    this.resetExploreSession();
+    if (this.mlInitialized) {
+      this.mlScorer.reset();
+      this.banditExplorer.reset();
+      this.tagEmbedding.reset();
+    }
+  }
+
   async resetRecommendations() {
     const resetTime = Date.now();
     await StorageService.storePreferences({ recommendationResetTime: resetTime });
@@ -862,6 +879,10 @@ self.onmessage = async (e) => {
         break;
       case 'resetRecommendations':
         await core.resetRecommendations();
+        result = true;
+        break;
+      case 'factoryReset':
+        core.factoryReset();
         result = true;
         break;
       case 'trackInteraction':
