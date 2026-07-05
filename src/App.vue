@@ -163,9 +163,8 @@
           @click="seekVideo"
           @mousedown="startProgressDrag"
           ref="progressBar">
-          <div 
-            class="absolute top-0 left-0 h-full bg-pink-600 rounded transition-[width]" 
-            :class="{ 'transition-none': isProgressDragging }"
+          <div
+            class="absolute top-0 left-0 h-full bg-pink-600 rounded"
             :style="{ width: `${videoProgress}%` }"
           ></div>
         </div>
@@ -413,6 +412,10 @@ export default {
       if (hiddenRoutes.includes(this.$route.name)) {
         this.showSettingsSidebar = false;
       }
+    },
+    currentVideoElement(el) {
+      this.stopProgressLoop();
+      if (el) this.startProgressLoop();
     },
   },
 
@@ -779,10 +782,34 @@ export default {
             }
         }
     },
+    // Drive the seek bar from the media clock every frame instead of the
+    // ~4Hz timeupdate event, so it fills smoothly even on low-fps videos.
+    startProgressLoop() {
+        const step = () => {
+            const video = this.currentVideoElement;
+            if (!video) {
+                this._progressRafId = null;
+                return;
+            }
+            if (!this.isProgressDragging && video.duration > 0) {
+                this.videoProgress = (video.currentTime / video.duration) * 100;
+            }
+            this._progressRafId = requestAnimationFrame(step);
+        };
+        this._progressRafId = requestAnimationFrame(step);
+    },
+    stopProgressLoop() {
+        if (this._progressRafId) {
+            cancelAnimationFrame(this._progressRafId);
+            this._progressRafId = null;
+        }
+    },
     handleVideoStateChange(state) {
         // Update local state from event, relying on store writable computing to update store via setters
         if (state.isPlaying !== undefined) this.isPlaying = state.isPlaying;
-        if (state.progress !== undefined) this.videoProgress = state.progress;
+        // Progress is driven per-frame by startProgressLoop while a video
+        // element is current; the coarse timeupdate value is only a fallback.
+        if (state.progress !== undefined && !this._progressRafId) this.videoProgress = state.progress;
         // Ignore volume/muted changes during drag to prevent race condition
         if (!this.isVolumeDragging) {
             if (state.volume !== undefined) this.volume = state.volume;
@@ -942,6 +969,7 @@ export default {
   },
   beforeUnmount() {
       window.removeEventListener('keydown', this.handleKeydown);
+      this.stopProgressLoop();
   }
 }
 </script>
