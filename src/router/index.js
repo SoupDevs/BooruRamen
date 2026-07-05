@@ -8,6 +8,7 @@ import PostViewerView from '../views/PostViewerView.vue';
 import ProfileView from '../views/ProfileView.vue';
 import ProfileSettingsView from '../views/ProfileSettingsView.vue';
 import ProfileAnalyticsView from '../views/ProfileAnalyticsView.vue';
+import ProfilesView from '../views/ProfilesView.vue';
 
 const routes = [
   {
@@ -55,6 +56,11 @@ const routes = [
     path: '/profile/analytics',
     name: 'ProfileAnalytics',
     component: ProfileAnalyticsView,
+  },
+  {
+    path: '/profile/profiles',
+    name: 'Profiles',
+    component: ProfilesView,
   },
 ];
 
