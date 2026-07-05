@@ -22,10 +22,11 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src')
     }
   },
-  // Tauri CLI expects a fixed port, fail if that port is not available
+  // Tauri CLI expects a fixed port, fail if that port is not available.
+  // PORT overrides it so extra dev servers can run alongside a Tauri one.
   server: {
     host: true,
-    port: 5173,
+    port: Number(process.env.PORT) || 5173,
     strictPort: true,
     proxy: {
       '/api/safebooru': {

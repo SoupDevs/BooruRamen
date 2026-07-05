@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' customprotocol: asset:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob: https://*.donmai.us https://*.gelbooru.com https://gelbooru.com https://safebooru.org https://*.safebooru.org https://konachan.com https://yande.re https://*.yande.re; media-src 'self' blob: https://*.donmai.us https://*.gelbooru.com https://gelbooru.com https://video-cdn1.gelbooru.com https://video-cdn2.gelbooru.com https://video-cdn3.gelbooru.com https://video-cdn4.gelbooru.com https://safebooru.org https://konachan.com https://yande.re; connect-src 'self' ipc: http://ipc.localhost https://*.donmai.us https://danbooru.donmai.us https://gelbooru.com https://*.gelbooru.com https://safebooru.org https://konachan.com https://yande.re"
+      "csp": "default-src 'self' customprotocol: asset:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob: https://*.donmai.us https://*.gelbooru.com https://gelbooru.com https://safebooru.org https://*.safebooru.org https://konachan.com https://yande.re https://*.yande.re; media-src 'self' blob: https://*.donmai.us https://*.gelbooru.com https://gelbooru.com https://video-cdn1.gelbooru.com https://video-cdn2.gelbooru.com https://video-cdn3.gelbooru.com https://video-cdn4.gelbooru.com https://safebooru.org https://konachan.com https://yande.re; connect-src 'self' ipc: http://ipc.localhost https://*.donmai.us https://danbooru.donmai.us https://gelbooru.com https://*.gelbooru.com https://safebooru.org https://konachan.com https://yande.re https://api.github.com"
     }
   },
   "bundle": {

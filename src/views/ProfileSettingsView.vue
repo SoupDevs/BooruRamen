@@ -36,7 +36,7 @@
 
     <!-- Main content area with transition -->
     <div class="max-w-2xl mx-auto">
-      <transition name="slide" mode="out-in">
+      <transition :name="slideDirection" mode="out-in">
         <!-- Root: Category List -->
         <div v-if="currentPage === 'root'" key="root">
           <div class="space-y-2">
@@ -114,6 +114,20 @@
               <div class="text-left">
                 <div class="font-medium">Sources</div>
                 <div class="text-xs text-gray-400">Select booru sources to search from</div>
+              </div>
+              <svg viewBox="0 0 24 24" class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </button>
+
+            <!-- Reported & Blocked (navigate to sub-page) -->
+            <button
+              @click="navigateTo('reported')"
+              class="w-full flex items-center justify-between p-4 bg-gray-800 hover:bg-gray-750 rounded-lg transition-colors group"
+            >
+              <div class="text-left">
+                <div class="font-medium">Reported &amp; Blocked</div>
+                <div class="text-xs text-gray-400">Reported posts, artists, and uploaders</div>
               </div>
               <svg viewBox="0 0 24 24" class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M9 18l6-6-6-6"/>
@@ -331,6 +345,108 @@
           </div>
         </div>
 
+        <!-- Reported & Blocked Sub-page -->
+        <div v-else-if="currentPage === 'reported'" key="reported">
+          <div class="space-y-4">
+            <!-- Reported Posts -->
+            <router-link
+              to="/reported"
+              class="w-full flex items-center justify-between p-4 bg-gray-800 hover:bg-gray-750 rounded-lg transition-colors group"
+            >
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-red-600/20 flex items-center justify-center">
+                  <svg viewBox="0 0 24 24" class="w-5 h-5 text-red-400" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 21v-4a4 4 0 014-4h10M3 3v4a4 4 0 004 4h10M14 3l7 7-7 7"/>
+                  </svg>
+                </div>
+                <div class="text-left">
+                  <div class="font-medium">Reported Posts</div>
+                  <div class="text-xs text-gray-400">Posts you've reported and blocked from the feed</div>
+                </div>
+              </div>
+              <svg viewBox="0 0 24 24" class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </router-link>
+
+            <!-- Reported Artists -->
+            <div class="p-4 bg-gray-800 rounded-lg">
+              <div class="mb-2">
+                <label class="font-medium">Reported Artists</label>
+                <p class="text-xs text-gray-400 mt-1">
+                  Posts with these artist tags never appear in your feed.
+                </p>
+              </div>
+              <div class="flex mb-2">
+                <input
+                  v-model="newReportedArtist"
+                  @keyup.enter="addReportedArtist"
+                  type="text"
+                  placeholder="Add artist tag..."
+                  class="flex-1 bg-gray-900 border border-gray-700 rounded-l px-3 py-1.5 text-sm text-gray-200 focus:border-pink-500 focus:outline-none"
+                />
+                <button
+                  @click="addReportedArtist"
+                  class="bg-pink-600 hover:bg-pink-700 px-3 py-1.5 rounded-r text-sm font-medium transition"
+                >
+                  Add
+                </button>
+              </div>
+              <div class="flex flex-wrap gap-2 mt-2">
+                <div
+                  v-for="artist in reportedArtists"
+                  :key="artist"
+                  class="bg-gray-700 px-2 py-1 rounded text-xs flex items-center"
+                >
+                  {{ artist }}
+                  <button @click="removeReportedArtist(artist)" class="ml-1.5 text-gray-400 hover:text-white">
+                    <X class="h-3 w-3" />
+                  </button>
+                </div>
+                <p v-if="reportedArtists.length === 0" class="text-xs text-gray-500">No reported artists.</p>
+              </div>
+            </div>
+
+            <!-- Reported Uploaders -->
+            <div class="p-4 bg-gray-800 rounded-lg">
+              <div class="mb-2">
+                <label class="font-medium">Reported Uploaders</label>
+                <p class="text-xs text-gray-400 mt-1">
+                  Posts uploaded by these users never appear in your feed.
+                </p>
+              </div>
+              <div class="flex mb-2">
+                <input
+                  v-model="newReportedUploader"
+                  @keyup.enter="addReportedUploader"
+                  type="text"
+                  placeholder="Add uploader name..."
+                  class="flex-1 bg-gray-900 border border-gray-700 rounded-l px-3 py-1.5 text-sm text-gray-200 focus:border-pink-500 focus:outline-none"
+                />
+                <button
+                  @click="addReportedUploader"
+                  class="bg-pink-600 hover:bg-pink-700 px-3 py-1.5 rounded-r text-sm font-medium transition"
+                >
+                  Add
+                </button>
+              </div>
+              <div class="flex flex-wrap gap-2 mt-2">
+                <div
+                  v-for="uploader in reportedUploaders"
+                  :key="uploader"
+                  class="bg-gray-700 px-2 py-1 rounded text-xs flex items-center"
+                >
+                  {{ uploader }}
+                  <button @click="removeReportedUploader(uploader)" class="ml-1.5 text-gray-400 hover:text-white">
+                    <X class="h-3 w-3" />
+                  </button>
+                </div>
+                <p v-if="reportedUploaders.length === 0" class="text-xs text-gray-500">No reported uploaders.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Download Settings -->
         <div v-else-if="currentPage === 'download'" key="download">
           <div class="space-y-4">
@@ -453,6 +569,11 @@
               </div>
             </div>
 
+            <!-- Check for Updates -->
+            <button @click="checkForUpdates" class="w-full text-center bg-blue-700 hover:bg-blue-600 py-3 rounded-md text-lg transition">
+              Check for Updates
+            </button>
+
             <!-- Refresh Feed -->
             <button @click="showRefreshFeedModal" class="w-full text-center bg-blue-700 hover:bg-blue-600 py-3 rounded-md text-lg transition">
               Refresh your feed
@@ -573,7 +694,9 @@ import { mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { useInteractionsStore } from '../stores/interactions';
 import { usePlayerStore } from '../stores/player';
+import { useUpdaterStore } from '../stores/updater';
 import StorageService from '../services/StorageService';
+import ReportService from '../services/ReportService';
 import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSystem';
 
 import BooruService from '../services/BooruService';
@@ -608,6 +731,7 @@ export default {
 
       // Navigation
       navigationStack: [],
+      slideDirection: 'slide-left',
 
       // Source Management
       predefinedSources: [],
@@ -624,6 +748,12 @@ export default {
 
       // Folder picker status
       folderStatus: null,
+
+      // Reported & Blocked management
+      reportedArtists: [],
+      reportedUploaders: [],
+      newReportedArtist: '',
+      newReportedUploader: '',
     };
   },
   computed: {
@@ -648,6 +778,7 @@ export default {
         root: 'Settings',
         content: 'Content',
         sources: 'Sources',
+        reported: 'Reported & Blocked',
         download: 'Download',
         advanced: 'Advanced',
       };
@@ -693,10 +824,15 @@ export default {
 
     // Navigation
     navigateTo(page) {
+      this.slideDirection = 'slide-left';
       this.navigationStack.push(page);
+      if (page === 'reported') {
+        this.loadReports();
+      }
     },
     goBack() {
       if (this.navigationStack.length > 0) {
+        this.slideDirection = 'slide-right';
         this.navigationStack.pop();
       }
     },
@@ -715,6 +851,34 @@ export default {
       setTimeout(() => { this.overrideSaveMessage = ''; }, 3000);
     },
 
+    // Reported & Blocked management
+    async loadReports() {
+      this.reportedArtists = await ReportService.getReportedArtists();
+      this.reportedUploaders = await ReportService.getReportedUploaders();
+    },
+    async addReportedArtist() {
+      const name = this.newReportedArtist.trim().toLowerCase();
+      if (!name) return;
+      await ReportService.reportArtist(name);
+      this.newReportedArtist = '';
+      await this.loadReports();
+    },
+    async removeReportedArtist(name) {
+      await ReportService.removeReport('artist', name);
+      await this.loadReports();
+    },
+    async addReportedUploader() {
+      const name = this.newReportedUploader.trim().toLowerCase();
+      if (!name) return;
+      await ReportService.reportUploader(name);
+      this.newReportedUploader = '';
+      await this.loadReports();
+    },
+    async removeReportedUploader(name) {
+      await ReportService.removeReport('uploader', name);
+      await this.loadReports();
+    },
+
     toggleHistory() {
       this.disableHistory = !this.disableHistory;
       this.saveSettings();
@@ -722,6 +886,11 @@ export default {
     toggleDebugMode() {
       this.debugMode = !this.debugMode;
       this.saveSettings();
+    },
+
+    // Update check (result surfaces through the global UpdateSplash)
+    checkForUpdates() {
+      useUpdaterStore().checkForUpdates({ manual: true });
     },
 
     // Download settings
@@ -1099,16 +1268,28 @@ export default {
 </script>
 
 <style scoped>
-.slide-enter-active,
-.slide-leave-active {
+/* Going deeper: current page exits left, new page enters from the right */
+.slide-left-enter-active,
+.slide-left-leave-active,
+.slide-right-enter-active,
+.slide-right-leave-active {
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
-.slide-enter-from {
+.slide-left-enter-from {
   transform: translateX(30px);
   opacity: 0;
 }
-.slide-leave-to {
+.slide-left-leave-to {
   transform: translateX(-30px);
+  opacity: 0;
+}
+/* Going back up: current page exits right, new page enters from the left */
+.slide-right-enter-from {
+  transform: translateX(-30px);
+  opacity: 0;
+}
+.slide-right-leave-to {
+  transform: translateX(30px);
   opacity: 0;
 }
 </style>

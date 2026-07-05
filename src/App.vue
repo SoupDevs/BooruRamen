@@ -12,7 +12,7 @@
     <div class="h-screen relative overflow-hidden">
     
       <!-- Post details sidebar -->
-      <PostDetailsSidebar :show="showPostDetails" :post="currentPost" />
+      <PostDetailsSidebar :show="showPostDetails" :post="currentPost" @report-block="openReportModal" />
       
       <button 
         v-if="currentPost"
@@ -281,6 +281,17 @@
       />
     </div>
     <BottomNavBar @navigate-feed="navigateToFeed" />
+
+    <!-- Report/Block splash -->
+    <ReportBlockModal
+      v-if="reportModalPost"
+      :post="reportModalPost"
+      @close="reportModalPost = null"
+      @reported="onReported"
+    />
+
+    <!-- New release notification splash -->
+    <UpdateSplash />
   </div>
 </template>
 
@@ -290,6 +301,7 @@ import { mapState, mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from './stores/settings';
 import { usePlayerStore } from './stores/player';
 import { useInteractionsStore } from './stores/interactions';
+import { useUpdaterStore } from './stores/updater';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
 import recommendationSystem from './services/RecommendationSystem.js';
@@ -298,7 +310,9 @@ import DownloadService from './services/DownloadService.js';
 import BottomNavBar from './components/BottomNavBar.vue';
 import CommentsSheet from './components/CommentsSheet.vue';
 import PostDetailsSidebar from './components/PostDetailsSidebar.vue';
+import ReportBlockModal from './components/ReportBlockModal.vue';
 import SettingsSidebar from './components/SettingsSidebar.vue';
+import UpdateSplash from './components/UpdateSplash.vue';
 
 export default {
   name: 'App',
@@ -312,7 +326,9 @@ export default {
     BottomNavBar,
     CommentsSheet,
     PostDetailsSidebar,
+    ReportBlockModal,
     SettingsSidebar,
+    UpdateSplash,
   },
   data() {
     return {
@@ -327,6 +343,9 @@ export default {
       // Comments sheet state
       commentsPost: null,
       commentsSheetHeight: 0,
+
+      // Report/Block splash state
+      reportModalPost: null,
 
       routerViewKey: 0,
       pageTransitionName: 'page-fade',
@@ -372,25 +391,6 @@ export default {
         }
     },
     $route(to, from) {
-      // Determine page transition direction
-      const profileDepth = { Profile: 0, ProfileSettings: 1, ProfileAnalytics: 1 };
-      const fromDepth = profileDepth[from.name] ?? -1;
-      const toDepth = profileDepth[to.name] ?? -1;
-
-      if (fromDepth >= 0 && toDepth >= 0) {
-        // Both are profile pages: slide based on depth
-        this.pageTransitionName = toDepth > fromDepth ? 'page-slide-left' : 'page-slide-right';
-      } else if (fromDepth >= 0 && toDepth < 0) {
-        // Leaving profile pages entirely: slide right
-        this.pageTransitionName = 'page-slide-right';
-      } else if (fromDepth < 0 && toDepth >= 0) {
-        // Entering profile pages: slide left
-        this.pageTransitionName = 'page-slide-left';
-      } else {
-        // Non-profile navigation: fade
-        this.pageTransitionName = 'page-fade';
-      }
-
       // Hide post details and video controls when leaving the viewer
       if (to.name !== 'Viewer') {
         if (this.currentPost) {
@@ -402,14 +402,14 @@ export default {
         this.accumulatedWatchTime = 0;
       }
       // Collapse settings sidebar when navigating to profile pages
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
       if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
         this.showSettingsSidebar = false;
       }
     },
     showSettingsSidebar(isOpen) {
       if (!isOpen) return;
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
       if (hiddenRoutes.includes(this.$route.name)) {
         this.showSettingsSidebar = false;
       }
@@ -470,7 +470,7 @@ export default {
     showSettingsToggle() {
       // Only show settings on feed, history, likes, favorites, and viewer
       const routeName = this.$route.name;
-      return !['Profile', 'ProfileSettings', 'ProfileAnalytics'].includes(routeName);
+      return !['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'].includes(routeName);
     },
   },
   methods: {
@@ -625,6 +625,22 @@ export default {
     },
     togglePostDetails() {
       this.showPostDetails = !this.showPostDetails;
+    },
+
+    openReportModal() {
+      if (!this.currentPost) return;
+      this.reportModalPost = this.currentPost;
+    },
+    onReported() {
+      this.reportModalPost = null;
+      // Refresh the feed so newly blocked content (including the reported post
+      // itself, if it's already loaded) is fetched fresh and filtered out
+      if (this.$route.name === 'Home') {
+        this.$router.replace({
+          name: 'Home',
+          query: { ...this.$route.query, refresh: Date.now().toString() }
+        });
+      }
     },
     
     toggleLike(post) {
@@ -884,6 +900,30 @@ export default {
     }
   },
   async created() {
+      // Set the page transition direction before navigation commits: the
+      // leaving view's animation classes are resolved from the current name,
+      // so updating it any later (e.g. in a $route watcher) animates the
+      // outgoing page with the previous navigation's direction.
+      this.$router.beforeEach((to, from) => {
+        const profileDepth = { Profile: 0, ProfileSettings: 1, ProfileAnalytics: 1, Profiles: 1 };
+        const fromDepth = profileDepth[from.name] ?? -1;
+        const toDepth = profileDepth[to.name] ?? -1;
+
+        if (fromDepth >= 0 && toDepth >= 0) {
+          // Both are profile pages: slide based on depth
+          this.pageTransitionName = toDepth > fromDepth ? 'page-slide-left' : 'page-slide-right';
+        } else if (fromDepth >= 0 && toDepth < 0) {
+          // Leaving profile pages entirely: going up, slide right
+          this.pageTransitionName = 'page-slide-right';
+        } else if (fromDepth < 0 && toDepth >= 0) {
+          // Entering profile pages: going deeper, slide left
+          this.pageTransitionName = 'page-slide-left';
+        } else {
+          // Non-profile navigation: fade
+          this.pageTransitionName = 'page-fade';
+        }
+      });
+
       await this.initializeSettings();
       this.initializePlayer();
       this.initializeInteractions();
@@ -891,8 +931,14 @@ export default {
       if (Object.keys(this.$route.query).length > 0) {
           this.syncSettingsFromQuery(this.$route.query);
       }
-      
+
       window.addEventListener('keydown', this.handleKeydown);
+
+      // Check for a new release on app open. Only in the installed app:
+      // dev builds in the browser would always trail the published version.
+      if (DownloadService.isTauri()) {
+          useUpdaterStore().checkForUpdates({ manual: false });
+      }
   },
   beforeUnmount() {
       window.removeEventListener('keydown', this.handleKeydown);

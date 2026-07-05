@@ -14,8 +14,24 @@
  * Replaces localStorage for better performance and unlimited storage
  */
 import Dexie from 'dexie';
+import { getActiveProfileDbName, DEFAULT_DB_NAME } from './ProfileService.js';
 
-export const db = new Dexie('BooruRamenDB');
+/**
+ * Resolve the database name for the active profile. Each profile owns a
+ * separate database; switching profiles reloads the app against another one.
+ *
+ * Workers can't read localStorage, so the main thread passes the profile's
+ * database name as the worker's `name` option (see RecommendationSystem.js)
+ * and it is read back here via self.name.
+ */
+const resolveDbName = () => {
+    if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
+        return self.name && self.name.startsWith(DEFAULT_DB_NAME) ? self.name : DEFAULT_DB_NAME;
+    }
+    return getActiveProfileDbName();
+};
+
+export const db = new Dexie(resolveDbName());
 
 // Define database schema
 db.version(1).stores({
@@ -52,6 +68,20 @@ db.version(2).stores({
     profileSnapshot: 'id'
 });
 
+// Update schema to include reports (reported/blocked posts, artists, uploaders)
+db.version(3).stores({
+    interactions: '++id, postId, type, source, timestamp, [postId+type+source]',
+    viewHistory: 'key, lastViewed',
+    preferences: 'id',
+    appSettings: 'id',
+    tagCache: 'tag',
+    profileSnapshot: 'id',
+    // Reports: type is 'post' | 'artist' | 'uploader'.
+    // value is the composite post key ("source|postId") for posts,
+    // or the normalized (lowercased) name for artists/uploaders.
+    reports: '++id, type, value, timestamp, [type+value]'
+});
+
 /**
  * Migrate data from localStorage to IndexedDB
  * This runs once on first load after update
@@ -61,6 +91,12 @@ export async function migrateFromLocalStorage() {
 
     // Check if environment supports localStorage
     if (typeof localStorage === 'undefined') {
+        return;
+    }
+
+    // Legacy localStorage data predates profiles and belongs to the default
+    // profile only — never migrate it into another profile's fresh database
+    if (db.name !== DEFAULT_DB_NAME) {
         return;
     }
 

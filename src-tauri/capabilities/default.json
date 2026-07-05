@@ -8,6 +8,7 @@
   "permissions": [
     "core:default",
     "dialog:default",
+    "opener:default",
     {
       "identifier": "http:default",
       "allow": [
@@ -37,6 +38,9 @@
         },
         {
           "url": "https://*.yande.re/*"
+        },
+        {
+          "url": "https://api.github.com/*"
         }
       ]
     }

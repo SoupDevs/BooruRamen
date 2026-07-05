@@ -14,6 +14,7 @@
 
 import StorageService from './StorageService';
 import BooruService from './BooruService';
+import { getActiveProfileDbName } from './ProfileService';
 
 export const COMMON_TAGS = [
   '1girl', '1boy', '2girls', '2boys', 'solo', 'comic', 'monochrome',
@@ -34,8 +35,13 @@ class RecommendationSystem {
     this.instanceId = instanceId;
     console.log(`[RecommendationSystem Proxy] Constructed instance #${this.instanceId}`);
 
-    // Spawn Web Worker
-    this.worker = new Worker(new URL('../workers/recommendation.worker.js', import.meta.url), { type: 'module' });
+    // Spawn Web Worker. The worker can't read localStorage, so the active
+    // profile's database name is passed as the worker name and picked up by
+    // db.js via self.name.
+    this.worker = new Worker(new URL('../workers/recommendation.worker.js', import.meta.url), {
+      type: 'module',
+      name: getActiveProfileDbName(),
+    });
     this.messageId = 0;
     this.resolvers = new Map();
 

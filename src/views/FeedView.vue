@@ -112,6 +112,7 @@ import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
 import BooruService from '../services/BooruService';
 import StorageService from '../services/StorageService';
+import ReportService from '../services/ReportService';
 import recommendationSystem from '../services/RecommendationSystem';
 import { getPlayableVideoUrl } from '../services/videoProxy.js';
 
@@ -310,10 +311,13 @@ export default {
 
       // Get view history to exclude seen posts
       const viewedHistory = await StorageService.getViewedPosts();
-      // Create a set of IDs to exclude (viewed history + currently loaded posts)
+      // Reported/blocked posts, artists, and uploaders must never enter the feed
+      const blockSets = await ReportService.getBlockSets();
+      // Create a set of IDs to exclude (viewed history + currently loaded posts + reported posts)
       const blockedKeys = new Set([
-        ...Object.keys(viewedHistory), 
-        ...this.posts.map(p => this.getCompositeKey(p))
+        ...Object.keys(viewedHistory),
+        ...this.posts.map(p => this.getCompositeKey(p)),
+        ...blockSets.postKeys
       ]);
       
       console.log(`FetchPosts: Blocked ${Object.keys(viewedHistory).length} from history, ${this.posts.length} from current. Total blocked IDs: ${blockedKeys.size}`);
@@ -386,7 +390,9 @@ export default {
           });
           
           if (batch.length > 0) {
-            newPosts = [...newPosts, ...batch];
+            // Drop anything blocked via Report/Block (post, artist, or uploader)
+            const allowedBatch = ReportService.filterPosts(batch, blockSets);
+            newPosts = [...newPosts, ...allowedBatch];
             batch.forEach(p => blockedKeys.add(this.getCompositeKey(p)));
           }
         }
