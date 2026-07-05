@@ -52,6 +52,20 @@ db.version(2).stores({
     profileSnapshot: 'id'
 });
 
+// Update schema to include reports (reported/blocked posts, artists, uploaders)
+db.version(3).stores({
+    interactions: '++id, postId, type, source, timestamp, [postId+type+source]',
+    viewHistory: 'key, lastViewed',
+    preferences: 'id',
+    appSettings: 'id',
+    tagCache: 'tag',
+    profileSnapshot: 'id',
+    // Reports: type is 'post' | 'artist' | 'uploader'.
+    // value is the composite post key ("source|postId") for posts,
+    // or the normalized (lowercased) name for artists/uploaders.
+    reports: '++id, type, value, timestamp, [type+value]'
+});
+
 /**
  * Migrate data from localStorage to IndexedDB
  * This runs once on first load after update
