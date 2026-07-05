@@ -1,81 +1,102 @@
 <template>
-  <div 
+  <div
     class="absolute top-0 left-0 w-80 h-full bg-transparent backdrop-blur-sm border-r border-gray-700 overflow-y-auto z-50 transition-transform duration-300 ease-in-out"
     :style="{ transform: show ? 'translateX(0)' : 'translateX(-100%)' }"
   >
     <div class="p-4" style="padding-top: calc(1rem + env(safe-area-inset-top, 0)); padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0));">
       <h2 class="text-xl font-bold mb-4">Post Details</h2>
-      
+
       <div class="space-y-4" v-if="post">
-        <div>
-          <h3 class="text-sm font-medium text-gray-400">ID</h3>
-          <p>{{ post.id }}</p>
-        </div>
-        
-        <div>
-          <h3 class="text-sm font-medium text-gray-400">Uploader</h3>
-          <p>{{ post.uploader_name || 'Unknown' }}</p>
-        </div>
-        
-        <div>
-          <h3 class="text-sm font-medium text-gray-400">Rating</h3>
-          <p class="capitalize">{{ getRatingFromCode(post.rating) }}</p>
-        </div>
-        
-        <div>
-          <h3 class="text-sm font-medium text-gray-400">Score</h3>
-          <p>{{ post.score || 0 }}</p>
-        </div>
-        
-        <div>
-          <h3 class="text-sm font-medium text-gray-400">Media Info</h3>
-          <p>{{ (post.file_ext || 'Unknown').toUpperCase() }} - {{ formatFileSize(post.file_size) }}</p>
-          <p>{{ post.image_width || '?' }}×{{ post.image_height || '?' }}</p>
-        </div>
-        
-        <!-- Only render tag_string if we don't have categories OR if debug/general view is needed. -->
-        <!-- Since we are separating them, let's use the categories. -->
+        <!-- Tag sections ordered and colored to match Danbooru -->
         <TagSection v-if="post.tag_string_artist" title="Artist Tags" :tagString="post.tag_string_artist" colorClass="bg-pink-900" />
+        <TagSection v-if="post.tag_string_copyright" title="Copyright Tags" :tagString="post.tag_string_copyright" colorClass="bg-[#c797ff] text-gray-900" />
         <TagSection v-if="post.tag_string_character" title="Character Tags" :tagString="post.tag_string_character" colorClass="bg-green-900" />
-        <TagSection v-if="post.tag_string_copyright" title="Copyright Tags" :tagString="post.tag_string_copyright" colorClass="bg-blue-900" />
-        <TagSection v-if="post.tag_string_meta" title="Meta Tags" :tagString="post.tag_string_meta" colorClass="bg-purple-900" />
         <TagSection v-if="post.tag_string_general" title="General Tags" :tagString="post.tag_string_general" colorClass="bg-gray-700" />
-        
+        <TagSection v-if="post.tag_string_meta" title="Meta Tags" :tagString="post.tag_string_meta" colorClass="bg-[#ead084] text-gray-900" />
+
         <!-- Fallback if specific tags don't exist but master string does -->
-        <TagSection 
-          v-if="!post.tag_string_artist && !post.tag_string_character && !post.tag_string_general && post.tag_string" 
-          title="All Tags" 
-          :tagString="post.tag_string" 
-          colorClass="bg-gray-700" 
+        <TagSection
+          v-if="!post.tag_string_artist && !post.tag_string_character && !post.tag_string_general && post.tag_string"
+          title="All Tags"
+          :tagString="post.tag_string"
+          colorClass="bg-gray-700"
         />
-        
+
         <div>
-          <h3 class="text-sm font-medium text-gray-400">Created</h3>
-          <p>{{ post.created_at ? new Date(post.created_at).toLocaleString() : 'Unknown date' }}</p>
+          <h3 class="text-sm font-medium text-gray-400 mb-1">Information</h3>
+          <ul class="space-y-1 text-sm">
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">ID</span>
+              <span class="text-right">{{ post.id }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Uploader</span>
+              <span class="text-right break-all">{{ uploaderName }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Date</span>
+              <span class="text-right">{{ post.created_at ? new Date(post.created_at).toLocaleString() : 'Unknown' }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Approver</span>
+              <span class="text-right break-all">{{ approverName }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Size</span>
+              <span class="text-right">{{ sizeInfo }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Source</span>
+              <button
+                v-if="originalSourceIsUrl"
+                @click="openExternal(post.original_source)"
+                class="text-right text-pink-400 hover:text-pink-300 hover:underline break-all"
+                :title="post.original_source"
+              >
+                {{ originalSourceLabel }}
+              </button>
+              <span v-else class="text-right break-all">{{ originalSourceLabel }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Rating</span>
+              <span class="text-right capitalize">{{ getRatingFromCode(post.rating) }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Score</span>
+              <span class="text-right">{{ post.score ?? 0 }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Favorites</span>
+              <span class="text-right">{{ post.fav_count ?? 'Unknown' }}</span>
+            </li>
+            <li class="flex justify-between gap-3">
+              <span class="text-gray-400 shrink-0">Status</span>
+              <span class="text-right">{{ postStatus }}</span>
+            </li>
+          </ul>
         </div>
-        
+
         <div>
           <h3 class="text-sm font-medium text-gray-400">Source</h3>
-          <p class="text-pink-400">{{ getSourceName(post.source) }}</p>
+          <p class="text-pink-400">{{ booruName }}</p>
         </div>
-        
+
         <div class="flex justify-between items-center mt-4">
-          <a  
-            :href="post.post_url || (post.id ? `https://danbooru.donmai.us/posts/${post.id}` : '#')" 
-            target="_blank" 
+          <button
+            @click="openInBrowser"
             class="text-gray-400 hover:text-white transition-colors p-2 rounded-full hover:bg-gray-800"
             title="Open in browser"
           >
             View in Browser
-          </a>
-          <button 
+          </button>
+          <button
             @click="copyLink"
             class="relative text-gray-400 hover:text-white transition-colors p-2 rounded-full hover:bg-gray-800"
             title="Copy link"
           >
             {{ linkCopied ? 'Copied!' : 'Copy Link' }}
-            <span 
-              v-if="linkCopied" 
+            <span
+              v-if="linkCopied"
               class="absolute top-0 right-0 bottom-0 left-0 bg-green-600 rounded-full flex items-center justify-center text-white"
               style="animation: fadeOut 1.5s forwards;"
             >
@@ -90,6 +111,7 @@
 
 <script>
 import TagSection from './TagSection.vue';
+import { isTauri } from '../services/DownloadService';
 
 export default {
   name: 'PostDetailsSidebar',
@@ -103,6 +125,74 @@ export default {
       linkCopied: false,
     };
   },
+  computed: {
+    uploaderName() {
+      if (!this.post) return 'Unknown';
+      // owner (Gelbooru) / author (Moebooru) cover posts stored before those
+      // fields were mapped to uploader_name
+      return this.post.uploader_name || this.post.owner || this.post.author || 'Unknown';
+    },
+    approverName() {
+      if (!this.post) return 'None';
+      if (this.post.approver_name) return this.post.approver_name;
+      if (this.post.approver_id) return `User #${this.post.approver_id}`;
+      return 'None';
+    },
+    sizeInfo() {
+      const parts = [this.formatFileSize(this.post.file_size)];
+      if (this.post.file_ext) parts.push(`.${this.post.file_ext.toLowerCase()}`);
+      const w = this.post.image_width || this.post.width;
+      const h = this.post.image_height || this.post.height;
+      if (w && h) parts.push(`(${w}×${h})`);
+      return parts.join(' ');
+    },
+    originalSourceIsUrl() {
+      return /^https?:\/\//i.test(this.post?.original_source || '');
+    },
+    originalSourceLabel() {
+      const src = this.post?.original_source;
+      if (!src) return 'None';
+      if (this.originalSourceIsUrl) {
+        try {
+          return new URL(src).hostname.replace(/^www\./, '');
+        } catch {
+          return src;
+        }
+      }
+      return src;
+    },
+    postStatus() {
+      if (!this.post) return 'Unknown';
+      if (this.post.is_deleted) return 'Deleted';
+      if (this.post.is_banned) return 'Banned';
+      if (this.post.is_flagged) return 'Flagged';
+      if (this.post.is_pending) return 'Pending';
+      if (typeof this.post.status === 'string' && this.post.status) {
+        return this.post.status.charAt(0).toUpperCase() + this.post.status.slice(1);
+      }
+      return 'Active';
+    },
+    booruName() {
+      const source = this.post?.source;
+      if (!source) return 'Unknown';
+      try {
+        const host = new URL(source).hostname.toLowerCase();
+        if (host.endsWith('donmai.us')) return 'Danbooru';
+        if (host.endsWith('gelbooru.com')) return 'Gelbooru';
+        if (host.endsWith('safebooru.org')) return 'Safebooru';
+        if (host.endsWith('konachan.com') || host.endsWith('konachan.net')) return 'Konachan';
+        if (host.endsWith('yande.re')) return 'Yande.re';
+        const label = host.replace(/^www\./, '').split('.')[0];
+        return label.charAt(0).toUpperCase() + label.slice(1);
+      } catch {
+        return source.charAt(0).toUpperCase() + source.slice(1);
+      }
+    },
+    postUrl() {
+      if (!this.post) return null;
+      return this.post.post_url || (this.post.id ? `https://danbooru.donmai.us/posts/${this.post.id}` : null);
+    },
+  },
   methods: {
     getRatingFromCode(code) {
       if (!code) return 'Unknown';
@@ -115,13 +205,27 @@ export default {
       const i = Math.floor(Math.log(bytes) / Math.log(1024));
       return parseFloat((bytes / Math.pow(1024, i)).toFixed(2)) + ' ' + sizes[i];
     },
-    getSourceName(sourceStr) {
-      if (!sourceStr) return 'Unknown';
-      return sourceStr.charAt(0).toUpperCase() + sourceStr.slice(1);
+    async openExternal(url) {
+      if (!url) return;
+      // Tauri webviews don't handle target=_blank; route through the opener
+      // plugin so the OS default browser is used on desktop and Android.
+      if (isTauri()) {
+        try {
+          const { openUrl } = await import('@tauri-apps/plugin-opener');
+          await openUrl(url);
+          return;
+        } catch (e) {
+          console.error('[PostDetails] Failed to open via Tauri opener:', e);
+        }
+      }
+      window.open(url, '_blank', 'noopener');
+    },
+    openInBrowser() {
+      this.openExternal(this.postUrl);
     },
     copyLink() {
       if (!this.post) return;
-      const url = this.post.post_url || `https://danbooru.donmai.us/posts/${this.post.id}`;
+      const url = this.postUrl;
       navigator.clipboard.writeText(url).then(() => {
         this.linkCopied = true;
         setTimeout(() => {
