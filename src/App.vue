@@ -421,14 +421,14 @@ export default {
         this.accumulatedWatchTime = 0;
       }
       // Collapse settings sidebar when navigating to profile pages
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
       if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
         this.showSettingsSidebar = false;
       }
     },
     showSettingsSidebar(isOpen) {
       if (!isOpen) return;
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics'];
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
       if (hiddenRoutes.includes(this.$route.name)) {
         this.showSettingsSidebar = false;
       }
@@ -489,7 +489,7 @@ export default {
     showSettingsToggle() {
       // Only show settings on feed, history, likes, favorites, and viewer
       const routeName = this.$route.name;
-      return !['Profile', 'ProfileSettings', 'ProfileAnalytics'].includes(routeName);
+      return !['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'].includes(routeName);
     },
   },
   methods: {

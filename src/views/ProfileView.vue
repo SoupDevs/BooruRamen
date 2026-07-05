@@ -112,6 +112,26 @@
           <path d="M9 18l6-6-6-6"/>
         </svg>
       </router-link>
+
+      <router-link
+        to="/profile/profiles"
+        class="w-full flex items-center justify-between p-4 bg-gray-800 hover:bg-gray-750 rounded-lg transition-colors group"
+      >
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-full bg-orange-600/20 flex items-center justify-center">
+            <svg viewBox="0 0 24 24" class="w-5 h-5 text-orange-400" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a4 4 0 11-3-3.87"/>
+            </svg>
+          </div>
+          <div class="text-left">
+            <div class="font-medium">Profiles</div>
+            <div class="text-xs text-gray-400">Switch, create, or delete profiles</div>
+          </div>
+        </div>
+        <svg viewBox="0 0 24 24" class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M9 18l6-6-6-6"/>
+        </svg>
+      </router-link>
     </div>
 
     <!-- About/License Note -->

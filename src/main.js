@@ -12,6 +12,10 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import './assets/tailwind.css'
 import router from './router'
+import { cleanupPendingDeletes } from './services/ProfileService'
+
+// Retry profile database deletions that were interrupted by a reload
+cleanupPendingDeletes()
 
 const pinia = createPinia()
 const app = createApp(App)
