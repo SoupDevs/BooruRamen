@@ -36,7 +36,7 @@
 
     <!-- Main content area with transition -->
     <div class="max-w-2xl mx-auto">
-      <transition name="slide" mode="out-in">
+      <transition :name="slideDirection" mode="out-in">
         <!-- Root: Category List -->
         <div v-if="currentPage === 'root'" key="root">
           <div class="space-y-2">
@@ -731,6 +731,7 @@ export default {
 
       // Navigation
       navigationStack: [],
+      slideDirection: 'slide-left',
 
       // Source Management
       predefinedSources: [],
@@ -823,6 +824,7 @@ export default {
 
     // Navigation
     navigateTo(page) {
+      this.slideDirection = 'slide-left';
       this.navigationStack.push(page);
       if (page === 'reported') {
         this.loadReports();
@@ -830,6 +832,7 @@ export default {
     },
     goBack() {
       if (this.navigationStack.length > 0) {
+        this.slideDirection = 'slide-right';
         this.navigationStack.pop();
       }
     },
@@ -1265,16 +1268,28 @@ export default {
 </script>
 
 <style scoped>
-.slide-enter-active,
-.slide-leave-active {
+/* Going deeper: current page exits left, new page enters from the right */
+.slide-left-enter-active,
+.slide-left-leave-active,
+.slide-right-enter-active,
+.slide-right-leave-active {
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
-.slide-enter-from {
+.slide-left-enter-from {
   transform: translateX(30px);
   opacity: 0;
 }
-.slide-leave-to {
+.slide-left-leave-to {
   transform: translateX(-30px);
+  opacity: 0;
+}
+/* Going back up: current page exits right, new page enters from the left */
+.slide-right-enter-from {
+  transform: translateX(-30px);
+  opacity: 0;
+}
+.slide-right-leave-to {
+  transform: translateX(30px);
   opacity: 0;
 }
 </style>

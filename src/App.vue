@@ -391,25 +391,6 @@ export default {
         }
     },
     $route(to, from) {
-      // Determine page transition direction
-      const profileDepth = { Profile: 0, ProfileSettings: 1, ProfileAnalytics: 1 };
-      const fromDepth = profileDepth[from.name] ?? -1;
-      const toDepth = profileDepth[to.name] ?? -1;
-
-      if (fromDepth >= 0 && toDepth >= 0) {
-        // Both are profile pages: slide based on depth
-        this.pageTransitionName = toDepth > fromDepth ? 'page-slide-left' : 'page-slide-right';
-      } else if (fromDepth >= 0 && toDepth < 0) {
-        // Leaving profile pages entirely: slide right
-        this.pageTransitionName = 'page-slide-right';
-      } else if (fromDepth < 0 && toDepth >= 0) {
-        // Entering profile pages: slide left
-        this.pageTransitionName = 'page-slide-left';
-      } else {
-        // Non-profile navigation: fade
-        this.pageTransitionName = 'page-fade';
-      }
-
       // Hide post details and video controls when leaving the viewer
       if (to.name !== 'Viewer') {
         if (this.currentPost) {
@@ -919,6 +900,30 @@ export default {
     }
   },
   async created() {
+      // Set the page transition direction before navigation commits: the
+      // leaving view's animation classes are resolved from the current name,
+      // so updating it any later (e.g. in a $route watcher) animates the
+      // outgoing page with the previous navigation's direction.
+      this.$router.beforeEach((to, from) => {
+        const profileDepth = { Profile: 0, ProfileSettings: 1, ProfileAnalytics: 1, Profiles: 1 };
+        const fromDepth = profileDepth[from.name] ?? -1;
+        const toDepth = profileDepth[to.name] ?? -1;
+
+        if (fromDepth >= 0 && toDepth >= 0) {
+          // Both are profile pages: slide based on depth
+          this.pageTransitionName = toDepth > fromDepth ? 'page-slide-left' : 'page-slide-right';
+        } else if (fromDepth >= 0 && toDepth < 0) {
+          // Leaving profile pages entirely: going up, slide right
+          this.pageTransitionName = 'page-slide-right';
+        } else if (fromDepth < 0 && toDepth >= 0) {
+          // Entering profile pages: going deeper, slide left
+          this.pageTransitionName = 'page-slide-left';
+        } else {
+          // Non-profile navigation: fade
+          this.pageTransitionName = 'page-fade';
+        }
+      });
+
       await this.initializeSettings();
       this.initializePlayer();
       this.initializeInteractions();
