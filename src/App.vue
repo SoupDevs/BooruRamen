@@ -12,7 +12,7 @@
     <div class="h-screen relative overflow-hidden">
     
       <!-- Post details sidebar -->
-      <PostDetailsSidebar :show="showPostDetails" :post="currentPost" />
+      <PostDetailsSidebar :show="showPostDetails" :post="currentPost" @report-block="openReportModal" />
       
       <button 
         v-if="currentPost"
@@ -282,6 +282,14 @@
     </div>
     <BottomNavBar @navigate-feed="navigateToFeed" />
 
+    <!-- Report/Block splash -->
+    <ReportBlockModal
+      v-if="reportModalPost"
+      :post="reportModalPost"
+      @close="reportModalPost = null"
+      @reported="onReported"
+    />
+
     <!-- New release notification splash -->
     <UpdateSplash />
   </div>
@@ -302,6 +310,7 @@ import DownloadService from './services/DownloadService.js';
 import BottomNavBar from './components/BottomNavBar.vue';
 import CommentsSheet from './components/CommentsSheet.vue';
 import PostDetailsSidebar from './components/PostDetailsSidebar.vue';
+import ReportBlockModal from './components/ReportBlockModal.vue';
 import SettingsSidebar from './components/SettingsSidebar.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 
@@ -317,6 +326,7 @@ export default {
     BottomNavBar,
     CommentsSheet,
     PostDetailsSidebar,
+    ReportBlockModal,
     SettingsSidebar,
     UpdateSplash,
   },
@@ -333,6 +343,9 @@ export default {
       // Comments sheet state
       commentsPost: null,
       commentsSheetHeight: 0,
+
+      // Report/Block splash state
+      reportModalPost: null,
 
       routerViewKey: 0,
       pageTransitionName: 'page-fade',
@@ -631,6 +644,22 @@ export default {
     },
     togglePostDetails() {
       this.showPostDetails = !this.showPostDetails;
+    },
+
+    openReportModal() {
+      if (!this.currentPost) return;
+      this.reportModalPost = this.currentPost;
+    },
+    onReported() {
+      this.reportModalPost = null;
+      // Refresh the feed so newly blocked content (including the reported post
+      // itself, if it's already loaded) is fetched fresh and filtered out
+      if (this.$route.name === 'Home') {
+        this.$router.replace({
+          name: 'Home',
+          query: { ...this.$route.query, refresh: Date.now().toString() }
+        });
+      }
     },
     
     toggleLike(post) {

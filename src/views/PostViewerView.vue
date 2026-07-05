@@ -58,6 +58,7 @@ import { mapState } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
 import StorageService from '../services/StorageService';
+import ReportService from '../services/ReportService';
 import { getPlayableVideoUrl } from '../services/videoProxy.js';
 import { postFilterMixin } from '../mixins/postFilterMixin';
 
@@ -150,10 +151,16 @@ export default {
           .filter(i => i.value > 0)
           .sort((a, b) => b.timestamp - a.timestamp)
           .map(i => i.metadata.post);
+      } else if (this.source === 'reported') {
+        postData = await ReportService.getReportedPosts();
       }
       this.posts = postData.filter(p => p && p.id);
-      // Apply user filters (ratings, media type, tag whitelist/blacklist)
-      this.posts = await this.filterPostsBySettings(this.posts);
+      // Apply user filters (ratings, media type, tag whitelist/blacklist).
+      // Skipped for reported posts: it's a management view and must stay in
+      // sync with the unfiltered grid in ReportedPostsView.
+      if (this.source !== 'reported') {
+        this.posts = await this.filterPostsBySettings(this.posts);
+      }
       // Pause any videos that are still in the DOM from before filtering
       this.$refs.viewerContainer?.querySelectorAll('video').forEach(v => v.pause());
       this.loading = false;

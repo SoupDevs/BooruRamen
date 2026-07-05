@@ -3,6 +3,7 @@ import FeedView from '../views/FeedView.vue';
 import HistoryView from '../views/HistoryView.vue';
 import LikesView from '../views/LikesView.vue';
 import FavoritesView from '../views/FavoritesView.vue';
+import ReportedPostsView from '../views/ReportedPostsView.vue';
 import PostViewerView from '../views/PostViewerView.vue';
 import ProfileView from '../views/ProfileView.vue';
 import ProfileSettingsView from '../views/ProfileSettingsView.vue';
@@ -28,6 +29,11 @@ const routes = [
     path: '/favorites',
     name: 'Favorites',
     component: FavoritesView,
+  },
+  {
+    path: '/reported',
+    name: 'Reported',
+    component: ReportedPostsView,
   },
   {
     path: '/view/:source',

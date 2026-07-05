@@ -104,6 +104,15 @@
             </span>
           </button>
         </div>
+
+        <div class="border-t border-gray-700 mt-4 pt-4">
+          <button
+            @click="$emit('report-block')"
+            class="w-full text-center py-2 rounded-md text-sm font-medium text-red-400 hover:text-red-300 hover:bg-red-900/30 border border-red-900/60 transition-colors"
+          >
+            Report/Block
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -120,6 +129,7 @@ export default {
     show: Boolean,
     post: Object,
   },
+  emits: ['report-block'],
   data() {
     return {
       linkCopied: false,
