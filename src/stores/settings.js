@@ -27,7 +27,7 @@ export const useSettingsStore = defineStore('settings', {
         downloadLocation: '~/Downloads/BooruRamen',
         downloadLiked: false,
         downloadFavorited: false,
-        downloadSeparateFolders: false,
+        downloadSeparateFolders: true,
         // Age confirmation: stores DOB once verified
         confirmedDateOfBirth: null,
         settingsVersion: 0,
