@@ -149,8 +149,30 @@ jobs:
           # WRITE_EXTERNAL_STORAGE is needed to save downloads into the public
           # Downloads folder on Android 10 and below. Android 11+ allows
           # direct-path writes to Download/ without any permission.
-          sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />|' "$MANIFEST"
+          # REQUEST_INSTALL_PACKAGES lets the in-app updater hand a downloaded
+          # APK to the system package installer (GitHub-release updates; goes
+          # away if/when updates move to Google Play).
+          sed -i 's|<uses-permission android:name="android.permission.INTERNET" />|<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />|' "$MANIFEST"
           sed -i 's|<application|<application\n        android:requestLegacyExternalStorage="true"|' "$MANIFEST"
+
+          # FileProvider exposing the downloaded update APK to the package
+          # installer. The authority must stay in sync with install_apk() in
+          # src-tauri/src/updater.rs (<applicationId>.updates.provider) and
+          # the cache-path below must match where the updater saves the APK
+          # (app cache dir /updates/).
+          sed -i 's|</application>|    <provider\n            android:name="androidx.core.content.FileProvider"\n            android:authorities="${applicationId}.updates.provider"\n            android:exported="false"\n            android:grantUriPermissions="true">\n            <meta-data\n                android:name="android.support.FILE_PROVIDER_PATHS"\n                android:resource="@xml/update_file_paths" />\n        </provider>\n    </application>|' "$MANIFEST"
+
+          XML_DIR="src-tauri/gen/android/app/src/main/res/xml"
+          mkdir -p "$XML_DIR"
+          cat > "$XML_DIR/update_file_paths.xml" << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <paths>
+              <cache-path name="updates" path="updates/" />
+          </paths>
+          EOF
+
+          echo "Created update_file_paths.xml:"
+          cat "$XML_DIR/update_file_paths.xml"
 
           echo "Patched AndroidManifest.xml:"
           cat "$MANIFEST"

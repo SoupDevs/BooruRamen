@@ -453,6 +453,11 @@
               </div>
             </div>
 
+            <!-- Check for Updates -->
+            <button @click="checkForUpdates" class="w-full text-center bg-blue-700 hover:bg-blue-600 py-3 rounded-md text-lg transition">
+              Check for Updates
+            </button>
+
             <!-- Refresh Feed -->
             <button @click="showRefreshFeedModal" class="w-full text-center bg-blue-700 hover:bg-blue-600 py-3 rounded-md text-lg transition">
               Refresh your feed
@@ -573,6 +578,7 @@ import { mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { useInteractionsStore } from '../stores/interactions';
 import { usePlayerStore } from '../stores/player';
+import { useUpdaterStore } from '../stores/updater';
 import StorageService from '../services/StorageService';
 import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSystem';
 
@@ -722,6 +728,11 @@ export default {
     toggleDebugMode() {
       this.debugMode = !this.debugMode;
       this.saveSettings();
+    },
+
+    // Update check (result surfaces through the global UpdateSplash)
+    checkForUpdates() {
+      useUpdaterStore().checkForUpdates({ manual: true });
     },
 
     // Download settings
