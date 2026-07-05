@@ -218,12 +218,23 @@ export class DanbooruAdapter extends BooruAdapter {
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json();
             // Attach actual query for debugging
-            return data.filter(post => post.id && (post.file_url || post.large_file_url))
+            const normalizedPosts = data.filter(post => post.id && (post.file_url || post.large_file_url))
                 .map(p => {
                     const normalized = this.normalizePost(p);
                     normalized._actualQuery = queryTags;
                     return normalized;
                 });
+
+            // posts.json only exposes uploader_id/approver_id; resolve them to
+            // usernames before returning, since the feed pipeline clones posts
+            // and would not see a late in-place update.
+            try {
+                await this.resolveUserNames(normalizedPosts);
+            } catch (e) {
+                console.error('[Danbooru] Failed to resolve user names:', e);
+            }
+
+            return normalizedPosts;
         } catch (error) {
             console.error('Error fetching posts from Danbooru:', error);
             if (_isTest) throw error; // Re-throw for testConnection to catch
@@ -239,8 +250,39 @@ export class DanbooruAdapter extends BooruAdapter {
         }
 
         post.post_url = `${this.baseUrl}/posts/${post.id}`;
+        // post.source from the API is the artist-reported source (e.g. a pixiv
+        // link); keep it around before overwriting source with the booru URL,
+        // which the rest of the app relies on as the post's origin key.
+        post.original_source = post.source || '';
         post.source = this.baseUrl;
         return post;
+    }
+
+    /**
+     * Resolve uploader/approver IDs on posts to usernames via the users API.
+     * Mutates the post objects in place (they are reactive by the time the
+     * lookup completes, so the UI updates automatically).
+     * @param {Object[]} posts - Normalized posts
+     */
+    async resolveUserNames(posts) {
+        const unknownIds = new Set();
+        for (const post of posts) {
+            if (post.uploader_id && !this.userCache.has(post.uploader_id)) unknownIds.add(post.uploader_id);
+            if (post.approver_id && !this.userCache.has(post.approver_id)) unknownIds.add(post.approver_id);
+        }
+
+        if (unknownIds.size > 0) {
+            await this.fetchUsernames([...unknownIds]);
+        }
+
+        for (const post of posts) {
+            if (post.uploader_id && this.userCache.has(post.uploader_id)) {
+                post.uploader_name = this.userCache.get(post.uploader_id);
+            }
+            if (post.approver_id && this.userCache.has(post.approver_id)) {
+                post.approver_name = this.userCache.get(post.approver_id);
+            }
+        }
     }
 
     /**
@@ -972,6 +1014,10 @@ export class GelbooruAdapter extends BooruAdapter {
             tag_string_character: '',
             tag_string_copyright: '',
             tag_string_meta: '',
+            // Gelbooru reports the uploader username directly as 'owner'
+            uploader_name: post.owner || '',
+            // Keep the artist-reported source before source becomes the booru URL
+            original_source: post.source || '',
             source: this.baseUrl,
             directory: post.directory,
             image: post.image,
@@ -1189,19 +1235,25 @@ export class MoebooruAdapter extends BooruAdapter {
 
     normalizePost(post) {
         return {
+            ...post, // Spread first so the normalized properties below win
             id: post.id,
             created_at: post.created_at ? new Date(post.created_at * 1000).toISOString() : new Date().toISOString(),
             score: post.score,
             width: post.width,
             height: post.height,
+            image_width: post.width,
+            image_height: post.height,
             file_ext: post.file_url ? post.file_url.split('.').pop() : 'jpg',
             file_url: post.file_url,
             rating: this.mapRating(post.rating),
             tag_string: post.tags,
             tag_string_general: post.tags,
+            // Moebooru reports the uploader username as 'author'
+            uploader_name: post.author || '',
+            // Keep the artist-reported source before source becomes the booru URL
+            original_source: post.source || '',
             post_url: `${this.baseUrl}/post/show/${post.id}`,
             source: this.baseUrl,
-            ...post
         };
     }
 
