@@ -41,6 +41,29 @@
         <div v-if="currentPage === 'root'" key="root">
           <div class="space-y-2">
             <button
+              @click="navigateTo('ui')"
+              class="w-full flex items-center justify-between p-4 bg-gray-800 hover:bg-gray-750 rounded-lg transition-colors group"
+            >
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-full bg-purple-600/20 flex items-center justify-center">
+                  <svg viewBox="0 0 24 24" class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 2a10 10 0 100 20 2 2 0 002-2v-1a2 2 0 012-2h1a5 5 0 005-5c0-5.523-4.477-10-10-10z"/>
+                    <circle cx="7.5" cy="11.5" r="1"/>
+                    <circle cx="10.5" cy="7" r="1"/>
+                    <circle cx="15" cy="7.5" r="1"/>
+                  </svg>
+                </div>
+                <div class="text-left">
+                  <div class="font-medium">UI</div>
+                  <div class="text-xs text-gray-400">Theme, colors, fonts</div>
+                </div>
+              </div>
+              <svg viewBox="0 0 24 24" class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18l6-6-6-6"/>
+              </svg>
+            </button>
+
+            <button
               @click="navigateTo('content')"
               class="w-full flex items-center justify-between p-4 bg-gray-800 hover:bg-gray-750 rounded-lg transition-colors group"
             >
@@ -100,6 +123,94 @@
                 <path d="M9 18l6-6-6-6"/>
               </svg>
             </button>
+          </div>
+        </div>
+
+        <!-- UI Settings -->
+        <div v-else-if="currentPage === 'ui'" key="ui">
+          <div class="space-y-4">
+            <!-- Theme selector & customizer -->
+            <div class="p-4 bg-gray-800 rounded-lg">
+              <div class="mb-3">
+                <label class="font-medium">Theme</label>
+                <p class="text-xs text-gray-400 mt-1">
+                  Pick a preset, or build your own with custom colors and fonts.
+                  Changes apply instantly.
+                </p>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  v-for="preset in themePresets"
+                  :key="preset.id"
+                  @click="selectTheme(preset.id)"
+                  class="rounded-lg border p-3 text-left transition-colors"
+                  :class="theme === preset.id ? 'border-pink-500 ring-1 ring-pink-500' : 'border-gray-700 hover:border-gray-500'"
+                >
+                  <div
+                    class="h-10 rounded flex items-center justify-between px-2 mb-2 border"
+                    :style="{ backgroundColor: preset.preview.bg, borderColor: preset.preview.border }"
+                  >
+                    <span
+                      class="text-sm font-bold"
+                      :style="{ color: preset.preview.text, fontFamily: preset.preview.font }"
+                    >Aa</span>
+                    <span class="flex gap-1">
+                      <span class="w-3 h-3 rounded-full" :style="{ backgroundColor: preset.preview.accent }"></span>
+                      <span class="w-3 h-3 rounded-full border" :style="{ backgroundColor: preset.preview.surface, borderColor: preset.preview.border }"></span>
+                    </span>
+                  </div>
+                  <div class="text-sm font-medium">{{ preset.label }}</div>
+                  <div class="text-xs text-gray-400">{{ preset.description }}</div>
+                </button>
+              </div>
+
+              <!-- Custom theme editor -->
+              <div v-if="theme === 'custom'" class="mt-4 pt-4 border-t border-gray-700 space-y-3">
+                <div
+                  v-for="field in customColorFields"
+                  :key="field.key"
+                  class="flex items-center justify-between"
+                >
+                  <div>
+                    <label class="text-sm font-medium">{{ field.label }}</label>
+                    <p class="text-xs text-gray-500">{{ field.hint }}</p>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs text-gray-400 font-mono uppercase">{{ customTheme[field.key] }}</span>
+                    <input
+                      type="color"
+                      :value="customTheme[field.key]"
+                      @input="setCustomThemeValue(field.key, $event.target.value)"
+                      class="w-9 h-9 rounded cursor-pointer bg-transparent border border-gray-600"
+                    />
+                  </div>
+                </div>
+
+                <div class="flex items-center justify-between">
+                  <div>
+                    <label class="text-sm font-medium">Font</label>
+                    <p class="text-xs text-gray-500">Used across the whole app</p>
+                  </div>
+                  <select
+                    :value="customTheme.font"
+                    @change="setCustomThemeValue('font', $event.target.value)"
+                    class="bg-gray-900 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-pink-500 focus:outline-none"
+                  >
+                    <option v-for="font in fontOptions" :key="font.id" :value="font.id">{{ font.label }}</option>
+                  </select>
+                </div>
+
+                <div class="flex justify-end">
+                  <button
+                    @click="resetCustomTheme"
+                    class="text-sm text-gray-400 hover:text-white underline"
+                  >
+                    Reset custom theme
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -702,6 +813,7 @@ import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSys
 import BooruService from '../services/BooruService';
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from '../services/BooruAdapters';
 import DownloadService from '../services/DownloadService';
+import { THEME_PRESETS, FONT_OPTIONS, DEFAULT_CUSTOM_THEME, buildCustomTheme, getThemePreview, applyTheme } from '../services/ThemeService';
 import { X, Check, AlertCircle } from 'lucide-vue-next';
 
 export default {
@@ -760,8 +872,36 @@ export default {
     ...mapWritableState(useSettingsStore, [
       'disableHistory', 'debugMode', 'customSources', 'activeSource',
       'tagAlwaysInclude', 'tagNeverInclude',
-      'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders'
+      'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders',
+      'theme', 'customTheme'
     ]),
+    themePresets() {
+      const presets = Object.entries(THEME_PRESETS).map(([id, preset]) => ({
+        id,
+        label: preset.label,
+        description: preset.description,
+        preview: getThemePreview(preset)
+      }));
+      const custom = buildCustomTheme(this.customTheme);
+      presets.push({
+        id: 'custom',
+        label: custom.label,
+        description: custom.description,
+        preview: getThemePreview(custom)
+      });
+      return presets;
+    },
+    customColorFields() {
+      return [
+        { key: 'background', label: 'Background', hint: 'Main app background' },
+        { key: 'surface', label: 'Surface', hint: 'Cards, panels, inputs' },
+        { key: 'text', label: 'Text', hint: 'Primary text color' },
+        { key: 'accent', label: 'Accent', hint: 'Buttons, links, highlights' }
+      ];
+    },
+    fontOptions() {
+      return FONT_OPTIONS;
+    },
     appVersion() {
       return __APP_VERSION__;
     },
@@ -776,6 +916,7 @@ export default {
     currentTitle() {
       const titles = {
         root: 'Settings',
+        ui: 'UI',
         content: 'Content',
         sources: 'Sources',
         reported: 'Reported & Blocked',
@@ -820,7 +961,17 @@ export default {
     this.checkAllAuthStatus();
   },
   methods: {
-    ...mapActions(useSettingsStore, ['updateSettings', 'saveSettings', 'setTagOverrides']),
+    ...mapActions(useSettingsStore, ['updateSettings', 'saveSettings', 'setTagOverrides', 'setTheme', 'setCustomThemeValue']),
+
+    // Theme management
+    selectTheme(themeId) {
+      this.setTheme(themeId);
+    },
+    resetCustomTheme() {
+      for (const [key, value] of Object.entries(DEFAULT_CUSTOM_THEME)) {
+        this.setCustomThemeValue(key, value);
+      }
+    },
 
     // Navigation
     navigateTo(page) {
@@ -1252,6 +1403,7 @@ export default {
           const settingsStore = useSettingsStore();
           settingsStore.$reset();
           settingsStore.initialized = true;
+          applyTheme(settingsStore.theme, settingsStore.customTheme);
           useInteractionsStore().$reset();
           usePlayerStore().$reset();
           BooruService.setActiveSources(

@@ -1,3 +1,57 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Theme variables ("R G B" channel triples) consumed by tailwind.config.js.
+ * These defaults match the classic look; ThemeService overrides them at
+ * runtime when another theme is selected.
+ */
+:root {
+  --c-black: 0 0 0;
+  --c-white: 255 255 255;
+  --c-on-accent: 255 255 255;
+
+  --c-gray-50: 249 250 251;
+  --c-gray-100: 243 244 246;
+  --c-gray-200: 229 231 235;
+  --c-gray-300: 209 213 219;
+  --c-gray-400: 156 163 175;
+  --c-gray-500: 107 114 128;
+  --c-gray-600: 75 85 99;
+  --c-gray-700: 55 65 81;
+  --c-gray-750: 43 53 68;
+  --c-gray-800: 31 41 55;
+  --c-gray-900: 17 24 39;
+
+  --c-accent-50: 253 242 248;
+  --c-accent-100: 252 231 243;
+  --c-accent-200: 251 207 232;
+  --c-accent-300: 249 168 212;
+  --c-accent-400: 244 114 182;
+  --c-accent-500: 236 72 153;
+  --c-accent-600: 219 39 119;
+  --c-accent-700: 190 24 93;
+  --c-accent-800: 157 23 77;
+  --c-accent-900: 131 24 67;
+
+  --theme-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+}
+
+body {
+  font-family: var(--theme-font);
+}
+
+/*
+ * Text sitting on filled accent surfaces must stay readable in every theme
+ * (e.g. a light accent needs dark text). Declared after the Tailwind layers
+ * so it wins ties against text-white on the same element.
+ */
+.bg-pink-500,
+.bg-pink-600,
+.bg-pink-700,
+.hover\:bg-pink-600:hover,
+.hover\:bg-pink-700:hover {
+  color: rgb(var(--c-on-accent));
+}

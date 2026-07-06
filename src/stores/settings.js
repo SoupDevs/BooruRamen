@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import StorageService from '../services/StorageService'
+import { applyTheme, DEFAULT_CUSTOM_THEME } from '../services/ThemeService'
 
 export const useSettingsStore = defineStore('settings', {
     state: () => ({
@@ -30,6 +31,10 @@ export const useSettingsStore = defineStore('settings', {
         downloadSeparateFolders: true,
         // Age confirmation: stores DOB once verified
         confirmedDateOfBirth: null,
+        // Theming: preset id ('default', 'blackwhite', 'terminal', 'claude')
+        // or 'custom', in which case customTheme supplies colors and font
+        theme: 'default',
+        customTheme: { ...DEFAULT_CUSTOM_THEME },
         settingsVersion: 0,
         initialized: false
     }),
@@ -61,10 +66,13 @@ export const useSettingsStore = defineStore('settings', {
                     downloadLiked: saved.settings && saved.settings.downloadLiked !== undefined ? saved.settings.downloadLiked : this.downloadLiked,
                     downloadFavorited: saved.settings && saved.settings.downloadFavorited !== undefined ? saved.settings.downloadFavorited : this.downloadFavorited,
                     downloadSeparateFolders: saved.settings && saved.settings.downloadSeparateFolders !== undefined ? saved.settings.downloadSeparateFolders : this.downloadSeparateFolders,
-                    confirmedDateOfBirth: saved.settings && saved.settings.confirmedDateOfBirth ? saved.settings.confirmedDateOfBirth : this.confirmedDateOfBirth
+                    confirmedDateOfBirth: saved.settings && saved.settings.confirmedDateOfBirth ? saved.settings.confirmedDateOfBirth : this.confirmedDateOfBirth,
+                    theme: saved.settings && saved.settings.theme ? saved.settings.theme : this.theme,
+                    customTheme: saved.settings && saved.settings.customTheme ? { ...DEFAULT_CUSTOM_THEME, ...saved.settings.customTheme } : this.customTheme
                 })
             }
 
+            applyTheme(this.theme, this.customTheme)
             this.initialized = true
         },
 
@@ -108,6 +116,20 @@ export const useSettingsStore = defineStore('settings', {
             this.saveSettings()
         },
 
+        setTheme(themeId) {
+            this.theme = themeId
+            applyTheme(this.theme, this.customTheme)
+            this.saveSettings()
+        },
+
+        setCustomThemeValue(key, value) {
+            this.customTheme = { ...this.customTheme, [key]: value }
+            if (this.theme === 'custom') {
+                applyTheme(this.theme, this.customTheme)
+            }
+            this.saveSettings()
+        },
+
         async saveSettings() {
             await StorageService.saveAppSettings({
                 settings: {
@@ -133,7 +155,9 @@ export const useSettingsStore = defineStore('settings', {
                     downloadLiked: this.downloadLiked,
                     downloadFavorited: this.downloadFavorited,
                     downloadSeparateFolders: this.downloadSeparateFolders,
-                    confirmedDateOfBirth: this.confirmedDateOfBirth
+                    confirmedDateOfBirth: this.confirmedDateOfBirth,
+                    theme: this.theme,
+                    customTheme: { ...this.customTheme }
                 }
             })
             this.settingsVersion++
