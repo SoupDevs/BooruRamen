@@ -198,21 +198,21 @@ export const THEME_PRESETS = {
 
     claude: {
         label: 'Claude',
-        description: 'Warm ivory and terracotta',
+        description: 'Terracotta on warm charcoal',
         font: 'serif',
         colors: {
-            black: '#faf9f5',
-            white: '#141413',
+            black: '#1f1e1d',
+            white: '#faf9f5',
             onAccent: '#ffffff',
             gray: {
-                50: '#21201c', 100: '#2b2a25', 200: '#3e3d36', 300: '#55544b',
-                400: '#6f6e63', 500: '#87867c', 600: '#cbc6b5', 700: '#e0dcce',
-                750: '#eae7dc', 800: '#f0eee6', 900: '#f5f4ed'
+                50: '#f0eee6', 100: '#e8e6dc', 200: '#d9d6cb', 300: '#c2bfb3',
+                400: '#a6a39a', 500: '#7c7a70', 600: '#57564f', 700: '#45443f',
+                750: '#383734', 800: '#30302e', 900: '#262624'
             },
             accent: {
-                50: '#fbf0ea', 100: '#f7e2d5', 200: '#f0c6ab', 300: '#e7a487',
-                400: '#e08b6d', 500: '#d97757', 600: '#c96442', 700: '#b04f30',
-                800: '#8f3f26', 900: '#6d2f1d'
+                50: '#fbf0ea', 100: '#f7e2d5', 200: '#f0c6ab', 300: '#eab08e',
+                400: '#e29a78', 500: '#dd8867', 600: '#d97757', 700: '#c96442',
+                800: '#a84f30', 900: '#7d3a22'
             }
         }
     }
