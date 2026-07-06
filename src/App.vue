@@ -143,33 +143,11 @@
       <div 
         v-if="isCurrentPostVideo && currentPost" 
         class="fixed left-0 right-0 bg-black bg-opacity-60 backdrop-blur-sm py-2 px-4 flex items-center gap-4 transition-opacity duration-300 z-40"
-        :class="{ 'opacity-0': !showVideoControls && !isVideoControlsHovered, 'opacity-100': showVideoControls || isVideoControlsHovered }"
+        :class="videoControlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'"
         :style="{ bottom: `calc(3.5rem + env(safe-area-inset-bottom, 0))` }"
         @mouseenter="isVideoControlsHovered = true"
         @mouseleave="isVideoControlsHovered = false"
       >
-        <button @click="togglePlayPause" class="text-white p-2 w-8 h-8 flex items-center justify-center">
-          <svg v-if="isPlaying" viewBox="0 0 24 24" class="w-6 h-6 fill-white">
-            <rect x="6" y="4" width="4" height="16" rx="1" />
-            <rect x="14" y="4" width="4" height="16" rx="1" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24" class="w-6 h-6 fill-white">
-            <path d="M8 5v14l11-7z" />
-          </svg>
-        </button>
-        
-        <!-- Progress bar - Updated with drag functionality -->
-        <div class="flex-grow relative h-2 bg-gray-700 rounded cursor-pointer" 
-          @click="seekVideo"
-          @mousedown="startProgressDrag"
-          ref="progressBar">
-          <div 
-            class="absolute top-0 left-0 h-full bg-pink-600 rounded transition-[width]" 
-            :class="{ 'transition-none': isProgressDragging }"
-            :style="{ width: `${videoProgress}%` }"
-          ></div>
-        </div>
-        
         <!-- Volume control section - Modified for better hover behavior -->
         <div class="flex items-center group relative">
           <!-- Improved hover area for volume slider -->
@@ -215,6 +193,17 @@
               <path d="M18 8c1 1.5 1.5 3 1.5 4s-.5 2.5-1.5 4" stroke="white" stroke-width="2" fill="none" />
             </svg>
           </button>
+        </div>
+
+        <!-- Progress bar - Updated with drag functionality -->
+        <div class="flex-grow relative h-2 bg-gray-700 rounded cursor-pointer"
+          @click="seekVideo"
+          @mousedown="startProgressDrag"
+          ref="progressBar">
+          <div
+            class="absolute top-0 left-0 h-full bg-pink-600 rounded"
+            :style="{ width: `${videoProgress}%` }"
+          ></div>
         </div>
       </div>
 
@@ -414,6 +403,23 @@ export default {
         this.showSettingsSidebar = false;
       }
     },
+    currentVideoElement(el) {
+      this.stopProgressLoop();
+      if (el) this.startProgressLoop();
+      // Don't reveal the seek bar here: autoscroll swaps videos without user
+      // input, and the bar should only ever appear from user interaction.
+      this.scheduleControlsHide();
+    },
+    isPlaying(playing) {
+      if (playing) {
+        this.scheduleControlsHide();
+      } else {
+        // Keep whatever visibility the bar has. A user pause is always
+        // preceded by a pointer/key event that showed the bar via
+        // handleUserActivity; a natural end (autoscroll) shows nothing.
+        clearTimeout(this._hideControlsTimer);
+      }
+    },
   },
 
   computed: {
@@ -466,6 +472,10 @@ export default {
       if (!this.currentPost) return false;
       const ext = this.currentPost.file_ext;
       return ['mp4', 'webm'].includes(ext);
+    },
+    videoControlsVisible() {
+      return this.showVideoControls || this.isVideoControlsHovered
+        || this.isProgressDragging || this.isVolumeDragging;
     },
     showSettingsToggle() {
       // Only show settings on feed, history, likes, favorites, and viewer
@@ -779,10 +789,49 @@ export default {
             }
         }
     },
+    // Fade the seek bar out after 1.5s without interaction while playing.
+    // Only pointer/key activity (handleUserActivity) brings it back; while
+    // paused the pending hide is cancelled so it stays visible once shown.
+    scheduleControlsHide() {
+      clearTimeout(this._hideControlsTimer);
+      if (!this.isPlaying) return;
+      this._hideControlsTimer = setTimeout(() => {
+        if (this.isPlaying) this.showVideoControls = false;
+      }, 1500);
+    },
+    handleUserActivity() {
+      if (!this.isCurrentPostVideo) return;
+      this.showVideoControls = true;
+      this.scheduleControlsHide();
+    },
+    // Drive the seek bar from the media clock every frame instead of the
+    // ~4Hz timeupdate event, so it fills smoothly even on low-fps videos.
+    startProgressLoop() {
+        const step = () => {
+            const video = this.currentVideoElement;
+            if (!video) {
+                this._progressRafId = null;
+                return;
+            }
+            if (!this.isProgressDragging && video.duration > 0) {
+                this.videoProgress = (video.currentTime / video.duration) * 100;
+            }
+            this._progressRafId = requestAnimationFrame(step);
+        };
+        this._progressRafId = requestAnimationFrame(step);
+    },
+    stopProgressLoop() {
+        if (this._progressRafId) {
+            cancelAnimationFrame(this._progressRafId);
+            this._progressRafId = null;
+        }
+    },
     handleVideoStateChange(state) {
         // Update local state from event, relying on store writable computing to update store via setters
         if (state.isPlaying !== undefined) this.isPlaying = state.isPlaying;
-        if (state.progress !== undefined) this.videoProgress = state.progress;
+        // Progress is driven per-frame by startProgressLoop while a video
+        // element is current; the coarse timeupdate value is only a fallback.
+        if (state.progress !== undefined && !this._progressRafId) this.videoProgress = state.progress;
         // Ignore volume/muted changes during drag to prevent race condition
         if (!this.isVolumeDragging) {
             if (state.volume !== undefined) this.volume = state.volume;
@@ -885,6 +934,7 @@ export default {
     
     handleKeydown(e) {
       if (e.target.tagName === 'INPUT') return;
+      this.handleUserActivity();
       if (e.code === 'Space') {
         e.preventDefault();
         this.togglePlayPause();
@@ -933,6 +983,8 @@ export default {
       }
 
       window.addEventListener('keydown', this.handleKeydown);
+      window.addEventListener('pointermove', this.handleUserActivity);
+      window.addEventListener('pointerdown', this.handleUserActivity);
 
       // Check for a new release on app open. Only in the installed app:
       // dev builds in the browser would always trail the published version.
@@ -942,6 +994,10 @@ export default {
   },
   beforeUnmount() {
       window.removeEventListener('keydown', this.handleKeydown);
+      window.removeEventListener('pointermove', this.handleUserActivity);
+      window.removeEventListener('pointerdown', this.handleUserActivity);
+      clearTimeout(this._hideControlsTimer);
+      this.stopProgressLoop();
   }
 }
 </script>
