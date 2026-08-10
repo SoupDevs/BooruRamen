@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename)
 const packageJson = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'))
 
 // https://vite.dev/config/
-export default defineConfig({
+const config = {
   plugins: [vue()],
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
@@ -85,6 +85,53 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_DEBUG,
   },
   configureServer(server) {
+    // Gelbooru rejects media hotlinks unless requests identify Gelbooru as the
+    // referring site. Browser code cannot set that header, so development uses
+    // this same-origin, host-restricted streaming proxy.
+    server.middlewares.use('/gelbooru-media', async (req, res) => {
+      const requestUrl = new URL(req.url, 'http://localhost')
+      const mediaUrl = requestUrl.searchParams.get('url')
+
+      let parsedMediaUrl
+      try {
+        parsedMediaUrl = new URL(mediaUrl)
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain' })
+        res.end('Invalid Gelbooru media URL')
+        return
+      }
+
+      const hostname = parsedMediaUrl.hostname.toLowerCase()
+      if (parsedMediaUrl.protocol !== 'https:' ||
+          (hostname !== 'gelbooru.com' && !hostname.endsWith('.gelbooru.com'))) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' })
+        res.end('Only Gelbooru media URLs are allowed')
+        return
+      }
+
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': req.headers.accept || '*/*',
+        'Referer': 'https://gelbooru.com/',
+      }
+      if (req.headers.range) headers.Range = req.headers.range
+
+      const proxyReq = https.request(parsedMediaUrl, { method: req.method, headers }, (proxyRes) => {
+        const responseHeaders = { ...proxyRes.headers }
+        delete responseHeaders['content-security-policy']
+        delete responseHeaders['cross-origin-resource-policy']
+        delete responseHeaders['x-frame-options']
+        res.writeHead(proxyRes.statusCode || 502, responseHeaders)
+        proxyRes.pipe(res)
+      })
+
+      proxyReq.on('error', () => {
+        if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain' })
+        res.end('Gelbooru media proxy error')
+      })
+      proxyReq.end()
+    })
+
     // Custom middleware to proxy video requests from Danbooru CDN
     // This bypasses CORP/CORS restrictions by fetching server-side
     server.middlewares.use('/video-proxy', async (req, res) => {
@@ -152,4 +199,13 @@ export default defineConfig({
       proxyReq.end()
     })
   }
+}
+
+// configureServer is a Vite plugin hook, not a top-level config hook.
+config.plugins.push({
+  name: 'booruramen-media-proxies',
+  configureServer: config.configureServer,
 })
+delete config.configureServer
+
+export default defineConfig(config)

@@ -15,14 +15,19 @@
       class="relative aspect-square bg-gray-800 rounded-lg overflow-hidden cursor-pointer"
       @click="emitPostClick(post, index)"
     >
-      <img :src="post.preview_file_url || post.file_url" :alt="post.tag_string" class="w-full h-full object-cover">
+      <BooruImage :src="post.preview_file_url || post.file_url" :alt="post.tag_string" class="w-full h-full object-cover" />
     </div>
   </div>
 </template>
 
 <script>
+import BooruImage from './BooruImage.vue';
+
 export default {
   name: 'PostGrid',
+  components: {
+    BooruImage,
+  },
   props: {
     posts: {
       type: Array,
@@ -35,4 +40,4 @@ export default {
     },
   },
 };
-</script> 
+</script>
