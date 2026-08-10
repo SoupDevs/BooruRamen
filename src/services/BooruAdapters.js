@@ -1002,7 +1002,10 @@ export class GelbooruAdapter extends BooruAdapter {
             image_height: Number(post.height) || 0,
             // File size - Gelbooru may use 'file_size' or just 'size'
             file_size: Number(post.file_size || post.size || post.filesize) || 0,
-            file_url: this.rewriteVideoUrl(fileUrl || post.file_url),
+            // Keep Gelbooru's authoritative CDN URL. Media display supplies the
+            // required Referer separately; rewriting the host breaks current
+            // img*.gelbooru.com video URLs and their TLS certificates.
+            file_url: fileUrl || post.file_url,
             preview_file_url: post.preview_url,
             // Map rating properly
             rating: this.mapRating(post.rating),
@@ -1041,33 +1044,6 @@ export class GelbooruAdapter extends BooruAdapter {
         if (r === 'questionable' || r === 'q') return 'q';
         if (r === 'explicit' || r === 'e') return 'e';
         return 'g'; // fallback to general
-    }
-
-    // Rewrite video CDN URLs to use local proxy in development
-    rewriteVideoUrl(url) {
-        if (!url) return url;
-
-        // Gelbooru API returns video-cdn3.gelbooru.com which doesn't exist (DNS fails)
-        // In development, proxy through Vite to bypass CORS issues
-        if (url.includes('gelbooru.com') && /\.(mp4|webm|mov)(\?|$)/i.test(url)) {
-            try {
-                const urlObj = new URL(url);
-                // Rewrite to use local proxy in development
-                if (urlObj.hostname.includes('video-cdn') || urlObj.hostname.includes('gelbooru.com')) {
-                    if (import.meta.env && import.meta.env.DEV) {
-                        // Use local proxy in development
-                        return `/gelbooru-video${urlObj.pathname}`;
-                    } else {
-                        // In production, rewrite to video-cdn4
-                        urlObj.hostname = 'video-cdn4.gelbooru.com';
-                        return urlObj.toString();
-                    }
-                }
-            } catch (e) {
-                console.error('[Gelbooru] Error rewriting URL:', e);
-            }
-        }
-        return url;
     }
 
     /**

@@ -13,16 +13,10 @@
  * This bypasses CORS issues in Tauri production builds.
  */
 
-import { httpFetch } from './httpClient.js';
-
-// Check if we're running in a Tauri context
-const isTauri = () => {
-    return typeof window !== 'undefined' && window.__TAURI_INTERNALS__ !== undefined;
-};
+import { getDisplayableMediaUrl } from './mediaUrl.js';
 
 // Cache for blob URLs to avoid re-fetching
 const blobUrlCache = new Map();
-let proxyWarningShown = false;
 
 /**
  * Get a playable video URL. In dev mode, attempts to fetch through Vite middleware
@@ -32,6 +26,10 @@ let proxyWarningShown = false;
  */
 export async function getPlayableVideoUrl(url) {
     if (!url) return url;
+
+    if (url.includes('gelbooru.com')) {
+        return getDisplayableMediaUrl(url);
+    }
 
     // CDN URLs (danbooru) are behind Cloudflare bot protection.
     // Server-side proxies (Vite middleware, Node.js) get 403 (TLS fingerprinting).

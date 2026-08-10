@@ -35,12 +35,11 @@
       >
         <!-- Post media -->
         <div class="relative h-full max-w-full flex items-center justify-center">
-          <img
+          <BooruImage
             v-if="['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(getFileExtension(post))"
             :src="post.file_url"
             :alt="post.tags || 'Post image'"
             class="max-w-full max-h-full object-contain"
-            :referrerpolicy="post.file_url && post.file_url.includes('gelbooru') ? 'no-referrer' : 'strict-origin-when-cross-origin'"
             @error="(e) => console.error('Image load error:', post.file_url, e)"
           />
           <!-- No poster and no autoplay: offscreen videos buffer (preload="auto") but never
@@ -114,10 +113,14 @@ import BooruService from '../services/BooruService';
 import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
 import recommendationSystem from '../services/RecommendationSystem';
-import { getPlayableVideoUrl } from '../services/videoProxy.js';
+import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
+import BooruImage from '../components/BooruImage.vue';
 
 export default {
   name: 'FeedView',
+  components: {
+    BooruImage,
+  },
   props: {
     commentsSheetHeight: {
       type: Number,
@@ -323,6 +326,8 @@ export default {
       console.log(`FetchPosts: Blocked ${Object.keys(viewedHistory).length} from history, ${this.posts.length} from current. Total blocked IDs: ${blockedKeys.size}`);
 
       if (newSearch) {
+        Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
+        this.videoBlobUrls = {};
         this.page = 1;
         this.posts = [];
         this.currentPostIndex = -1;
@@ -874,6 +879,7 @@ export default {
     }
     this.$emit('current-post-changed', null, null);
     this.stopAutoScroll();
+    Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
   },
   watch: {
     '$route.query': {
@@ -940,4 +946,4 @@ export default {
     }
   },
 }
-</script> 
+</script>

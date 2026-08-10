@@ -19,7 +19,7 @@
       >
         <!-- Post media -->
         <div class="relative max-h-full max-w-full">
-          <img 
+          <BooruImage
             v-if="isImage(post)" 
             :src="post.large_file_url || post.file_url" 
             :alt="post.tag_string" 
@@ -59,12 +59,16 @@ import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
 import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
-import { getPlayableVideoUrl } from '../services/videoProxy.js';
+import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
 import { postFilterMixin } from '../mixins/postFilterMixin';
+import BooruImage from '../components/BooruImage.vue';
 
 export default {
   name: 'PostViewerView',
   mixins: [postFilterMixin],
+  components: {
+    BooruImage,
+  },
   props: {
     source: {
       type: String,
@@ -102,6 +106,7 @@ export default {
     if (this.observer) {
       this.observer.disconnect();
     }
+    Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
   },
   methods: {
     setupObserver() {
@@ -403,4 +408,4 @@ export default {
     autoplayVideos: 'setupObserver'
   }
 };
-</script> 
+</script>
