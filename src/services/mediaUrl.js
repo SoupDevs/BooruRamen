@@ -8,10 +8,6 @@
  * (at your option) any later version.
  */
 
-import { httpFetch } from './httpClient.js';
-
-const GELBOORU_REFERER = 'https://gelbooru.com/';
-
 export function isGelbooruMediaUrl(url) {
     if (!url) return false;
 
@@ -35,24 +31,13 @@ export async function getDisplayableMediaUrl(url) {
         return `/gelbooru-media?url=${encodeURIComponent(url)}`;
     }
 
-    // Tauri's HTTP plugin permits the required Referer header. A blob URL lets
-    // the WebView display the authenticated response without a second request.
-    const response = await httpFetch(url, {
-        headers: {
-            Referer: GELBOORU_REFERER,
-        },
-    });
-
-    if (!response.ok) {
-        throw new Error(`Gelbooru media request failed with status ${response.status}`);
+    if (typeof window !== 'undefined' && window.__TAURI_INTERNALS__ !== undefined) {
+        const { convertFileSrc, invoke } = await import('@tauri-apps/api/core');
+        const cachedPath = await invoke('cache_gelbooru_media', { url });
+        return convertFileSrc(cachedPath);
     }
 
-    const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('text/html')) {
-        throw new Error('Gelbooru returned its hotlink page instead of media');
-    }
-
-    return URL.createObjectURL(await response.blob());
+    throw new Error('Gelbooru media requires the Vite proxy or a packaged Tauri app');
 }
 
 export function releaseDisplayableMediaUrl(url) {
