@@ -21,21 +21,34 @@
       <div
         class="absolute inset-0 bg-black opacity-70"
         :class="closing ? 'share-backdrop-out' : 'share-backdrop-in'"
+        :style="backdropStyle"
         @click="requestClose"
       ></div>
 
       <div
+        ref="panel"
         class="relative bg-gray-900 rounded-t-2xl border-t border-gray-700 shadow-2xl"
         :class="closing ? 'share-sheet-out' : 'share-sheet-in'"
-        :style="{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0))' }"
+        :style="sheetStyle"
       >
-        <div class="flex justify-center pt-3 pb-2">
-          <div class="w-10 h-1 bg-gray-600 rounded-full"></div>
-        </div>
+        <!-- The handle is a real grab handle: drag the header down to dismiss.
+             touch-none keeps the browser from scrolling instead, and it spans
+             the title too, so a drag that starts on the heading works as well. -->
+        <div
+          class="touch-none cursor-grab select-none active:cursor-grabbing"
+          @pointerdown="startDrag"
+          @pointermove="onDragMove"
+          @pointerup="endDrag"
+          @pointercancel="endDrag"
+        >
+          <div class="flex justify-center pt-3 pb-2">
+            <div class="w-10 h-1 bg-gray-600 rounded-full"></div>
+          </div>
 
-        <div class="px-4 pb-1 text-center">
-          <h3 class="text-lg font-semibold text-white">Share</h3>
-          <p class="text-xs text-gray-500 truncate">{{ subtitle }}</p>
+          <div class="px-4 pb-1 text-center">
+            <h3 class="text-lg font-semibold text-white">Share</h3>
+            <p class="text-xs text-gray-500 truncate">{{ subtitle }}</p>
+          </div>
         </div>
 
         <!-- Share targets: the ones this user reaches for, with everything
@@ -132,6 +145,12 @@ const CLOSE_ANIMATION_MS = 160;
 const COPIED_FEEDBACK_MS = 1500;
 // Saving a file can take a while (videos), so its confirmation lingers.
 const DOWNLOAD_FEEDBACK_MS = 2500;
+// Swipe-to-dismiss: dragging the handle up to here closes the sheet, and a
+// quick flick only has to travel a token distance, like a native sheet.
+const DRAG_CLOSE_DISTANCE = 96;
+const DRAG_FLING_VELOCITY = 0.6;
+const DRAG_FLING_MIN_DISTANCE = 24;
+const DRAG_SETTLE_MS = 180;
 
 export default {
   name: 'ShareSheet',
@@ -146,6 +165,10 @@ export default {
   data() {
     return {
       closing: false,
+      // Drag state: dragY follows the finger, dragClosing runs the glide out.
+      drag: null,
+      dragY: 0,
+      dragClosing: false,
       linkCopied: false,
       // Everything beyond what this user actually uses waits behind More.
       showAll: false,
@@ -199,6 +222,33 @@ export default {
     },
     canSystemShare() {
       return typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    },
+    sheetStyle() {
+      const base = { paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0))' };
+      if (this.dragClosing) {
+        return {
+          ...base,
+          transform: 'translateY(100%)',
+          transition: `transform ${CLOSE_ANIMATION_MS}ms ease-in`
+        };
+      }
+      if (this.dragging) return { ...base, transform: `translateY(${this.dragY}px)` };
+      if (this.dragY) {
+        // Released short of the threshold: settle back up.
+        return { ...base, transform: 'translateY(0)', transition: `transform ${DRAG_SETTLE_MS}ms ease-out` };
+      }
+      return base;
+    },
+    backdropStyle() {
+      if (this.dragClosing) {
+        return { opacity: 0, transition: `opacity ${CLOSE_ANIMATION_MS}ms ease-in` };
+      }
+      if (!this.dragging) return null;
+      // The scrim fades with the drag so the gesture reads as one motion.
+      return { opacity: Math.max(0, 0.7 * (1 - this.dragY / this.panelHeight())) };
+    },
+    dragging() {
+      return this.drag !== null;
     },
     downloadLabel() {
       if (this.downloading) return 'Saving…';
@@ -274,6 +324,45 @@ export default {
         // Dismissed by the user, or the platform refused the payload: leave
         // the sheet open so another option is still one tap away.
       }
+    },
+    panelHeight() {
+      const el = this.$refs.panel;
+      return (el && el.offsetHeight) || (typeof window !== 'undefined' ? window.innerHeight : 1);
+    },
+    startDrag(event) {
+      if (this.closing || this.dragClosing) return;
+      // Left button / first finger only, and never while the sheet is leaving.
+      if (event.button !== undefined && event.button !== 0) return;
+      this.drag = { id: event.pointerId, startY: event.clientY, startTime: performance.now() };
+      this.dragY = 0;
+      // Capture so the gesture keeps tracking outside the handle.
+      const zone = event.currentTarget;
+      if (zone && zone.setPointerCapture) zone.setPointerCapture(event.pointerId);
+    },
+    onDragMove(event) {
+      if (!this.drag || event.pointerId !== this.drag.id) return;
+      // Upward drags do not lift the sheet off its edge.
+      this.dragY = Math.max(0, event.clientY - this.drag.startY);
+    },
+    endDrag(event) {
+      if (!this.drag || (event && event.pointerId !== undefined && event.pointerId !== this.drag.id)) return;
+      const { startTime } = this.drag;
+      const dy = this.dragY;
+      const elapsed = Math.max(1, performance.now() - startTime);
+      this.drag = null;
+      const flicked = dy / elapsed > DRAG_FLING_VELOCITY && dy > DRAG_FLING_MIN_DISTANCE;
+      if (dy > DRAG_CLOSE_DISTANCE || flicked) {
+        this.dragClose();
+        return;
+      }
+      this.dragY = 0;
+    },
+    dragClose() {
+      if (this.closing || this.dragClosing) return;
+      // Glide out from where the finger left it, then hand the sheet back.
+      this.dragClosing = true;
+      this.dragY = this.panelHeight();
+      this.closeTimer = setTimeout(() => this.$emit('close'), CLOSE_ANIMATION_MS);
     },
     requestClose() {
       if (this.closing) return;
