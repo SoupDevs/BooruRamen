@@ -25,6 +25,19 @@ import { isTauri, isAndroid } from './DownloadService';
 
 const GITHUB_REPO = 'SoupDevs/BooruRamen';
 
+/**
+ * Error marker the Rust side returns when Android is not yet allowed to
+ * install packages from this app.
+ */
+export const INSTALL_PERMISSION_REQUIRED = 'install-permission-required';
+
+/**
+ * How long the native install may go without a progress event before the
+ * splash gives up on it. A stuck native call used to leave "Installing
+ * update..." on screen forever, with nothing to retry.
+ */
+const STALL_TIMEOUT_MS = 90 * 1000;
+
 class GitHubReleaseProvider {
     /**
      * Fetch the latest published release.
@@ -46,6 +59,9 @@ class GitHubReleaseProvider {
             assets: (release.assets || []).map(asset => ({
                 name: asset.name,
                 url: asset.browser_download_url,
+                // The Rust side verifies the download against this size, so a
+                // truncated APK is never handed to the installer.
+                size: asset.size,
             })),
         };
     }
@@ -94,6 +110,35 @@ export async function checkForUpdates() {
 }
 
 /**
+ * Whether this build installs downloaded updates itself. False in a build
+ * without the `sideload-updates` Cargo feature, where a store owns updates.
+ * @returns {Promise<boolean>}
+ */
+export async function isSideloadUpdatesSupported() {
+    if (!isTauri()) return false;
+    const { invoke } = await import('@tauri-apps/api/core');
+    return await invoke('sideload_updates_supported');
+}
+
+/**
+ * Whether an install failure means "Android is waiting for the user to allow
+ * installs from this app" rather than a real error.
+ * @param {unknown} error
+ */
+export function isInstallPermissionError(error) {
+    return String(error?.message ?? error ?? '').includes(INSTALL_PERMISSION_REQUIRED);
+}
+
+/**
+ * Open the system screen where the user can allow installs from this app
+ * ("Install unknown apps" on Android 8+).
+ */
+export async function openInstallPermissionSettings() {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('open_install_permission_settings');
+}
+
+/**
  * Download and launch the platform installer for an available update.
  * The Rust side picks the right asset (APK / NSIS exe / MSI), reports
  * progress through "update://progress" events, and takes over from there:
@@ -108,12 +153,28 @@ export async function downloadAndInstall(update, onProgress) {
     }
     const { invoke } = await import('@tauri-apps/api/core');
     const { listen } = await import('@tauri-apps/api/event');
+
+    let lastEventAt = Date.now();
     const unlisten = await listen('update://progress', event => {
+        lastEventAt = Date.now();
         if (onProgress) onProgress(event.payload);
     });
+
+    // Fail instead of spinning forever if the native call never reports back.
+    let watchdog;
+    const stalled = new Promise((_, reject) => {
+        watchdog = setInterval(() => {
+            if (Date.now() - lastEventAt > STALL_TIMEOUT_MS) {
+                clearInterval(watchdog);
+                reject(new Error('The update stopped responding. Please try again.'));
+            }
+        }, 5000);
+    });
+
     try {
-        await invoke('install_update', { assets: update.assets });
+        await Promise.race([invoke('install_update', { assets: update.assets }), stalled]);
     } finally {
+        clearInterval(watchdog);
         unlisten();
     }
 }
@@ -123,5 +184,9 @@ export default {
     compareVersions,
     checkForUpdates,
     downloadAndInstall,
+    isSideloadUpdatesSupported,
+    isInstallPermissionError,
+    openInstallPermissionSettings,
+    INSTALL_PERMISSION_REQUIRED,
     isAndroid,
 };

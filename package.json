@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint --ext .js,.vue --ignore-path .gitignore src",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "android:init": "tauri android init && node scripts/android/patch_android_project.mjs",
+    "android:build": "node scripts/android/patch_android_project.mjs && tauri android build"
   },
   "dependencies": {
     "@tauri-apps/plugin-dialog": "^2.7.1",

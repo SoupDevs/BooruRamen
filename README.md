@@ -123,3 +123,29 @@ npm run tauri build
 ```bash
 npm run tauri android build -- --apk true
 ```
+
+The release APKs update themselves: the app downloads the newer APK and hands
+it to the Android package installer. That needs a permission and a
+`FileProvider`, which `tauri android init` knows nothing about, so they are
+applied to the generated project by `scripts/android/patch_android_project.mjs`
+(the release workflow runs it too):
+
+```bash
+npm run android:init     # tauri android init + apply the Android patches
+npm run android:build    # apply the patches, then build the APK
+```
+
+#### Shipping a build without in-app updates
+
+A build whose updates come from a store (Google Play, F-Droid) removes the
+mechanism by dropping one feature from `default` in `src-tauri/Cargo.toml`:
+
+```toml
+default = []
+```
+
+The installer code is then not compiled in, `install_update` reports that the
+store owns updates, and the next `patch_android_project.mjs` run strips
+`REQUEST_INSTALL_PACKAGES`, the update `FileProvider` and its paths file from
+the generated manifest (the download permissions the app needs elsewhere stay
+in place).
