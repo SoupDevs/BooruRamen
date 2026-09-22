@@ -550,6 +550,21 @@ export class GelbooruAdapter extends BooruAdapter {
 
             const response = await httpFetch(url, { method: 'GET' });
 
+            // A 200 whose body is an authentication notice means the site is up
+            // but refuses anonymous API use - that is not a usable connection.
+            let bodyText = '';
+            try {
+                bodyText = await response.text();
+            } catch (readError) {
+                // Body unavailable; fall back to the status code below
+            }
+            if (/missing authentication|api key (is )?required|invalid api key/i.test(bodyText)) {
+                return {
+                    success: false,
+                    message: 'This site requires an API key and User ID.'
+                };
+            }
+
             // Any response (even 401/403) means the site is reachable
             // We only care about network errors or complete failures
             if (response.ok || response.status === 401 || response.status === 403) {
@@ -647,6 +662,17 @@ export class GelbooruAdapter extends BooruAdapter {
             // Try to parse response - invalid credentials might still return 200 with error in body
             const text = await response.text();
 
+            // Some sites answer unauthorised requests with 200 and a bare JSON
+            // string ("Missing authentication..."); JSON.parse succeeds, so it
+            // has to be flagged before the generic success path.
+            const trimmedText = (text || '').trim();
+            if (trimmedText.startsWith('"') && /authentication|api key/i.test(trimmedText)) {
+                return {
+                    success: false,
+                    message: `Not authenticated: ${trimmedText.replace(/^"|"$/g, '').slice(0, 120)}`
+                };
+            }
+
             // Try to parse as JSON first
             try {
                 const data = JSON.parse(text);
@@ -668,6 +694,7 @@ export class GelbooruAdapter extends BooruAdapter {
                 const lowerText = text.toLowerCase();
                 if (lowerText.includes('access denied') ||
                     lowerText.includes('invalid api') ||
+                    lowerText.includes('missing authentication') ||
                     lowerText.includes('authentication failed')) {
                     return {
                         success: false,
@@ -809,44 +836,35 @@ export class GelbooruAdapter extends BooruAdapter {
             pid: page - 1 // usually 0-indexed
         });
 
-        if (this.credentials.userId && this.credentials.apiKey) {
-            params.append('user_id', this.credentials.userId);
-            params.append('api_key', this.credentials.apiKey);
+        // Both fields are sent whenever either is configured: some Gelbooru-family
+        // sites accept an empty api_key as long as the parameter is present
+        // ('&api_key=&user_id=2'), and sending nothing fails their auth check.
+        if (this.credentials.userId || this.credentials.apiKey) {
+            params.append('user_id', this.credentials.userId || '');
+            params.append('api_key', this.credentials.apiKey || '');
         }
 
         if (queryTags) {
             let cleanTags = queryTags;
 
             // 1. Handle Ratings (Danbooru style 'rating:g,s' -> Gelbooru style 'rating:general rating:sensitive')
-            // Match any rating: tag
-            cleanTags = cleanTags.replace(/rating:([gsqe,]+)/g, (match, codeString) => {
+            // Long form names ('rating:explicit', 'rating:general', 'rating:safe', ...)
+            // are already valid on Gelbooru-family sites and pass through untouched,
+            // so short codes only match at a boundary. Without the lookahead
+            // 'rating:explicit' becomes 'rating:explicitxplicit' and 'rating:general'
+            // becomes 'neral'.
+            const RATING_NAMES = { g: 'general', s: 'sensitive', q: 'questionable', e: 'explicit' };
+
+            // Rating lists first: 'rating:g,s' is expressed as NEGATION of the
+            // ratings that were not asked for (OR (~) often fails for metatags)
+            cleanTags = cleanTags.replace(/rating:([gsqe](?:,[gsqe])+)(?![a-z0-9])/g, (match, codeString) => {
                 const codes = codeString.split(',');
-
-                // If only one rating, use direct inclusion
-                if (codes.length === 1) {
-                    const c = codes[0];
-                    if (c === 'g') return 'rating:general';
-                    if (c === 's') return 'rating:sensitive';
-                    if (c === 'q') return 'rating:questionable';
-                    if (c === 'e') return 'rating:explicit';
-                    return '';
-                }
-
-                // If multiple ratings, use NEGATION of the missing ones
-                // This is safer than OR (~) which often fails for metatags
-                const allCodes = ['g', 's', 'q', 'e'];
-                const missingCodes = allCodes.filter(c => !codes.includes(c));
-
-                const exclusions = missingCodes.map(c => {
-                    if (c === 'g') return '-rating:general';
-                    if (c === 's') return '-rating:sensitive';
-                    if (c === 'q') return '-rating:questionable';
-                    if (c === 'e') return '-rating:explicit';
-                    return '';
-                }).filter(t => t !== '');
-
-                return exclusions.join(' ');
+                const missingCodes = ['g', 's', 'q', 'e'].filter(c => !codes.includes(c));
+                return missingCodes.map(c => `-rating:${RATING_NAMES[c]}`).join(' ');
             });
+
+            // Single short code
+            cleanTags = cleanTags.replace(/rating:([gsqe])(?![a-z0-9])/g, (match, c) => `rating:${RATING_NAMES[c]}`);
 
             // 2. Handle Filetypes
             // Remove unsupported date/order tags
@@ -934,6 +952,14 @@ export class GelbooruAdapter extends BooruAdapter {
                 // If text is not JSON (e.g. XML or HTML), return empty
                 console.warn(`[Gelbooru] Failed to parse JSON from ${url}:`, e);
                 if (_isTest) throw new Error(`Failed to parse JSON response: ${e.message}`); // Re-throw for testConnection
+                return [];
+            }
+
+            // A bare JSON string is a notice from the site (e.g. a refused
+            // request), not a post list - say so instead of showing nothing.
+            if (typeof data === 'string') {
+                console.warn(`[Gelbooru] ${this.baseUrl} refused the request: ${data}`);
+                if (_isTest) throw new Error(data);
                 return [];
             }
 
