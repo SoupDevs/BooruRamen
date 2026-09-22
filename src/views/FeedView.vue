@@ -41,6 +41,8 @@
             :preview-src="post.preview_file_url || ''"
             :sample-src="post.sample_file_url || post.large_file_url || ''"
             :alt="post.tags || 'Post image'"
+            :load-sample="imagePreloadTier(post).loadSample"
+            :load-full="imagePreloadTier(post).loadFull"
             class="max-w-full max-h-full object-contain"
             @error="(e) => console.error('Image load error:', post.file_url, e)"
           />
@@ -58,7 +60,7 @@
               muted
               class="max-w-full max-h-full"
               :class="{ 'opacity-0': !videoActiveStates[getCompositeKey(post)] }"
-              preload="auto"
+              :preload="videoPreloadAttr(post)"
               @loadeddata="onVideoLoadedData($event, post)"
               @click="togglePlayPause"
               @play="onVideoPlay($event, post)"
@@ -231,12 +233,14 @@ export default {
 
     // --- Virtual Scrolling Computed Properties ---
     // Asymmetric window: scrolling down is the dominant direction, so keep more
-    // buffered runway ahead (rendered videos preload="auto" but never play offscreen)
+    // buffered runway ahead (rendered videos preload="auto" but never play offscreen).
+    // Deep enough that the next page of posts usually arrives before the user
+    // walks off the current one — the list-end spinner stays unseen.
     visibleStartIndex() {
       return Math.max(0, this.currentPostIndex - 2);
     },
     visibleEndIndex() {
-      return Math.min(this.posts.length - 1, this.currentPostIndex + 3);
+      return Math.min(this.posts.length - 1, this.currentPostIndex + 7);
     },
     visiblePosts() {
       if (!this.posts.length) return [];
@@ -428,8 +432,11 @@ export default {
       this._hasUserScrolled = true;
       this.determineCurrentPost();
       const container = this.$refs.feedContainer;
-      // Fetch more posts when we are 1 page away from the bottom (pre-fetching)
-      if (this.hasMorePosts && container.scrollTop + container.clientHeight >= container.scrollHeight - container.clientHeight) {
+      // Fetch the next page while the user still has posts in front of them
+      // (pre-fetching): waiting until the last post is on screen turns the end
+      // of the list into a spinner. Three posts of runway is usually enough
+      // for an API round-trip to finish unseen.
+      if (this.hasMorePosts && container.scrollTop + container.clientHeight >= container.scrollHeight - container.clientHeight * 4) {
         this.fetchPosts();
       }
     },
@@ -541,6 +548,28 @@ export default {
     isVideoPost(post) {
       const videoExtensions = ['mp4', 'webm'];
       return videoExtensions.includes(this.getFileExtension(post));
+    },
+    // Progressive-image tiering: how far ahead of the user a post sits decides
+    // which stages request bytes. Near posts get preview + sample + original;
+    // mid runway drops the original (the sample carries the favourite
+    // decision); far runway shows only the preview. Keeps a moving user
+    // buffered without pulling every multi-MB original at once. Clamped
+    // behind too: scrolled-past posts keep their sample but never fetch a
+    // full original for a back-glance.
+    imagePreloadTier(post) {
+      const distance = this.posts.indexOf(post) - this.currentPostIndex;
+      return {
+        loadSample: distance >= -2 && distance <= 4,
+        loadFull: distance >= -1 && distance <= 1,
+      };
+    },
+    // Offscreen videos only need metadata + first frame (the stand-in canvas
+    // draws from loadeddata, playback starts on visibility). "metadata" keeps
+    // the runway from draining bandwidth the upcoming images need; the
+    // visible post's video still buffers fully ahead of playback.
+    videoPreloadAttr(post) {
+      const distance = this.posts.indexOf(post) - this.currentPostIndex;
+      return Math.abs(distance) <= 1 ? 'auto' : 'metadata';
     },
     togglePlayPause(event) {
         const video = event.target;

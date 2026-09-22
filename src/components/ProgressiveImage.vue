@@ -76,6 +76,16 @@ export default {
       type: String,
       default: '',
     },
+    // Distance tiering from the feed: false means this stage is not mounted at
+    // all, so its bytes are never requested for posts the user hasn't reached.
+    loadSample: {
+      type: Boolean,
+      default: true,
+    },
+    loadFull: {
+      type: Boolean,
+      default: true,
+    },
     alt: {
       type: String,
       default: '',
@@ -101,6 +111,7 @@ export default {
       return this.inFlowStage.kind === 'preview';
     },
     sampleStage() {
+      if (!this.loadSample) return null;
       const sample = this.sampleSrc || '';
       if (!sample || this.sampleErrored) return null;
       if (sample === this.inFlowStage.src) return null;
@@ -110,6 +121,7 @@ export default {
       return { src: sample };
     },
     fullStage() {
+      if (!this.loadFull) return null;
       const full = this.src || '';
       // Only an overlay when the full image is not already the in-flow element.
       if (!this.previewInFlow || !full || full === this.inFlowStage.src) return null;
