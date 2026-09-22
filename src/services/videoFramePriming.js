@@ -81,3 +81,70 @@ export function primeNeighbouringFrames(posts, currentIndex, videoFor, isPlaying
   }
   return started;
 }
+
+/**
+ * Draw what a video is showing into a stand-in canvas.
+ *
+ * `loadeddata` only means the data arrived - drawing then can capture an
+ * all-black picture, which is the very artefact the stand-in exists to hide.
+ * Prefer drawOnPresentedFrame(): this is the primitive it and the playback
+ * handlers share.
+ *
+ * @returns {boolean} true when the canvas was drawn into
+ */
+export function captureStandInFrame(video, canvas) {
+  if (!video || !canvas || !video.videoWidth) return false;
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  try {
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+    return true;
+  } catch (e) {
+    // Exotic sources can refuse the draw; callers keep their other layer up.
+    return false;
+  }
+}
+
+/**
+ * Draw the first frame now, and refine it if a presented frame is reported.
+ *
+ * For a stand-in that is the only layer on screen (the feed's canvas): the
+ * element it stands in for is `opacity-0` until playback, and the compositor
+ * does not present frames for an invisible element - so waiting for one leaves
+ * the post showing nothing at all. Paint the decoded frame straight away
+ * instead, and replace it when an actually-presented frame comes along.
+ */
+export function drawFirstFrameNow(video, canvas, onDrawn) {
+  const drawn = captureStandInFrame(video, canvas);
+  if (drawn && onDrawn) onDrawn();
+  if (video && typeof video.requestVideoFrameCallback === 'function' && !video._standInCapture) {
+    video._standInCapture = video.requestVideoFrameCallback(() => {
+      video._standInCapture = null;
+      const refined = captureStandInFrame(video, canvas);
+      if (refined && onDrawn) onDrawn();
+    });
+  }
+  return drawn;
+}
+
+/**
+ * Draw the first frame a video has actually presented.
+ *
+ * Waits for the compositor to hand the element a frame where the engine can
+ * report that (requestVideoFrameCallback); otherwise draws straight away.
+ */
+export function drawOnPresentedFrame(video, canvas, onDrawn) {
+  const draw = () => {
+    if (captureStandInFrame(video, canvas) && onDrawn) onDrawn();
+  };
+  if (video && typeof video.requestVideoFrameCallback === 'function') {
+    if (!video._standInCapture) {
+      video._standInCapture = video.requestVideoFrameCallback(() => {
+        video._standInCapture = null;
+        draw();
+      });
+    }
+    return;
+  }
+  draw();
+}

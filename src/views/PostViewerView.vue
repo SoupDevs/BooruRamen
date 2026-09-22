@@ -93,6 +93,8 @@ import ReportService from '../services/ReportService';
 import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
 import { postFilterMixin } from '../mixins/postFilterMixin';
 import {
+  captureStandInFrame,
+  drawOnPresentedFrame,
   primeNeighbouringFrames,
   VIDEO_FRAME_RUNWAY_AHEAD,
   VIDEO_FRAME_RUNWAY_BEHIND
@@ -469,15 +471,8 @@ export default {
       );
     },
     drawFrameToCanvas(post, video) {
-      const canvas = this.videoCanvases[post.id];
-      if (!canvas || !video || !video.videoWidth) return;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      try {
-        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+      if (captureStandInFrame(video, this.videoCanvases[post.id])) {
         this.videoFrameStates[post.id] = true;
-      } catch (e) {
-        // Exotic sources can refuse the draw; the poster layer stays up instead.
       }
     },
     onVideoLoadedData(event, post) {
@@ -488,16 +483,9 @@ export default {
       // picture, which is the very artefact this stand-in exists to hide. So
       // wait for the presented frame when the engine can tell us about it.
       const video = event.target;
-      if (typeof video.requestVideoFrameCallback === 'function') {
-        if (!video._standInCapture) {
-          video._standInCapture = video.requestVideoFrameCallback(() => {
-            video._standInCapture = null;
-            this.drawFrameToCanvas(post, video);
-          });
-        }
-        return;
-      }
-      this.drawFrameToCanvas(post, video);
+      drawOnPresentedFrame(video, this.videoCanvases[post.id], () => {
+        this.videoFrameStates[post.id] = true;
+      });
     },
     onVideoPlaying(post) {
       // Playback is rendering: reveal the video, hide the stand-in, and keep a

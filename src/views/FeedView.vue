@@ -119,6 +119,7 @@ import ReportService from '../services/ReportService';
 import recommendationSystem from '../services/RecommendationSystem';
 import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
 import {
+  drawFirstFrameNow,
   primeNeighbouringFrames,
   VIDEO_FRAME_RUNWAY_AHEAD,
   VIDEO_FRAME_RUNWAY_BEHIND
@@ -711,20 +712,15 @@ export default {
       this._removeVideoEndedListener();
     },
     onVideoLoadedData(event, post) {
-      // First frame is decoded — capture it into the stand-in canvas so scrolling
-      // shows real content instead of the webview's paused-video placeholder (#148)
-      const key = this.getCompositeKey(post);
-      const video = event.target;
-      const canvas = this.videoCanvases[key];
-      if (canvas && video.videoWidth > 0) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        try {
-          canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-        } catch (e) {
-          // Drawing can fail on exotic sources; canvas stays transparent (black bg)
-        }
-      }
+      // First frame is decoded - capture it into the stand-in canvas so scrolling
+      // shows real content instead of the webview's paused-video placeholder (#148).
+      //
+      // Draw it straight away rather than waiting for a presented frame: the
+      // video sits at opacity-0 until it plays, the compositor never presents
+      // frames for an invisible element, and a clip entering the viewport was
+      // left with an empty canvas over a dark post - the black box users saw on
+      // mobile. A presented frame, when one arrives, replaces the first draw.
+      drawFirstFrameNow(event.target, this.videoCanvases[this.getCompositeKey(post)]);
     },
     onVideoLoadStart(post) {
       const key = this.getCompositeKey(post);
