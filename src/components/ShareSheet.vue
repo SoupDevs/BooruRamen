@@ -38,10 +38,12 @@
           <p class="text-xs text-gray-500 truncate">{{ subtitle }}</p>
         </div>
 
-        <!-- Share targets -->
-        <div v-if="targets.length" class="grid grid-cols-4 gap-x-2 gap-y-4 px-4 pt-4 pb-2">
+        <!-- Share targets: the ones this user reaches for, with everything
+             else behind More. Colours come from the active theme, never from
+             a per-network brand hex. -->
+        <div v-if="gridTargets.length" class="grid grid-cols-4 gap-x-2 gap-y-4 px-4 pt-4 pb-2">
           <button
-            v-for="target in targets"
+            v-for="target in gridTargets"
             :key="target.id"
             type="button"
             class="flex flex-col items-center gap-1.5 group"
@@ -49,14 +51,16 @@
             @click="shareTo(target)"
           >
             <span
-              class="w-12 h-12 rounded-full flex items-center justify-center text-base font-bold transition-transform duration-150 group-hover:scale-105 group-active:scale-95"
-              :style="{ backgroundColor: target.color, color: target.textColor || '#FFFFFF' }"
+              class="w-12 h-12 rounded-full flex items-center justify-center bg-gray-800 ring-1 ring-gray-700 text-pink-400 text-base font-bold transition-transform duration-150 group-hover:scale-105 group-active:scale-95"
             >
               <!-- Saving the file is an action, not a network: it carries a
                    glyph and reports back in place of a badge. -->
               <template v-if="target.action === 'download'">
-                <Check v-if="downloaded" class="w-6 h-6 text-green-400" />
+                <Check v-if="downloaded" class="w-6 h-6 text-green-500" />
                 <Download v-else class="w-6 h-6" />
+              </template>
+              <template v-else-if="target.action === 'more'">
+                <MoreHorizontal class="w-6 h-6" />
               </template>
               <template v-else>{{ target.badge }}</template>
             </span>
@@ -111,7 +115,8 @@
 </template>
 
 <script>
-import { Check, Download, Link2, Share2 } from 'lucide-vue-next';
+import { Check, Download, Link2, MoreHorizontal, Share2 } from 'lucide-vue-next';
+import { useSettingsStore } from '../stores/settings';
 import { downloadPost } from '../services/DownloadService';
 import {
   buildShareTargets,
@@ -130,7 +135,7 @@ const DOWNLOAD_FEEDBACK_MS = 2500;
 
 export default {
   name: 'ShareSheet',
-  components: { Check, Download, Link2, Share2 },
+  components: { Check, Download, Link2, MoreHorizontal, Share2 },
   props: {
     post: {
       type: Object,
@@ -142,6 +147,8 @@ export default {
     return {
       closing: false,
       linkCopied: false,
+      // Everything beyond what this user actually uses waits behind More.
+      showAll: false,
       downloading: false,
       downloaded: false,
       downloadError: false,
@@ -153,6 +160,35 @@ export default {
   computed: {
     targets() {
       return buildShareTargets(this.post);
+    },
+    usage() {
+      // target id -> { count, lastUsed }, written every time one is opened.
+      return useSettingsStore().shareTargetUsage || {};
+    },
+    actions() {
+      return this.targets.filter(target => target.action === 'download');
+    },
+    usedTargets() {
+      return this.targets
+        .filter(target => !target.action && this.usage[target.id])
+        .sort((a, b) => {
+          const ua = this.usage[a.id] || {};
+          const ub = this.usage[b.id] || {};
+          return (ub.count || 0) - (ua.count || 0) || (ub.lastUsed || 0) - (ua.lastUsed || 0);
+        });
+    },
+    hiddenTargets() {
+      return this.targets.filter(target => !target.action && !this.usage[target.id]);
+    },
+    gridTargets() {
+      // The app's own actions always show, networks earn their place, and the
+      // rest stay one tap away rather than in the user's face.
+      const list = [...this.actions, ...this.usedTargets];
+      if (this.showAll) list.push(...this.hiddenTargets);
+      if (this.hiddenTargets.length) {
+        list.push({ id: 'more', action: 'more' });
+      }
+      return list;
     },
     postUrl() {
       return getPostShareUrl(this.post);
@@ -179,6 +215,10 @@ export default {
   methods: {
     shareTo(target) {
       if (!target) return;
+      if (target.action === 'more') {
+        this.showAll = !this.showAll;
+        return;
+      }
       // Download is the one entry that stays in the app, so it neither opens
       // a URL nor dismisses the sheet: the user gets to see it finish.
       if (target.action === 'download') {
@@ -186,11 +226,15 @@ export default {
         return;
       }
       if (!target.url) return;
+      // Remember the networks this user actually reaches for.
+      useSettingsStore().recordShareUse(target.id);
       openExternalUrl(target.url);
       this.requestClose();
     },
     targetLabel(target) {
-      return target.action === 'download' ? this.downloadLabel : target.label;
+      if (target.action === 'download') return this.downloadLabel;
+      if (target.action === 'more') return this.showAll ? 'Less' : 'More';
+      return target.label;
     },
     async downloadMedia() {
       if (!this.post || this.downloading) return;

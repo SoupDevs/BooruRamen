@@ -67,12 +67,15 @@ function getShareImageUrl(post) {
  * The one share option that never leaves the app: it saves the post's media
  * into the download folder, the same place likes and favourites land, so the
  * sheet carries an action instead of an intent url.
+ *
+ * Nothing here carries colours: the sheet paints itself from the active theme
+ * (see ThemeService's palettes), so a target that hardcoded a hex would be the
+ * one thing on screen that ignored the user's theme.
  */
 export const DOWNLOAD_TARGET = {
   id: 'download',
   label: 'Download',
   action: 'download',
-  color: '#374151',
 };
 
 /**
@@ -98,57 +101,48 @@ export function buildShareTargets(post) {
       id: 'x',
       label: 'X',
       badge: 'X',
-      color: '#FFFFFF',
-      textColor: '#0F1419',
       url: `https://twitter.com/intent/tweet?url=${enc(url)}&text=${enc(text)}`,
     },
     {
       id: 'reddit',
       label: 'Reddit',
       badge: 'R',
-      color: '#FF4500',
       url: `https://www.reddit.com/submit?url=${enc(url)}&title=${enc(text)}`,
     },
     {
       id: 'bluesky',
       label: 'Bluesky',
       badge: 'B',
-      color: '#0285FF',
       url: `https://bsky.app/intent/compose?text=${enc(`${text}\n${url}`)}`,
     },
     {
       id: 'telegram',
       label: 'Telegram',
       badge: 'T',
-      color: '#229ED9',
       url: `https://t.me/share/url?url=${enc(url)}&text=${enc(text)}`,
     },
     {
       id: 'whatsapp',
       label: 'WhatsApp',
       badge: 'W',
-      color: '#25D366',
       url: `https://api.whatsapp.com/send?text=${enc(`${text} ${url}`)}`,
     },
     {
       id: 'facebook',
       label: 'Facebook',
       badge: 'f',
-      color: '#1877F2',
       url: `https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`,
     },
     {
       id: 'pinterest',
       label: 'Pinterest',
       badge: 'P',
-      color: '#E60023',
       url: `https://www.pinterest.com/pin/create/button/?url=${enc(url)}&media=${enc(media)}&description=${enc(text)}`,
     },
     {
       id: 'tumblr',
       label: 'Tumblr',
       badge: 't',
-      color: '#36465D',
       url: `https://www.tumblr.com/widgets/share/tool?canonicalUrl=${enc(url)}`,
     },
   ];
