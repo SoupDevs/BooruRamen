@@ -19,48 +19,106 @@ mod updater;
 #[cfg(target_os = "android")]
 const DOWNLOAD_CHANNEL_ID: &str = "downloads";
 
-const GELBOORU_REFERER: &str = "https://gelbooru.com/";
-const GELBOORU_MEDIA_CACHE_DIR: &str = "gelbooru-media";
-const MAX_GELBOORU_MEDIA_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_GELBOORU_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+const BOORU_MEDIA_CACHE_DIR: &str = "booru-media";
+const MAX_BOORU_MEDIA_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_BOORU_CACHE_BYTES: u64 = 512 * 1024 * 1024;
+
+/// A media host and its referer must share at least this many trailing labels.
+/// img4.gelbooru.com and gelbooru.com share two; unrelated sites share one.
+const MIN_SHARED_SITE_LABELS: usize = 2;
+
+fn site_labels(host: &str) -> Vec<&str> {
+  host.split('.').filter(|label| !label.is_empty()).collect()
+}
+
+/// An address (IPv4/IPv6 literal or localhost), i.e. a host with no registrable
+/// domain — self-hosted boorus commonly live on one.
+fn is_address_host(host: &str) -> bool {
+  host == "localhost"
+    || host.contains(':')
+    || {
+      let parts: Vec<&str> = host.split('.').collect();
+      parts.len() == 4
+        && parts
+          .iter()
+          .all(|part| !part.is_empty() && part.len() <= 3 && part.bytes().all(|b| b.is_ascii_digit()))
+    }
+}
+
+/// True when two hosts belong to the same site (same registrable domain or a
+/// subdomain of it), which is as strict as this check can get without a public
+/// suffix list. Used to keep the media command from becoming a general-purpose
+/// download proxy for arbitrary URLs.
+fn hosts_share_site(a: &str, b: &str) -> bool {
+  if is_address_host(a) || is_address_host(b) {
+    return a == b;
+  }
+  site_labels(a)
+    .iter()
+    .rev()
+    .zip(site_labels(b).iter().rev())
+    .take_while(|(x, y)| x == y)
+    .count()
+    >= MIN_SHARED_SITE_LABELS
+}
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-fn gelbooru_media_url(url: &str) -> Result<(tauri_plugin_http::reqwest::Url, String), String> {
+/// Validate a media URL together with the referer its booru expects.
+///
+/// Any booru can be configured, so the host list cannot be baked in; instead the
+/// media must live on the same site as the referer the caller supplied. That
+/// keeps the anti-hotlink behaviour (a page URL of the booru itself) while
+/// refusing unrelated or non-HTTPS targets.
+fn booru_media_request(
+  url: &str,
+  referer: &str,
+) -> Result<(tauri_plugin_http::reqwest::Url, String, String), String> {
   let parsed = tauri_plugin_http::reqwest::Url::parse(url)
-    .map_err(|_| "Invalid Gelbooru media URL".to_string())?;
+    .map_err(|_| "Invalid media URL".to_string())?;
   let host = parsed
     .host_str()
     .map(str::to_ascii_lowercase)
-    .ok_or_else(|| "Gelbooru media URL has no host".to_string())?;
+    .ok_or_else(|| "Media URL has no host".to_string())?;
 
-  if parsed.scheme() != "https"
-    || (host != "gelbooru.com" && !host.ends_with(".gelbooru.com"))
-  {
-    return Err("Only HTTPS Gelbooru media URLs are allowed".to_string());
+  let parsed_referer = tauri_plugin_http::reqwest::Url::parse(referer)
+    .map_err(|_| "Invalid referer URL".to_string())?;
+  let referer_host = parsed_referer
+    .host_str()
+    .map(str::to_ascii_lowercase)
+    .ok_or_else(|| "Referer URL has no host".to_string())?;
+
+  if parsed.scheme() != "https" {
+    return Err("Only HTTPS media URLs are allowed".to_string());
+  }
+  if parsed_referer.scheme() != "https" {
+    return Err("Only HTTPS referer URLs are allowed".to_string());
+  }
+  if !hosts_share_site(&host, &referer_host) {
+    return Err("Media URL must belong to the booru's own site".to_string());
   }
 
   let extension = Path::new(parsed.path())
     .extension()
     .and_then(|value| value.to_str())
     .map(str::to_ascii_lowercase)
-    .ok_or_else(|| "Gelbooru media URL has no file extension".to_string())?;
+    .ok_or_else(|| "Media URL has no file extension".to_string())?;
   if !matches!(
     extension.as_str(),
     "jpg" | "jpeg" | "png" | "gif" | "webp" | "avif" | "mp4" | "webm" | "mov"
   ) {
-    return Err("Unsupported Gelbooru media type".to_string());
+    return Err("Unsupported media type".to_string());
   }
 
-  Ok((parsed, extension))
+  Ok((parsed, extension, referer.to_string()))
 }
 
-fn gelbooru_cache_path(cache_dir: &Path, url: &str, extension: &str) -> PathBuf {
+fn booru_cache_path(cache_dir: &Path, url: &str, extension: &str) -> PathBuf {
   let mut hasher = DefaultHasher::new();
   url.hash(&mut hasher);
   cache_dir.join(format!("{:016x}.{extension}", hasher.finish()))
 }
 
-fn prune_gelbooru_cache(cache_dir: &Path, preserve: &Path) {
+fn prune_booru_cache(cache_dir: &Path, preserve: &Path) {
   let Ok(entries) = std::fs::read_dir(cache_dir) else {
     return;
   };
@@ -84,7 +142,7 @@ fn prune_gelbooru_cache(cache_dir: &Path, preserve: &Path) {
   files.sort_by_key(|(_, _, modified)| *modified);
 
   for (path, size, _) in files {
-    if total <= MAX_GELBOORU_CACHE_BYTES {
+    if total <= MAX_BOORU_CACHE_BYTES {
       break;
     }
     if std::fs::remove_file(path).is_ok() {
@@ -93,14 +151,18 @@ fn prune_gelbooru_cache(cache_dir: &Path, preserve: &Path) {
   }
 }
 
-async fn download_gelbooru_media(url: &str, cache_dir: &Path) -> Result<PathBuf, String> {
+async fn download_booru_media(
+  url: &str,
+  referer: &str,
+  cache_dir: &Path,
+) -> Result<PathBuf, String> {
   use std::io::Write;
 
-  let (parsed, extension) = gelbooru_media_url(url)?;
+  let (parsed, extension, referer) = booru_media_request(url, referer)?;
   std::fs::create_dir_all(cache_dir).map_err(|e| e.to_string())?;
-  let cache_path = gelbooru_cache_path(cache_dir, parsed.as_str(), &extension);
+  let cache_path = booru_cache_path(cache_dir, parsed.as_str(), &extension);
   if cache_path.is_file() {
-    prune_gelbooru_cache(cache_dir, &cache_path);
+    prune_booru_cache(cache_dir, &cache_path);
     return Ok(cache_path);
   }
 
@@ -118,13 +180,13 @@ async fn download_gelbooru_media(url: &str, cache_dir: &Path) -> Result<PathBuf,
   let mut response = client
     .get(parsed)
     .header("User-Agent", "BooruRamen")
-    .header("Referer", GELBOORU_REFERER)
+    .header("Referer", referer)
     .send()
     .await
     .map_err(|e| e.to_string())?;
 
   if !response.status().is_success() {
-    return Err(format!("Gelbooru media request returned HTTP {}", response.status()));
+    return Err(format!("Media request returned HTTP {}", response.status()));
   }
   let content_type = response
     .headers()
@@ -136,10 +198,10 @@ async fn download_gelbooru_media(url: &str, cache_dir: &Path) -> Result<PathBuf,
     || content_type.starts_with("video/")
     || content_type.starts_with("application/octet-stream"))
   {
-    return Err(format!("Gelbooru returned non-media content: {content_type}"));
+    return Err(format!("Booru returned non-media content: {content_type}"));
   }
-  if response.content_length().is_some_and(|size| size > MAX_GELBOORU_MEDIA_BYTES) {
-    return Err("Gelbooru media file exceeds the 512 MiB limit".to_string());
+  if response.content_length().is_some_and(|size| size > MAX_BOORU_MEDIA_BYTES) {
+    return Err("Media file exceeds the 512 MiB limit".to_string());
   }
 
   let result = async {
@@ -147,8 +209,8 @@ async fn download_gelbooru_media(url: &str, cache_dir: &Path) -> Result<PathBuf,
     let mut bytes_written = 0u64;
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
       bytes_written += chunk.len() as u64;
-      if bytes_written > MAX_GELBOORU_MEDIA_BYTES {
-        return Err("Gelbooru media file exceeds the 512 MiB limit".to_string());
+      if bytes_written > MAX_BOORU_MEDIA_BYTES {
+        return Err("Media file exceeds the 512 MiB limit".to_string());
       }
       file.write_all(&chunk).map_err(|e| e.to_string())?;
     }
@@ -170,20 +232,26 @@ async fn download_gelbooru_media(url: &str, cache_dir: &Path) -> Result<PathBuf,
       return Err(error.to_string());
     }
   }
-  prune_gelbooru_cache(cache_dir, &cache_path);
+  prune_booru_cache(cache_dir, &cache_path);
   Ok(cache_path)
 }
 
-/// Fetch Gelbooru media natively with the Referer required by its anti-hotlink
-/// policy, then expose it through Tauri's range-capable asset protocol.
+/// Fetch booru media natively with the Referer the source expects, then expose
+/// it through Tauri's range-capable asset protocol. The webview cannot set a
+/// Referer itself, so hotlink-protected boorus (which may be any host the user
+/// configured) are only loadable through this path.
 #[tauri::command]
-async fn cache_gelbooru_media(app: tauri::AppHandle, url: String) -> Result<String, String> {
+async fn cache_booru_media(
+  app: tauri::AppHandle,
+  url: String,
+  referer: String,
+) -> Result<String, String> {
   let cache_dir = app
     .path()
     .app_cache_dir()
     .map_err(|e| e.to_string())?
-    .join(GELBOORU_MEDIA_CACHE_DIR);
-  let path = download_gelbooru_media(&url, &cache_dir).await?;
+    .join(BOORU_MEDIA_CACHE_DIR);
+  let path = download_booru_media(&url, &referer, &cache_dir).await?;
   Ok(path.to_string_lossy().into_owned())
 }
 
@@ -330,7 +398,7 @@ pub fn run() {
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_opener::init())
     .invoke_handler(tauri::generate_handler![
-      cache_gelbooru_media,
+      cache_booru_media,
       download_file,
       clear_downloads,
       updater::install_update
@@ -354,26 +422,54 @@ mod tests {
   use super::*;
 
   #[test]
-  fn gelbooru_media_url_rejects_non_gelbooru_hosts() {
-    assert!(gelbooru_media_url("https://example.com/image.jpg").is_err());
-    assert!(gelbooru_media_url("https://gelbooru.com.example.com/image.jpg").is_err());
-    assert!(gelbooru_media_url("http://img4.gelbooru.com/image.jpg").is_err());
+  fn media_url_rejects_foreign_and_insecure_hosts() {
+    // Media that does not live on the referer's own site.
+    assert!(booru_media_request("https://example.com/image.jpg", "https://gelbooru.com/").is_err());
+    // Lookalike suffix that only shares the TLD.
+    assert!(booru_media_request(
+      "https://gelbooru.com.example.com/image.jpg",
+      "https://gelbooru.com/"
+    )
+    .is_err());
+    // Plain HTTP, even on the right site.
+    assert!(booru_media_request("http://img4.gelbooru.com/image.jpg", "https://gelbooru.com/").is_err());
+    // Non-HTTPS referer.
+    assert!(booru_media_request(
+      "https://img4.gelbooru.com/image.jpg",
+      "http://gelbooru.com/"
+    )
+    .is_err());
+    // A different address on the same scheme is still a different site.
+    assert!(booru_media_request("https://127.0.0.2/i.jpg", "https://127.0.0.1/").is_err());
   }
 
   #[test]
-  fn gelbooru_media_url_accepts_supported_cdn_files() {
-    let (_, extension) = gelbooru_media_url(
+  fn media_url_accepts_supported_cdn_files_on_any_configured_site() {
+    let (_, extension, referer) = booru_media_request(
       "https://img4.gelbooru.com/images/f3/82/f3824ad985f121187065c4eaeae22875.jpg",
+      "https://gelbooru.com/",
     )
     .expect("valid Gelbooru image URL");
     assert_eq!(extension, "jpg");
+    assert_eq!(referer, "https://gelbooru.com/");
+
+    // A user-configured booru on its own domain works without any host list.
+    let (_, _, _) = booru_media_request(
+      "https://cdn.some-other-booru.test/media/abc.png",
+      "https://some-other-booru.test/",
+    )
+    .expect("valid custom booru image URL");
+
+    // A self-hosted booru on an address serves media from that same address.
+    let (_, _, _) = booru_media_request("https://127.0.0.1/i.jpg", "https://127.0.0.1/")
+      .expect("valid self-hosted media URL");
   }
 
   #[test]
-  #[ignore = "live Gelbooru transport check"]
-  fn downloads_gelbooru_media_with_required_referer() {
+  #[ignore = "live booru transport check"]
+  fn downloads_media_with_required_referer() {
     let cache_dir = std::env::temp_dir().join(format!(
-      "booruramen-gelbooru-test-{}",
+      "booruramen-media-test-{}",
       std::process::id()
     ));
     let urls = [
@@ -381,8 +477,12 @@ mod tests {
       "https://img4.gelbooru.com/images/bf/7f/bf7fa57e3e226307ffcc3b41052510bc.webm",
     ];
     for url in urls {
-      let result = tauri::async_runtime::block_on(download_gelbooru_media(url, &cache_dir));
-      let path = result.expect("Gelbooru media download should succeed");
+      let result = tauri::async_runtime::block_on(download_booru_media(
+        url,
+        "https://gelbooru.com/",
+        &cache_dir,
+      ));
+      let path = result.expect("booru media download should succeed");
       assert!(std::fs::metadata(path).expect("cached media metadata").len() > 0);
     }
     let _ = std::fs::remove_dir_all(cache_dir);

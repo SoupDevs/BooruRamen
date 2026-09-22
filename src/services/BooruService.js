@@ -13,6 +13,7 @@
  */
 
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from './BooruAdapters';
+import { registerRefererMediaSources } from './mediaUrl.js';
 import StorageService from './StorageService';
 
 class BooruService {
@@ -55,6 +56,11 @@ class BooruService {
         this.activeSources = sources;
         this.adapters = sources.map(source => this.createAdapter(source));
 
+        // Tell the media layer which custom sources need a Referer-carrying
+        // fetch (hotlink-protected engines), so their images load in both the
+        // browser and the packaged app.
+        registerRefererMediaSources(sources);
+
         if (save) {
             await StorageService.storePreferences({
                 activeSources: sources
@@ -63,16 +69,20 @@ class BooruService {
     }
 
     createAdapter(source) {
+        // Every adapter takes the same credential shape so a custom booru gets
+        // API-key support regardless of which engine it runs.
+        const credentials = { userId: source.userId, apiKey: source.apiKey };
+
         switch (source.type) {
             case 'danbooru':
-                return new DanbooruAdapter(source.url, { userId: source.userId, apiKey: source.apiKey });
+                return new DanbooruAdapter(source.url, credentials);
             case 'gelbooru':
-                return new GelbooruAdapter(source.url, { userId: source.userId, apiKey: source.apiKey });
+                return new GelbooruAdapter(source.url, credentials);
             case 'moebooru':
-                return new MoebooruAdapter(source.url);
+                return new MoebooruAdapter(source.url, credentials);
             default:
                 console.warn(`Unknown source type: ${source.type}, falling back to Danbooru`);
-                return new DanbooruAdapter(source.url || 'https://danbooru.donmai.us');
+                return new DanbooruAdapter(source.url || 'https://danbooru.donmai.us', credentials);
         }
     }
 

@@ -13,7 +13,7 @@
  * This bypasses CORS issues in Tauri production builds.
  */
 
-import { getDisplayableMediaUrl } from './mediaUrl.js';
+import { getDisplayableMediaUrl, needsRefererProxy } from './mediaUrl.js';
 
 // Cache for blob URLs to avoid re-fetching
 const blobUrlCache = new Map();
@@ -27,7 +27,10 @@ const blobUrlCache = new Map();
 export async function getPlayableVideoUrl(url) {
     if (!url) return url;
 
-    if (url.includes('gelbooru.com')) {
+    // Boorus that hotlink-protect their files need the referer-capable fetch
+    // path, same as images. Covers the built-in source and any custom booru the
+    // user configured with this engine.
+    if (needsRefererProxy(url)) {
         return getDisplayableMediaUrl(url);
     }
 

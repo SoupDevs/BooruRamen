@@ -15,6 +15,56 @@
 import { gelbooruTagCache } from './GelbooruTagCache.js';
 import { httpFetch } from './httpClient.js';
 
+/**
+ * Hosts the dev server has a dedicated proxy for, keyed by the URL fragment the
+ * adapter used to match on. Kept for the built-in sources; custom sources go
+ * through the generic /api/custom proxy below.
+ */
+const DEV_PROXY_ALIASES = [
+    ['gelbooru.com', '/api/gelbooru'],
+    ['safebooru.org', '/api/safebooru'],
+    ['konachan.com', '/api/konachan'],
+    ['yande.re', '/api/yande'],
+    ['danbooru.donmai.us', '/api/danbooru'],
+];
+
+/**
+ * Rewrite a booru URL for the current environment.
+ *
+ * In the packaged app every request goes through the Tauri HTTP plugin, which
+ * is not subject to CORS, so the URL is returned untouched. In a browser the
+ * request would be cross-origin and blocked, so it is routed through the Vite
+ * dev proxy: a dedicated alias when one exists, otherwise the generic
+ * /api/custom proxy, which accepts any origin. Without this a custom booru
+ * appears to "cannot connect" in dev even though the API is fine.
+ *
+ * @param {string} url - Fully built absolute API URL.
+ * @returns {string} URL to hand to httpFetch.
+ */
+export function toDevProxiedUrl(url) {
+    if (!import.meta.env || !import.meta.env.DEV) return url;
+
+    for (const [fragment, alias] of DEV_PROXY_ALIASES) {
+        if (url.includes(fragment)) {
+            // Alias proxies rewrite the prefix away, so the origin must go.
+            const rest = url.slice(url.indexOf(fragment) + fragment.length);
+            return `${alias}${rest}`;
+        }
+    }
+
+    // Unknown host: proxy generically so custom boorus work in dev too.
+    try {
+        const parsed = new URL(url);
+        const encodedOrigin = btoa(`${parsed.protocol}//${parsed.host}`)
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+        return `/api/custom/${encodedOrigin}${parsed.pathname}${parsed.search}`;
+    } catch {
+        return url;
+    }
+}
+
 class BooruAdapter {
     constructor(baseUrl, type) {
         this.baseUrl = baseUrl;
@@ -493,16 +543,27 @@ export class GelbooruAdapter extends BooruAdapter {
             // Use a simple request to check if the site responds
             // We request the main page rather than the API to avoid auth requirements
             let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
-            if (import.meta.env && import.meta.env.DEV) {
-                if (cleanBaseUrl.includes('gelbooru.com')) cleanBaseUrl = '/api/gelbooru';
-                if (cleanBaseUrl.includes('safebooru.org')) cleanBaseUrl = '/api/safebooru';
-            }
 
             // Make a minimal request - just check if the endpoint responds
-            const url = `${cleanBaseUrl}/index.php?page=dapi&s=post&q=index&json=1&limit=0`;
+            const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?page=dapi&s=post&q=index&json=1&limit=0`);
             console.log(`[Gelbooru] Testing connection to ${url}...`);
 
             const response = await httpFetch(url, { method: 'GET' });
+
+            // A 200 whose body is an authentication notice means the site is up
+            // but refuses anonymous API use - that is not a usable connection.
+            let bodyText = '';
+            try {
+                bodyText = await response.text();
+            } catch (readError) {
+                // Body unavailable; fall back to the status code below
+            }
+            if (/missing authentication|api key (is )?required|invalid api key/i.test(bodyText)) {
+                return {
+                    success: false,
+                    message: 'This site requires an API key and User ID.'
+                };
+            }
 
             // Any response (even 401/403) means the site is reachable
             // We only care about network errors or complete failures
@@ -578,12 +639,8 @@ export class GelbooruAdapter extends BooruAdapter {
             });
 
             let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
-            if (import.meta.env && import.meta.env.DEV) {
-                if (cleanBaseUrl.includes('gelbooru.com')) cleanBaseUrl = '/api/gelbooru';
-                if (cleanBaseUrl.includes('safebooru.org')) cleanBaseUrl = '/api/safebooru';
-            }
 
-            const url = `${cleanBaseUrl}/index.php?${params.toString()}`;
+            const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?${params.toString()}`);
             console.log(`[Gelbooru] Testing authentication...`);
 
             const response = await httpFetch(url);
@@ -604,6 +661,17 @@ export class GelbooruAdapter extends BooruAdapter {
 
             // Try to parse response - invalid credentials might still return 200 with error in body
             const text = await response.text();
+
+            // Some sites answer unauthorised requests with 200 and a bare JSON
+            // string ("Missing authentication..."); JSON.parse succeeds, so it
+            // has to be flagged before the generic success path.
+            const trimmedText = (text || '').trim();
+            if (trimmedText.startsWith('"') && /authentication|api key/i.test(trimmedText)) {
+                return {
+                    success: false,
+                    message: `Not authenticated: ${trimmedText.replace(/^"|"$/g, '').slice(0, 120)}`
+                };
+            }
 
             // Try to parse as JSON first
             try {
@@ -626,6 +694,7 @@ export class GelbooruAdapter extends BooruAdapter {
                 const lowerText = text.toLowerCase();
                 if (lowerText.includes('access denied') ||
                     lowerText.includes('invalid api') ||
+                    lowerText.includes('missing authentication') ||
                     lowerText.includes('authentication failed')) {
                     return {
                         success: false,
@@ -767,44 +836,35 @@ export class GelbooruAdapter extends BooruAdapter {
             pid: page - 1 // usually 0-indexed
         });
 
-        if (this.credentials.userId && this.credentials.apiKey) {
-            params.append('user_id', this.credentials.userId);
-            params.append('api_key', this.credentials.apiKey);
+        // Both fields are sent whenever either is configured: some Gelbooru-family
+        // sites accept an empty api_key as long as the parameter is present
+        // ('&api_key=&user_id=2'), and sending nothing fails their auth check.
+        if (this.credentials.userId || this.credentials.apiKey) {
+            params.append('user_id', this.credentials.userId || '');
+            params.append('api_key', this.credentials.apiKey || '');
         }
 
         if (queryTags) {
             let cleanTags = queryTags;
 
             // 1. Handle Ratings (Danbooru style 'rating:g,s' -> Gelbooru style 'rating:general rating:sensitive')
-            // Match any rating: tag
-            cleanTags = cleanTags.replace(/rating:([gsqe,]+)/g, (match, codeString) => {
+            // Long form names ('rating:explicit', 'rating:general', 'rating:safe', ...)
+            // are already valid on Gelbooru-family sites and pass through untouched,
+            // so short codes only match at a boundary. Without the lookahead
+            // 'rating:explicit' becomes 'rating:explicitxplicit' and 'rating:general'
+            // becomes 'neral'.
+            const RATING_NAMES = { g: 'general', s: 'sensitive', q: 'questionable', e: 'explicit' };
+
+            // Rating lists first: 'rating:g,s' is expressed as NEGATION of the
+            // ratings that were not asked for (OR (~) often fails for metatags)
+            cleanTags = cleanTags.replace(/rating:([gsqe](?:,[gsqe])+)(?![a-z0-9])/g, (match, codeString) => {
                 const codes = codeString.split(',');
-
-                // If only one rating, use direct inclusion
-                if (codes.length === 1) {
-                    const c = codes[0];
-                    if (c === 'g') return 'rating:general';
-                    if (c === 's') return 'rating:sensitive';
-                    if (c === 'q') return 'rating:questionable';
-                    if (c === 'e') return 'rating:explicit';
-                    return '';
-                }
-
-                // If multiple ratings, use NEGATION of the missing ones
-                // This is safer than OR (~) which often fails for metatags
-                const allCodes = ['g', 's', 'q', 'e'];
-                const missingCodes = allCodes.filter(c => !codes.includes(c));
-
-                const exclusions = missingCodes.map(c => {
-                    if (c === 'g') return '-rating:general';
-                    if (c === 's') return '-rating:sensitive';
-                    if (c === 'q') return '-rating:questionable';
-                    if (c === 'e') return '-rating:explicit';
-                    return '';
-                }).filter(t => t !== '');
-
-                return exclusions.join(' ');
+                const missingCodes = ['g', 's', 'q', 'e'].filter(c => !codes.includes(c));
+                return missingCodes.map(c => `-rating:${RATING_NAMES[c]}`).join(' ');
             });
+
+            // Single short code
+            cleanTags = cleanTags.replace(/rating:([gsqe])(?![a-z0-9])/g, (match, c) => `rating:${RATING_NAMES[c]}`);
 
             // 2. Handle Filetypes
             // Remove unsupported date/order tags
@@ -866,17 +926,10 @@ export class GelbooruAdapter extends BooruAdapter {
             params.append('tags', cleanTags);
         }
 
-        // SafeBooru / Gelbooru URL handling
         // Ensure strictly NO trailing slash before query
         let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
 
-        // Proxy rewriting for Development
-        if (import.meta.env && import.meta.env.DEV) {
-            if (cleanBaseUrl.includes('gelbooru.com')) cleanBaseUrl = '/api/gelbooru';
-            if (cleanBaseUrl.includes('safebooru.org')) cleanBaseUrl = '/api/safebooru';
-        }
-
-        const url = `${cleanBaseUrl}/index.php?${params.toString()}`;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?${params.toString()}`);
 
         try {
             // Rate limit requests to avoid 429 errors
@@ -899,6 +952,14 @@ export class GelbooruAdapter extends BooruAdapter {
                 // If text is not JSON (e.g. XML or HTML), return empty
                 console.warn(`[Gelbooru] Failed to parse JSON from ${url}:`, e);
                 if (_isTest) throw new Error(`Failed to parse JSON response: ${e.message}`); // Re-throw for testConnection
+                return [];
+            }
+
+            // A bare JSON string is a notice from the site (e.g. a refused
+            // request), not a post list - say so instead of showing nothing.
+            if (typeof data === 'string') {
+                console.warn(`[Gelbooru] ${this.baseUrl} refused the request: ${data}`);
+                if (_isTest) throw new Error(data);
                 return [];
             }
 
@@ -1058,12 +1119,8 @@ export class GelbooruAdapter extends BooruAdapter {
 
         // The API is disabled, so we scrape the post page directly
         let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
-        if (import.meta.env && import.meta.env.DEV) {
-            if (cleanBaseUrl.includes('gelbooru.com')) cleanBaseUrl = '/api/gelbooru';
-            if (cleanBaseUrl.includes('safebooru.org')) cleanBaseUrl = '/api/safebooru';
-        }
 
-        const url = `${cleanBaseUrl}/index.php?page=post&s=view&id=${postId}`;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?page=post&s=view&id=${postId}`);
 
         try {
             console.log(`[Gelbooru] Fetching comments from post page ${postId}`);
@@ -1169,8 +1226,22 @@ export class GelbooruAdapter extends BooruAdapter {
 }
 
 export class MoebooruAdapter extends BooruAdapter {
-    constructor(baseUrl) {
+    constructor(baseUrl, credentials = {}) {
         super(baseUrl, 'moebooru');
+        // Moebooru (konachan/yande.re and forks) accepts login/password_hash as
+        // query params. Kept so a custom Moebooru-engine booru can authenticate
+        // the same way the predefined ones can.
+        this.credentials = credentials;
+    }
+
+    /** Build auth query params for Moebooru-style endpoints, if configured. */
+    authParams() {
+        const params = new URLSearchParams();
+        if (this.credentials.userId && this.credentials.apiKey) {
+            params.append('login', this.credentials.userId);
+            params.append('password_hash', this.credentials.apiKey);
+        }
+        return params;
     }
 
     async getPosts({ tags, page, limit, _isTest }) {
@@ -1182,20 +1253,19 @@ export class MoebooruAdapter extends BooruAdapter {
             .replace(/rating:e\b/g, 'rating:explicit');
 
         const params = new URLSearchParams({
-            tags: queryTags,
-            page: page,
-            limit: limit
-        });
+                    tags: queryTags,
+                    page: page,
+                    limit: limit
+                });
+
+                // Merge any configured Moebooru credentials (login/password_hash)
+                for (const [k, v] of this.authParams().entries()) {
+                    params.append(k, v);
+                }
 
         let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
 
-        // Proxy rewriting for Development
-        if (import.meta.env && import.meta.env.DEV) {
-            if (cleanBaseUrl === 'https://konachan.com') cleanBaseUrl = '/api/konachan';
-            if (cleanBaseUrl === 'https://yande.re') cleanBaseUrl = '/api/yande';
-        }
-
-        const url = `${cleanBaseUrl}/post.json?${params.toString()}`;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/post.json?${params.toString()}`);
 
         try {
             console.log(`[Moebooru] Fetching: ${url}`);
@@ -1256,13 +1326,7 @@ export class MoebooruAdapter extends BooruAdapter {
     async getComments(postId) {
         let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
 
-        // Proxy rewriting for Development
-        if (import.meta.env && import.meta.env.DEV) {
-            if (cleanBaseUrl === 'https://konachan.com') cleanBaseUrl = '/api/konachan';
-            if (cleanBaseUrl === 'https://yande.re') cleanBaseUrl = '/api/yande';
-        }
-
-        const url = `${cleanBaseUrl}/comment.json?post_id=${postId}`;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/comment.json?post_id=${postId}`);
 
         try {
             console.log(`[Moebooru] Fetching comments for post ${postId}`);

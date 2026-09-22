@@ -385,26 +385,61 @@
                 </div>
 
                 <!-- Custom Sources -->
-                <div v-for="(source, idx) in customSources" :key="source.name" class="flex items-center justify-between bg-gray-900 p-2 rounded relative group">
-                  <div class="flex items-center gap-2">
-                    <span class="w-2 h-2 rounded-full flex-shrink-0" :class="getStatusClass(source.url)"></span>
-                    <span class="text-sm font-medium">{{ source.name }}</span>
-                    <span class="text-xs text-gray-500">({{ source.type }})</span>
-                    <span v-if="!supportsVideo(source)" class="text-xs text-yellow-400 italic">Images Only</span>
+                <div v-for="(source, idx) in customSources" :key="source.name + idx">
+                  <div class="flex items-center justify-between bg-gray-900 p-2 rounded relative group">
+                    <div class="flex items-center gap-2">
+                      <span class="w-2 h-2 rounded-full flex-shrink-0" :class="getStatusClass(source.url)"></span>
+                      <span class="text-sm font-medium">{{ source.name }}</span>
+                      <span class="text-xs text-gray-500">({{ source.type }})</span>
+                      <span v-if="!supportsVideo(source)" class="text-xs text-yellow-400 italic">Images Only</span>
+                    </div>
+                    <div class="flex items-center gap-3">
+                      <!-- Same key affordance as the built-in sources: a custom booru
+                           may want credentials even when the engine's free tier
+                           works without them. -->
+                      <button
+                        @click="toggleAuth(source)"
+                        class="text-gray-500 hover:text-white"
+                        :class="getAuthClass(source.url)"
+                        title="Configure Authentication"
+                      >
+                        <svg viewBox="0 0 24 24" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+                        </svg>
+                      </button>
+                      <button
+                        @click="toggleSource(source)"
+                        class="w-5 h-5 rounded border flex items-center justify-center transition-colors"
+                        :class="isSourceActive(source) ? 'bg-pink-600 border-pink-600' : 'border-gray-600 hover:border-gray-500'"
+                      >
+                        <svg v-if="isSourceActive(source)" viewBox="0 0 24 24" class="w-3 h-3 fill-white" stroke="currentColor" stroke-width="3">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                      </button>
+                      <button @click="removeCustomSource(idx)" class="text-gray-500 hover:text-red-500">
+                        <X class="h-4 w-4" />
+                      </button>
+                    </div>
                   </div>
-                  <div class="flex items-center gap-3">
-                    <button
-                      @click="toggleSource(source)"
-                      class="w-5 h-5 rounded border flex items-center justify-center transition-colors"
-                      :class="isSourceActive(source) ? 'bg-pink-600 border-pink-600' : 'border-gray-600 hover:border-gray-500'"
-                    >
-                      <svg v-if="isSourceActive(source)" viewBox="0 0 24 24" class="w-3 h-3 fill-white" stroke="currentColor" stroke-width="3">
-                        <polyline points="20 6 9 17 4 12"></polyline>
-                      </svg>
-                    </button>
-                    <button @click="removeCustomSource(idx)" class="text-gray-500 hover:text-red-500">
-                      <X class="h-4 w-4" />
-                    </button>
+                  <div v-if="editingAuth === source.url" class="bg-gray-800 p-2 rounded mt-2 mb-2 text-xs space-y-2 border border-gray-700">
+                    <p class="text-gray-400">Authentication (Optional)</p>
+                    <input v-model="source.userId" placeholder="User ID" class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-white" />
+                    <input v-model="source.apiKey" placeholder="API Key" type="password" class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-white" />
+                    <div class="flex justify-end mt-2">
+                      <button
+                        @click="testAuth(source)"
+                        class="flex items-center gap-1 bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs transition-colors"
+                        :disabled="isTestingAuth"
+                      >
+                        <span v-if="isTestingAuth">Testing...</span>
+                        <span v-else>Test Authentication</span>
+                        <Check v-if="authTestResult && authTestResult.url === source.url && authTestResult.success" class="w-3 h-3 text-green-500" />
+                        <AlertCircle v-if="authTestResult && authTestResult.url === source.url && !authTestResult.success" class="w-3 h-3 text-red-500" />
+                      </button>
+                    </div>
+                    <p v-if="authTestResult && authTestResult.url === source.url" class="text-xs mt-1" :class="authTestResult.success ? 'text-green-400' : 'text-red-400'">
+                      {{ authTestResult.message }}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -420,11 +455,28 @@
               <div v-if="showAddSource" class="bg-gray-900 p-3 rounded mb-3 space-y-2">
                 <input v-model="newSource.name" placeholder="Name (e.g. MyBooru)" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-white" />
                 <input v-model="newSource.url" placeholder="URL (e.g. https://site.com)" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-white" />
-                <select v-model="newSource.type" class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-white">
-                  <option value="danbooru">Danbooru Type</option>
-                  <option value="gelbooru">Gelbooru Type</option>
-                  <option value="moebooru">Moebooru Type</option>
-                </select>
+                <div class="flex gap-2">
+                  <select v-model="newSource.type" class="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-white">
+                    <option value="danbooru">Danbooru Type</option>
+                    <option value="gelbooru">Gelbooru Type</option>
+                    <option value="moebooru">Moebooru Type</option>
+                  </select>
+                  <!-- Probes the URL for a recognizable API and selects the
+                       matching engine in the dropdown above. -->
+                  <button
+                    @click="detectSourceEngine"
+                    class="flex items-center justify-center gap-1 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs text-white transition-colors whitespace-nowrap"
+                    :disabled="isDetectingEngine || !newSource.url"
+                  >
+                    <svg v-if="isDetectingEngine" class="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span>{{ isDetectingEngine ? 'Detecting...' : 'Auto-detect' }}</span>
+                  </button>
+                </div>
+                <p v-if="engineDetectError" class="text-xs text-red-400">{{ engineDetectError }}</p>
+                <p v-if="engineDetectSuccess" class="text-xs text-green-400">{{ engineDetectSuccess }}</p>
                 <button @click="addCustomSource" class="w-full bg-pink-600 hover:bg-pink-700 text-white rounded py-1.5 text-xs font-medium">Add Source</button>
               </div>
 
@@ -812,6 +864,7 @@ import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSys
 
 import BooruService from '../services/BooruService';
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from '../services/BooruAdapters';
+import { detectBooruEngine } from '../services/BooruEngineDetector';
 import DownloadService from '../services/DownloadService';
 import { THEME_PRESETS, FONT_OPTIONS, DEFAULT_CUSTOM_THEME, buildCustomTheme, getThemePreview, applyTheme } from '../services/ThemeService';
 import { X, Check, AlertCircle } from 'lucide-vue-next';
@@ -850,6 +903,10 @@ export default {
       localActiveSources: [],
       showAddSource: false,
       newSource: { name: '', url: '', type: 'gelbooru' },
+      isDetectingEngine: false,
+      engineDetectError: '',
+      engineDetectSuccess: '',
+      engineDetectTimer: null,
       sourceSaveMessage: '',
       editingAuth: null,
       isTestingAuth: false,
@@ -950,7 +1007,14 @@ export default {
     this.localActiveSources = preferences.activeSources || (this.activeSource ? [this.activeSource] : [defaultSources[0]]);
 
     const sourceConfigs = preferences.sourceConfigs || {};
-    this.predefinedSources.forEach(source => {
+    // Restore saved credentials for both built-in and custom sources. The
+    // custom list is store-backed, so the credentials have to land on its
+    // entries (not on the stored copy) or a key entered for a custom booru
+    // would vanish on the next launch.
+    if ((this.customSources || []).length === 0 && (preferences.customSources || []).length > 0) {
+      this.customSources = preferences.customSources;
+    }
+    [...this.predefinedSources, ...this.customSources].forEach(source => {
       if (sourceConfigs[source.url]) {
         source.userId = sourceConfigs[source.url].userId;
         source.apiKey = sourceConfigs[source.url].apiKey;
@@ -1098,10 +1162,65 @@ export default {
     },
     addCustomSource() {
       if (this.newSource.name && this.newSource.url) {
+        // Credentials start empty but the row offers the same auth panel as the
+        // built-in sources, so keys can be added now or later.
         this.customSources.push({ ...this.newSource, userId: '', apiKey: '' });
         this.newSource = { name: '', url: '', type: 'gelbooru' };
         this.showAddSource = false;
+        this.engineDetectError = '';
+        this.engineDetectSuccess = '';
         this.saveSettings();
+      }
+    },
+    /**
+     * Probe the URL in the add form and select whichever engine answers.
+     * Turns the manual dropdown into a pre-filled suggestion; a failure clears
+     * its message after a few seconds and leaves the choice to the user.
+     */
+    async detectSourceEngine() {
+      if (this.isDetectingEngine || !this.newSource.url) return;
+
+      this.isDetectingEngine = true;
+      this.engineDetectError = '';
+      this.engineDetectSuccess = '';
+      this.clearEngineDetectTimer();
+
+      try {
+        const result = await detectBooruEngine(this.newSource.url, {
+          userId: this.newSource.userId,
+          apiKey: this.newSource.apiKey,
+        });
+
+        if (result.type) {
+          this.newSource.type = result.type;
+          this.newSource.url = result.url;
+          this.engineDetectSuccess = result.requiresAuth
+            ? `Detected ${result.type} engine — this booru requires an API key.`
+            : `Detected ${result.type} engine.`;
+          this.scheduleEngineDetectClear(3000, 'success');
+        } else {
+          this.engineDetectError = result.error || 'Could not detect the engine. Select it manually.';
+          this.scheduleEngineDetectClear(5000, 'error');
+        }
+      } catch (e) {
+        this.engineDetectError = 'Could not reach that URL. Check it and try again.';
+        this.scheduleEngineDetectClear(5000, 'error');
+      } finally {
+        this.isDetectingEngine = false;
+      }
+    },
+    scheduleEngineDetectClear(delay, which) {
+      this.clearEngineDetectTimer();
+      this.engineDetectTimer = setTimeout(() => {
+        if (which === 'error') this.engineDetectError = '';
+        else this.engineDetectSuccess = '';
+        this.engineDetectTimer = null;
+      }, delay);
+    },
+    clearEngineDetectTimer() {
+      if (this.engineDetectTimer) {
+        clearTimeout(this.engineDetectTimer);
+        this.engineDetectTimer = null;
       }
     },
     toggleAuth(source) {
@@ -1157,7 +1276,9 @@ export default {
       });
 
       const sourceConfigs = preferences.sourceConfigs || {};
-      this.predefinedSources.forEach(s => {
+      // Persist credentials for custom sources too, so the auth panel on a
+      // custom row survives a restart the same way the built-in ones do.
+      [...this.predefinedSources, ...this.customSources].forEach(s => {
         if (s.userId || s.apiKey) {
           sourceConfigs[s.url] = { userId: s.userId, apiKey: s.apiKey };
         }
