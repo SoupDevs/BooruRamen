@@ -51,8 +51,16 @@
             <span
               class="w-12 h-12 rounded-full flex items-center justify-center text-base font-bold transition-transform duration-150 group-hover:scale-105 group-active:scale-95"
               :style="{ backgroundColor: target.color, color: target.textColor || '#FFFFFF' }"
-            >{{ target.badge }}</span>
-            <span class="text-[11px] leading-tight text-gray-300">{{ target.label }}</span>
+            >
+              <!-- Saving the file is an action, not a network: it carries a
+                   glyph and reports back in place of a badge. -->
+              <template v-if="target.action === 'download'">
+                <Check v-if="downloaded" class="w-6 h-6 text-green-400" />
+                <Download v-else class="w-6 h-6" />
+              </template>
+              <template v-else>{{ target.badge }}</template>
+            </span>
+            <span class="text-[11px] leading-tight text-gray-300 text-center">{{ targetLabel(target) }}</span>
           </button>
         </div>
 
@@ -103,7 +111,8 @@
 </template>
 
 <script>
-import { Check, Link2, Share2 } from 'lucide-vue-next';
+import { Check, Download, Link2, Share2 } from 'lucide-vue-next';
+import { downloadPost } from '../services/DownloadService';
 import {
   buildShareTargets,
   copyToClipboard,
@@ -116,10 +125,12 @@ import {
 // Keep the dismiss animation and the close event in step.
 const CLOSE_ANIMATION_MS = 160;
 const COPIED_FEEDBACK_MS = 1500;
+// Saving a file can take a while (videos), so its confirmation lingers.
+const DOWNLOAD_FEEDBACK_MS = 2500;
 
 export default {
   name: 'ShareSheet',
-  components: { Check, Link2, Share2 },
+  components: { Check, Download, Link2, Share2 },
   props: {
     post: {
       type: Object,
@@ -131,8 +142,12 @@ export default {
     return {
       closing: false,
       linkCopied: false,
+      downloading: false,
+      downloaded: false,
+      downloadError: false,
       closeTimer: null,
-      copiedTimer: null
+      copiedTimer: null,
+      downloadTimer: null
     };
   },
   computed: {
@@ -148,17 +163,51 @@ export default {
     },
     canSystemShare() {
       return typeof navigator !== 'undefined' && typeof navigator.share === 'function';
+    },
+    downloadLabel() {
+      if (this.downloading) return 'Saving…';
+      if (this.downloaded) return 'Saved!';
+      if (this.downloadError) return 'Download failed';
+      return 'Download';
     }
   },
   beforeUnmount() {
     clearTimeout(this.closeTimer);
     clearTimeout(this.copiedTimer);
+    clearTimeout(this.downloadTimer);
   },
   methods: {
     shareTo(target) {
-      if (!target || !target.url) return;
+      if (!target) return;
+      // Download is the one entry that stays in the app, so it neither opens
+      // a URL nor dismisses the sheet: the user gets to see it finish.
+      if (target.action === 'download') {
+        this.downloadMedia();
+        return;
+      }
+      if (!target.url) return;
       openExternalUrl(target.url);
       this.requestClose();
+    },
+    targetLabel(target) {
+      return target.action === 'download' ? this.downloadLabel : target.label;
+    },
+    async downloadMedia() {
+      if (!this.post || this.downloading) return;
+      this.downloading = true;
+      this.downloaded = false;
+      this.downloadError = false;
+      // Same route as the like/favourite auto-download: the app streams the
+      // file itself, the browser falls back to an anchor download.
+      const saved = await downloadPost(this.post, 'shared');
+      this.downloading = false;
+      this.downloaded = saved;
+      this.downloadError = !saved;
+      clearTimeout(this.downloadTimer);
+      this.downloadTimer = setTimeout(() => {
+        this.downloaded = false;
+        this.downloadError = false;
+      }, DOWNLOAD_FEEDBACK_MS);
     },
     async copyLink() {
       const copied = await copyToClipboard(this.postUrl);

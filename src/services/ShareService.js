@@ -64,9 +64,22 @@ function getShareImageUrl(post) {
 }
 
 /**
- * Share targets for a post, in display order. Each target is a plain web
- * intent URL: opening it hands the post to the platform's composer (or its
- * native app) without the user leaving BooruRamen's own session.
+ * The one share option that never leaves the app: it saves the post's media
+ * into the download folder, the same place likes and favourites land, so the
+ * sheet carries an action instead of an intent url.
+ */
+export const DOWNLOAD_TARGET = {
+  id: 'download',
+  label: 'Download',
+  action: 'download',
+  color: '#374151',
+};
+
+/**
+ * Share targets for a post, in display order. The platforms are plain web
+ * intent URLs: opening one hands the post to that platform's composer (or
+ * its native app) without the user leaving BooruRamen's own session, while
+ * the download entry saves the file right here.
  */
 export function buildShareTargets(post) {
   const url = getPostShareUrl(post);
@@ -76,7 +89,11 @@ export function buildShareTargets(post) {
   const media = getShareImageUrl(post);
   const enc = encodeURIComponent;
 
+  // Saving the file is only worth offering when the post still has one.
+  const download = post && post.file_url ? [{ ...DOWNLOAD_TARGET }] : [];
+
   return [
+    ...download,
     {
       id: 'x',
       label: 'X',
