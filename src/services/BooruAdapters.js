@@ -1007,6 +1007,7 @@ export class GelbooruAdapter extends BooruAdapter {
             // img*.gelbooru.com video URLs and their TLS certificates.
             file_url: fileUrl || post.file_url,
             preview_file_url: post.preview_url,
+            sample_file_url: post.sample_url,
             // Map rating properly
             rating: this.mapRating(post.rating),
             tag_string: post.tags,
@@ -1221,6 +1222,10 @@ export class MoebooruAdapter extends BooruAdapter {
             image_height: post.height,
             file_ext: post.file_url ? post.file_url.split('.').pop() : 'jpg',
             file_url: post.file_url,
+            // Low-res thumbnail + ~850px sample so the feed can paint a
+            // preview before the (multi-MB) original finishes downloading.
+            preview_file_url: post.preview_url,
+            sample_file_url: post.sample_url,
             rating: this.mapRating(post.rating),
             tag_string: post.tags,
             tag_string_general: post.tags,

@@ -35,9 +35,11 @@
       >
         <!-- Post media -->
         <div class="relative h-full max-w-full flex items-center justify-center">
-          <BooruImage
+          <ProgressiveImage
             v-if="['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(getFileExtension(post))"
             :src="post.file_url"
+            :preview-src="post.preview_file_url || ''"
+            :sample-src="post.sample_file_url || post.large_file_url || ''"
             :alt="post.tags || 'Post image'"
             class="max-w-full max-h-full object-contain"
             @error="(e) => console.error('Image load error:', post.file_url, e)"
@@ -114,12 +116,12 @@ import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
 import recommendationSystem from '../services/RecommendationSystem';
 import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
-import BooruImage from '../components/BooruImage.vue';
+import ProgressiveImage from '../components/ProgressiveImage.vue';
 
 export default {
   name: 'FeedView',
   components: {
-    BooruImage,
+    ProgressiveImage,
   },
   props: {
     commentsSheetHeight: {
