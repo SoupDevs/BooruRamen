@@ -87,6 +87,41 @@
         </button>
       </div>
 
+      <!-- Install blocked until the user allows it -->
+      <div v-else-if="updater.status === 'permissionRequired'">
+        <div class="flex items-start gap-3 mb-2">
+          <div class="w-8 h-8 rounded-full bg-amber-600/20 flex items-center justify-center flex-shrink-0">
+            <ShieldAlert class="w-5 h-5 text-amber-400" />
+          </div>
+          <h3 class="text-xl font-bold">Allow installs to continue</h3>
+        </div>
+        <p class="text-gray-300 mb-3">
+          Android will not open the installer until you allow installs from
+          BooruRamen. The update is already downloaded, so just turn it on and
+          come back.
+        </p>
+        <div class="flex flex-col gap-3">
+          <button
+            @click="updater.openInstallPermissionSettings()"
+            class="w-full px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded text-white font-medium transition"
+          >
+            Open settings
+          </button>
+          <button
+            @click="updater.installUpdate()"
+            class="w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-white font-medium transition"
+          >
+            Try again
+          </button>
+          <button
+            @click="updater.dismiss()"
+            class="w-full px-4 py-2 text-gray-400 hover:text-gray-200 text-sm transition"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
       <!-- Up to date -->
       <div v-else-if="updater.status === 'upToDate'">
         <div class="flex items-start gap-3 mb-2">
@@ -129,13 +164,13 @@
 </template>
 
 <script>/* global __APP_VERSION__ */
-import { RefreshCw, ArrowDownToLine, Check, AlertCircle } from 'lucide-vue-next';
+import { RefreshCw, ArrowDownToLine, Check, AlertCircle, ShieldAlert } from 'lucide-vue-next';
 import { useUpdaterStore } from '../stores/updater';
 import { isAndroid } from '../services/DownloadService';
 
 export default {
   name: 'UpdateSplash',
-  components: { RefreshCw, ArrowDownToLine, Check, AlertCircle },
+  components: { RefreshCw, ArrowDownToLine, Check, AlertCircle, ShieldAlert },
   computed: {
     updater() {
       return useUpdaterStore();

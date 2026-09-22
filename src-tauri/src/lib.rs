@@ -401,7 +401,9 @@ pub fn run() {
       cache_booru_media,
       download_file,
       clear_downloads,
-      updater::install_update
+      updater::install_update,
+      updater::open_install_permission_settings,
+      updater::sideload_updates_supported
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

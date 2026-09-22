@@ -17,8 +17,12 @@ import UpdateService from '../services/UpdateService';
 
 export const useUpdaterStore = defineStore('updater', {
     state: () => ({
-        // idle | checking | available | upToDate | downloading | installing | error
+        // idle | checking | available | upToDate | downloading | installing
+        // | permissionRequired | error
         status: 'idle',
+        // Android: the install is waiting for the user to allow installs from
+        // this app. The APK is already downloaded, so retrying is instant.
+        needsInstallPermission: false,
         showSplash: false,
         currentVersion: '',
         latestVersion: '',
@@ -68,8 +72,18 @@ export const useUpdaterStore = defineStore('updater', {
         /** Download the new release and hand off to the platform installer. */
         async installUpdate() {
             if (!this.lastCheck?.available) return;
+
+            // A build without the sideload feature leaves installing to the
+            // store; say so instead of downloading an APK it may not use.
+            if (!(await UpdateService.isSideloadUpdatesSupported())) {
+                this.error = 'This build installs updates through the app store.';
+                this.status = 'error';
+                return;
+            }
+
             this.status = 'downloading';
             this.progress = null;
+            this.needsInstallPermission = false;
             try {
                 await UpdateService.downloadAndInstall(this.lastCheck, progress => {
                     this.progress = progress;
@@ -80,6 +94,26 @@ export const useUpdaterStore = defineStore('updater', {
                 // On desktop the app exits before we get here; on Android the
                 // system installer has been opened.
                 this.status = 'installing';
+            } catch (e) {
+                if (UpdateService.isInstallPermissionError(e)) {
+                    // Android will not show the installer until the user allows
+                    // installs from this app. Ask for that instead of showing a
+                    // failure the user cannot act on.
+                    this.error = '';
+                    this.needsInstallPermission = true;
+                    this.status = 'permissionRequired';
+                } else {
+                    this.error = e?.message || String(e);
+                    this.status = 'error';
+                }
+            }
+        },
+
+        /** Open the Android screen where installs from this app are allowed. */
+        async openInstallPermissionSettings() {
+            this.error = '';
+            try {
+                await UpdateService.openInstallPermissionSettings();
             } catch (e) {
                 this.error = e?.message || String(e);
                 this.status = 'error';
@@ -94,6 +128,7 @@ export const useUpdaterStore = defineStore('updater', {
          */
         dismiss() {
             this.showSplash = false;
+            this.needsInstallPermission = false;
             if (this.status !== 'downloading') {
                 this.status = 'idle';
             }
