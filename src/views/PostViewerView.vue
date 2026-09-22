@@ -25,22 +25,53 @@
             :alt="post.tag_string" 
             class="max-h-[calc(100vh-0px)] max-w-full object-contain"
           />
-          <video
+          <div
             v-else-if="isVideo(post)"
-            :src="getVideoSrc(post)"
-            :ref="(el) => setVideoRef(el, post)"
-            :autoplay="autoplayVideos && isPostVisible(post)"
-            :muted="!isPostVisible(post) || muted"
-            loop
-            preload="none"
-            playsinline
-            class="max-h-[calc(100vh-0px)] max-w-full"
-            @click="togglePlayPause"
-            @play="handleVideoStateUpdate($event, index)"
-            @pause="handleVideoStateUpdate($event, index)"
-            @timeupdate="handleVideoStateUpdate($event, index)"
-            @volumechange="handleVideoStateUpdate($event, index)"
-          ></video>
+            class="relative flex items-center justify-center max-h-[calc(100vh-0px)] max-w-full"
+          >
+            <!-- A paused <video> must never be the visible layer: the Android
+                 webview paints its own play glyph over a paused clip, and an
+                 element with no decoded frame is an empty black box (#148).
+                 That is why a video scrolling into view arrived black. Same
+                 stand-in chain as the feed: the booru thumbnail for the clip
+                 shows straight away, the canvas takes over with the decoded
+                 first frame once it exists, and playback swaps in the video
+                 itself, on top of the frame it starts from. -->
+            <img
+              v-if="videoPosterSrc(post)"
+              :src="videoPosterSrc(post)"
+              :alt="post.tag_string"
+              class="max-h-[calc(100vh-0px)] max-w-full object-contain"
+              :class="{ 'opacity-0': hasVideoFrame(post) }"
+              @error="onPosterError(post)"
+            />
+            <video
+              :src="getVideoSrc(post)"
+              :ref="(el) => setVideoRef(el, post)"
+              :autoplay="autoplayVideos && isPostVisible(post)"
+              :muted="!isPostVisible(post) || muted"
+              loop
+              :preload="videoPreloadAttr(post)"
+              playsinline
+              class="max-h-[calc(100vh-0px)] max-w-full"
+              :class="[
+                { 'opacity-0': !isVideoActive(post) },
+                videoOverlayClass(post)
+              ]"
+              @click="togglePlayPause"
+              @loadeddata="onVideoLoadedData($event, post)"
+              @playing="onVideoPlaying(post)"
+              @play="handleVideoStateUpdate($event, index)"
+              @pause="onVideoPause($event, post, index)"
+              @timeupdate="handleVideoStateUpdate($event, index)"
+              @volumechange="handleVideoStateUpdate($event, index)"
+            ></video>
+            <canvas
+              v-show="hasVideoFrame(post) && !isVideoActive(post)"
+              :ref="(el) => setCanvasRef(el, post)"
+              class="absolute inset-0 m-auto max-h-full max-w-full pointer-events-none"
+            ></canvas>
+          </div>
           <div 
             v-else
             class="flex items-center justify-center bg-gray-900 p-4 rounded"
@@ -85,6 +116,10 @@ export default {
       _visiblePostKeys: {}, // Track which posts are currently visible (reactive object: { postId: true })
       _visibilityVersion: 0, // Counter to force re-renders on visibility change
       _proxyFailedUrls: {}, // Track URLs that failed proxy (skip proxy path next time)
+      videoCanvases: {}, // post id -> canvas holding the decoded stand-in frame
+      videoFrameStates: {}, // post id -> true once a frame has been captured
+      videoActiveStates: {}, // post id -> true while the video is actually playing
+      posterErrorStates: {}, // post id -> true when the clip's thumbnail failed to load
     };
   },
   computed: {
@@ -376,6 +411,86 @@ export default {
         this._videoElements = this._videoElements || {};
         this._videoElements[post.id] = el;
       }
+    },
+    setCanvasRef(el, post) {
+      if (el) {
+        this.videoCanvases[post.id] = el;
+      } else {
+        delete this.videoCanvases[post.id];
+      }
+    },
+    videoPosterSrc(post) {
+      // The booru's own thumbnail for the clip - its first frame, and normally
+      // already in the cache from the feed. Shown until a decoded frame exists.
+      if (!post || this.posterErrorStates[post.id]) return '';
+      return post.sample_url || post.preview_url || '';
+    },
+    onPosterError(post) {
+      // No usable thumbnail: drop the layer so the <video> can size the post.
+      this.posterErrorStates[post.id] = true;
+    },
+    hasVideoFrame(post) {
+      return !!this.videoFrameStates[post.id];
+    },
+    isVideoActive(post) {
+      return !!this.videoActiveStates[post.id];
+    },
+    videoOverlayClass(post) {
+      // With a stand-in present the video overlays the poster's box; without
+      // one it stays in flow so it can size the post itself.
+      return this.videoPosterSrc(post) ? 'absolute inset-0 m-auto max-h-full max-w-full' : '';
+    },
+    // Offscreen videos only need their first frame decoded - the stand-in draws
+    // from loadeddata. Anything further out is not fetched at all, so walking a
+    // long viewer list never pulls every clip at once.
+    videoPreloadAttr(post) {
+      const distance = this.posts.indexOf(post) - this.currentPostIndex;
+      return Math.abs(distance) <= 1 ? 'auto' : 'none';
+    },
+    drawFrameToCanvas(post, video) {
+      const canvas = this.videoCanvases[post.id];
+      if (!canvas || !video || !video.videoWidth) return;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      try {
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        this.videoFrameStates[post.id] = true;
+      } catch (e) {
+        // Exotic sources can refuse the draw; the poster layer stays up instead.
+      }
+    },
+    onVideoLoadedData(event, post) {
+      // Hold the first frame so the post shows real content while it scrolls
+      // into view - pixel-identical to the frame playback starts on. The frame
+      // has to be the one the compositor has actually been given: loadeddata
+      // only means the data is in, and drawing then can capture an all-black
+      // picture, which is the very artefact this stand-in exists to hide. So
+      // wait for the presented frame when the engine can tell us about it.
+      const video = event.target;
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        if (!video._standInCapture) {
+          video._standInCapture = video.requestVideoFrameCallback(() => {
+            video._standInCapture = null;
+            this.drawFrameToCanvas(post, video);
+          });
+        }
+        return;
+      }
+      this.drawFrameToCanvas(post, video);
+    },
+    onVideoPlaying(post) {
+      // Playback is rendering: reveal the video, hide the stand-in, and keep a
+      // frame in hand for the next pause.
+      this.videoActiveStates[post.id] = true;
+      const video = this._videoElements?.[post.id];
+      if (video) this.drawFrameToCanvas(post, video);
+    },
+    onVideoPause(event, post, index) {
+      // Keep the frame the video stopped on (frame 0 before it ever played) so a
+      // paused post shows a picture instead of the webview's play glyph.
+      this.drawFrameToCanvas(post, event.target);
+      this.videoActiveStates[post.id] = false;
+      this.handleVideoStateUpdate(event, index);
     },
     togglePlayPause(event) {
         const video = event.target;
