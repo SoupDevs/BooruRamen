@@ -15,6 +15,56 @@
 import { gelbooruTagCache } from './GelbooruTagCache.js';
 import { httpFetch } from './httpClient.js';
 
+/**
+ * Hosts the dev server has a dedicated proxy for, keyed by the URL fragment the
+ * adapter used to match on. Kept for the built-in sources; custom sources go
+ * through the generic /api/custom proxy below.
+ */
+const DEV_PROXY_ALIASES = [
+    ['gelbooru.com', '/api/gelbooru'],
+    ['safebooru.org', '/api/safebooru'],
+    ['konachan.com', '/api/konachan'],
+    ['yande.re', '/api/yande'],
+    ['danbooru.donmai.us', '/api/danbooru'],
+];
+
+/**
+ * Rewrite a booru URL for the current environment.
+ *
+ * In the packaged app every request goes through the Tauri HTTP plugin, which
+ * is not subject to CORS, so the URL is returned untouched. In a browser the
+ * request would be cross-origin and blocked, so it is routed through the Vite
+ * dev proxy: a dedicated alias when one exists, otherwise the generic
+ * /api/custom proxy, which accepts any origin. Without this a custom booru
+ * appears to "cannot connect" in dev even though the API is fine.
+ *
+ * @param {string} url - Fully built absolute API URL.
+ * @returns {string} URL to hand to httpFetch.
+ */
+export function toDevProxiedUrl(url) {
+    if (!import.meta.env || !import.meta.env.DEV) return url;
+
+    for (const [fragment, alias] of DEV_PROXY_ALIASES) {
+        if (url.includes(fragment)) {
+            // Alias proxies rewrite the prefix away, so the origin must go.
+            const rest = url.slice(url.indexOf(fragment) + fragment.length);
+            return `${alias}${rest}`;
+        }
+    }
+
+    // Unknown host: proxy generically so custom boorus work in dev too.
+    try {
+        const parsed = new URL(url);
+        const encodedOrigin = btoa(`${parsed.protocol}//${parsed.host}`)
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+        return `/api/custom/${encodedOrigin}${parsed.pathname}${parsed.search}`;
+    } catch {
+        return url;
+    }
+}
+
 class BooruAdapter {
     constructor(baseUrl, type) {
         this.baseUrl = baseUrl;
@@ -493,13 +543,9 @@ export class GelbooruAdapter extends BooruAdapter {
             // Use a simple request to check if the site responds
             // We request the main page rather than the API to avoid auth requirements
             let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
-            if (import.meta.env && import.meta.env.DEV) {
-                if (cleanBaseUrl.includes('gelbooru.com')) cleanBaseUrl = '/api/gelbooru';
-                if (cleanBaseUrl.includes('safebooru.org')) cleanBaseUrl = '/api/safebooru';
-            }
 
             // Make a minimal request - just check if the endpoint responds
-            const url = `${cleanBaseUrl}/index.php?page=dapi&s=post&q=index&json=1&limit=0`;
+            const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?page=dapi&s=post&q=index&json=1&limit=0`);
             console.log(`[Gelbooru] Testing connection to ${url}...`);
 
             const response = await httpFetch(url, { method: 'GET' });
@@ -578,12 +624,8 @@ export class GelbooruAdapter extends BooruAdapter {
             });
 
             let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
-            if (import.meta.env && import.meta.env.DEV) {
-                if (cleanBaseUrl.includes('gelbooru.com')) cleanBaseUrl = '/api/gelbooru';
-                if (cleanBaseUrl.includes('safebooru.org')) cleanBaseUrl = '/api/safebooru';
-            }
 
-            const url = `${cleanBaseUrl}/index.php?${params.toString()}`;
+            const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?${params.toString()}`);
             console.log(`[Gelbooru] Testing authentication...`);
 
             const response = await httpFetch(url);
@@ -866,17 +908,10 @@ export class GelbooruAdapter extends BooruAdapter {
             params.append('tags', cleanTags);
         }
 
-        // SafeBooru / Gelbooru URL handling
         // Ensure strictly NO trailing slash before query
         let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
 
-        // Proxy rewriting for Development
-        if (import.meta.env && import.meta.env.DEV) {
-            if (cleanBaseUrl.includes('gelbooru.com')) cleanBaseUrl = '/api/gelbooru';
-            if (cleanBaseUrl.includes('safebooru.org')) cleanBaseUrl = '/api/safebooru';
-        }
-
-        const url = `${cleanBaseUrl}/index.php?${params.toString()}`;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?${params.toString()}`);
 
         try {
             // Rate limit requests to avoid 429 errors
@@ -1058,12 +1093,8 @@ export class GelbooruAdapter extends BooruAdapter {
 
         // The API is disabled, so we scrape the post page directly
         let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
-        if (import.meta.env && import.meta.env.DEV) {
-            if (cleanBaseUrl.includes('gelbooru.com')) cleanBaseUrl = '/api/gelbooru';
-            if (cleanBaseUrl.includes('safebooru.org')) cleanBaseUrl = '/api/safebooru';
-        }
 
-        const url = `${cleanBaseUrl}/index.php?page=post&s=view&id=${postId}`;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?page=post&s=view&id=${postId}`);
 
         try {
             console.log(`[Gelbooru] Fetching comments from post page ${postId}`);
@@ -1169,8 +1200,22 @@ export class GelbooruAdapter extends BooruAdapter {
 }
 
 export class MoebooruAdapter extends BooruAdapter {
-    constructor(baseUrl) {
+    constructor(baseUrl, credentials = {}) {
         super(baseUrl, 'moebooru');
+        // Moebooru (konachan/yande.re and forks) accepts login/password_hash as
+        // query params. Kept so a custom Moebooru-engine booru can authenticate
+        // the same way the predefined ones can.
+        this.credentials = credentials;
+    }
+
+    /** Build auth query params for Moebooru-style endpoints, if configured. */
+    authParams() {
+        const params = new URLSearchParams();
+        if (this.credentials.userId && this.credentials.apiKey) {
+            params.append('login', this.credentials.userId);
+            params.append('password_hash', this.credentials.apiKey);
+        }
+        return params;
     }
 
     async getPosts({ tags, page, limit, _isTest }) {
@@ -1182,20 +1227,19 @@ export class MoebooruAdapter extends BooruAdapter {
             .replace(/rating:e\b/g, 'rating:explicit');
 
         const params = new URLSearchParams({
-            tags: queryTags,
-            page: page,
-            limit: limit
-        });
+                    tags: queryTags,
+                    page: page,
+                    limit: limit
+                });
+
+                // Merge any configured Moebooru credentials (login/password_hash)
+                for (const [k, v] of this.authParams().entries()) {
+                    params.append(k, v);
+                }
 
         let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
 
-        // Proxy rewriting for Development
-        if (import.meta.env && import.meta.env.DEV) {
-            if (cleanBaseUrl === 'https://konachan.com') cleanBaseUrl = '/api/konachan';
-            if (cleanBaseUrl === 'https://yande.re') cleanBaseUrl = '/api/yande';
-        }
-
-        const url = `${cleanBaseUrl}/post.json?${params.toString()}`;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/post.json?${params.toString()}`);
 
         try {
             console.log(`[Moebooru] Fetching: ${url}`);
@@ -1256,13 +1300,7 @@ export class MoebooruAdapter extends BooruAdapter {
     async getComments(postId) {
         let cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
 
-        // Proxy rewriting for Development
-        if (import.meta.env && import.meta.env.DEV) {
-            if (cleanBaseUrl === 'https://konachan.com') cleanBaseUrl = '/api/konachan';
-            if (cleanBaseUrl === 'https://yande.re') cleanBaseUrl = '/api/yande';
-        }
-
-        const url = `${cleanBaseUrl}/comment.json?post_id=${postId}`;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/comment.json?post_id=${postId}`);
 
         try {
             console.log(`[Moebooru] Fetching comments for post ${postId}`);

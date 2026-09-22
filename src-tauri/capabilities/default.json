@@ -13,31 +13,13 @@
       "identifier": "http:default",
       "allow": [
         {
-          "url": "https://*.donmai.us/*"
+          "url": "https://*/*"
         },
         {
-          "url": "https://danbooru.donmai.us/*"
+          "url": "http://localhost:*/*"
         },
         {
-          "url": "https://gelbooru.com/*"
-        },
-        {
-          "url": "https://*.gelbooru.com/*"
-        },
-        {
-          "url": "https://safebooru.org/*"
-        },
-        {
-          "url": "https://*.safebooru.org/*"
-        },
-        {
-          "url": "https://konachan.com/*"
-        },
-        {
-          "url": "https://yande.re/*"
-        },
-        {
-          "url": "https://*.yande.re/*"
+          "url": "http://127.0.0.1:*/*"
         },
         {
           "url": "https://api.github.com/*"

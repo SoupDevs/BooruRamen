@@ -9,6 +9,47 @@ import https from 'https'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+// --- Custom-booru dev proxy helpers -----------------------------------------
+// Requests look like /api/custom/<base64url(origin)>/rest/of/path. The origin is
+// encoded rather than inline so query strings and paths on the target are
+// preserved exactly as the adapter built them.
+function decodeCustomTarget(rawUrl) {
+  const value = String(rawUrl || '').replace(/^\/api\/custom/, '')
+  const match = value.match(/^\/([^/?]+)(\/[^?]*)?(\?.*)?$/)
+  if (!match) return null
+  try {
+    const origin = Buffer.from(match[1], 'base64url').toString('utf8')
+    const parsed = new URL(origin)
+    return {
+      origin: `${parsed.protocol}//${parsed.host}`,
+      host: parsed.host,
+      path: match[2] || '/',
+      query: match[3] || ''
+    }
+  } catch {
+    return null
+  }
+}
+
+// Shared trailing labels of two hostnames, minus the trap where the only match
+// is a compound public suffix such as "co.uk". Used to keep the media proxy to
+// one site without hardcoding a host list.
+function hostsShareSite(a, b) {
+  const left = String(a || '').toLowerCase().split('.').filter(Boolean)
+  const right = String(b || '').toLowerCase().split('.').filter(Boolean)
+  let shared = 0
+  while (
+    shared < left.length && shared < right.length &&
+    left[left.length - 1 - shared] === right[right.length - 1 - shared]
+  ) shared += 1
+  if (shared < 2) return false
+  const tail = left.slice(left.length - shared, left.length - shared + 2)
+  if (shared === 2 && tail[1].length === 2 &&
+      ['co', 'com', 'org', 'net', 'gov', 'ac', 'edu'].includes(tail[0])) return false
+  return true
+}
+// ---------------------------------------------------------------------------
+
 const packageJson = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'))
 
 // https://vite.dev/config/
@@ -85,34 +126,105 @@ const config = {
     sourcemap: !!process.env.TAURI_DEBUG,
   },
   configureServer(server) {
-    // Gelbooru rejects media hotlinks unless requests identify Gelbooru as the
-    // referring site. Browser code cannot set that header, so development uses
-    // this same-origin, host-restricted streaming proxy.
-    server.middlewares.use('/gelbooru-media', async (req, res) => {
+    // Custom boorus: the user can point the app at any booru URL, so the dev
+    // server cannot know the host list ahead of time. The app requests
+    // /api/custom/<base64url(origin)>/<path> and this streams the response from
+    // that booru, which keeps custom sources working in the browser where CORS
+    // would otherwise block them (the packaged app uses the Tauri HTTP plugin).
+    // Redirects are followed here as well: boorus commonly 301 their API to a
+    // dedicated host, and the browser must not be left to chase that cross-
+    // origin on its own.
+    server.middlewares.use('/api/custom', async (req, res) => {
+      const target = decodeCustomTarget(req.url)
+      if (!target) {
+        res.writeHead(400, { 'Content-Type': 'text/plain' })
+        res.end('Invalid custom booru target')
+        return
+      }
+
+      const requestOnce = (urlObject) => new Promise((resolve, reject) => {
+        const client = urlObject.protocol === 'https:' ? https : http
+        const proxyReq = client.request(urlObject, {
+          method: req.method || 'GET',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': req.headers.accept || 'application/json, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Host': urlObject.host,
+          },
+          rejectUnauthorized: false,
+        }, (proxyRes) => resolve({ proxyRes, urlObject }))
+        proxyReq.on('error', reject)
+        proxyReq.end()
+      })
+
+      try {
+        let hop = await requestOnce(new URL(`${target.path}${target.query}`, target.origin))
+        const visited = new Set([hop.urlObject.href])
+        for (let redirects = 0; redirects < 5; redirects++) {
+          const { statusCode, headers } = hop.proxyRes
+          if (statusCode < 300 || statusCode >= 400 || !headers.location) break
+          const nextUrl = new URL(headers.location, hop.urlObject)
+          hop.proxyRes.resume()
+          if (visited.has(nextUrl.href)) break
+          visited.add(nextUrl.href)
+          hop = await requestOnce(nextUrl)
+        }
+
+        const { proxyRes, urlObject } = hop
+        const responseHeaders = { ...proxyRes.headers }
+        delete responseHeaders['content-security-policy']
+        delete responseHeaders['cross-origin-resource-policy']
+        delete responseHeaders['x-frame-options']
+        // Lets the app learn the address the API really lives on, so it can
+        // save that origin instead of repeating the redirect on every call.
+        responseHeaders['x-booru-final-origin'] = `${urlObject.protocol}//${urlObject.host}`
+        res.writeHead(proxyRes.statusCode || 502, responseHeaders)
+        proxyRes.pipe(res)
+      } catch (error) {
+        if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain' })
+        res.end(`Custom booru proxy error: ${error.message}`)
+      }
+    })
+
+    // Some boorus reject media hotlinks unless requests identify the booru as
+    // the referring site, and browser code cannot set that header. Development
+    // therefore streams such media through this same-origin proxy, which is
+    // open to any site the user configured but only when the media lives on the
+    // same site as the referer the app supplies.
+    server.middlewares.use('/booru-media', async (req, res) => {
       const requestUrl = new URL(req.url, 'http://localhost')
       const mediaUrl = requestUrl.searchParams.get('url')
+      const refererUrl = requestUrl.searchParams.get('referer')
 
       let parsedMediaUrl
+      let parsedReferer
       try {
         parsedMediaUrl = new URL(mediaUrl)
+        parsedReferer = new URL(refererUrl)
       } catch {
         res.writeHead(400, { 'Content-Type': 'text/plain' })
-        res.end('Invalid Gelbooru media URL')
+        res.end('Invalid media URL')
         return
       }
 
       const hostname = parsedMediaUrl.hostname.toLowerCase()
-      if (parsedMediaUrl.protocol !== 'https:' ||
-          (hostname !== 'gelbooru.com' && !hostname.endsWith('.gelbooru.com'))) {
+      const refererHost = parsedReferer.hostname.toLowerCase()
+      if (parsedMediaUrl.protocol !== 'https:' || parsedReferer.protocol !== 'https:') {
         res.writeHead(403, { 'Content-Type': 'text/plain' })
-        res.end('Only Gelbooru media URLs are allowed')
+        res.end('Only HTTPS media URLs are allowed')
+        return
+      }
+      if (!hostsShareSite(hostname, refererHost)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain' })
+        res.end("Media URL must belong to the booru's own site")
         return
       }
 
       const headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': req.headers.accept || '*/*',
-        'Referer': 'https://gelbooru.com/',
+        'Referer': parsedReferer.href,
       }
       if (req.headers.range) headers.Range = req.headers.range
 
@@ -127,7 +239,7 @@ const config = {
 
       proxyReq.on('error', () => {
         if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain' })
-        res.end('Gelbooru media proxy error')
+        res.end('Media proxy error')
       })
       proxyReq.end()
     })
