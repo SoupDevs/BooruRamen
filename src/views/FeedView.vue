@@ -118,6 +118,11 @@ import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
 import recommendationSystem from '../services/RecommendationSystem';
 import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
+import {
+  primeNeighbouringFrames,
+  VIDEO_FRAME_RUNWAY_AHEAD,
+  VIDEO_FRAME_RUNWAY_BEHIND
+} from '../services/videoFramePriming.js';
 import ProgressiveImage from '../components/ProgressiveImage.vue';
 
 export default {
@@ -487,6 +492,8 @@ export default {
         calculatedIndex !== this.currentPostIndex
       ) {
         this.currentPostIndex = calculatedIndex;
+        // The window moved: make sure the clips about to scroll in are loading.
+        this.primeNeighbouringVideos();
         const currentPost = this.posts[this.currentPostIndex];
         
         if (currentPost) {
@@ -569,7 +576,20 @@ export default {
     // visible post's video still buffers fully ahead of playback.
     videoPreloadAttr(post) {
       const distance = this.posts.indexOf(post) - this.currentPostIndex;
-      return Math.abs(distance) <= 1 ? 'auto' : 'metadata';
+      const near = distance >= -VIDEO_FRAME_RUNWAY_BEHIND && distance <= VIDEO_FRAME_RUNWAY_AHEAD;
+      return near ? 'auto' : 'metadata';
+    },
+    primeNeighbouringVideos() {
+      // The preload attribute is only a hint and phones ignore one set after the
+      // element was created, which leaves a clip entering the viewport with no
+      // frame to show. Loading the runway explicitly keeps the stand-in canvas
+      // painted before the post gets there.
+      return primeNeighbouringFrames(
+        this.posts,
+        this.currentPostIndex,
+        (post) => this.videoElements[this.getCompositeKey(post)] || null,
+        (post) => !!this.videoActiveStates[this.getCompositeKey(post)]
+      );
     },
     togglePlayPause(event) {
         const video = event.target;

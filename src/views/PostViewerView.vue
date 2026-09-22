@@ -92,6 +92,11 @@ import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
 import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
 import { postFilterMixin } from '../mixins/postFilterMixin';
+import {
+  primeNeighbouringFrames,
+  VIDEO_FRAME_RUNWAY_AHEAD,
+  VIDEO_FRAME_RUNWAY_BEHIND
+} from '../services/videoFramePriming.js';
 import BooruImage from '../components/BooruImage.vue';
 
 export default {
@@ -211,6 +216,7 @@ export default {
       // Scroll to initial post; IntersectionObserver handles autoplay for the visible post
       this.$nextTick(() => {
         this.scrollToInitialPost();
+        this.primeNeighbouringVideos();
       });
     },
     scrollToInitialPost() {
@@ -297,6 +303,8 @@ export default {
 
       if (closestPostIndex !== -1 && this.currentPostIndex !== closestPostIndex) {
         this.currentPostIndex = closestPostIndex;
+        // The runway moved: make sure the clips about to scroll in are loading.
+        this.primeNeighbouringVideos();
         const currentPost = this.posts[this.currentPostIndex];
         if (currentPost) {
           // Video elements are registered by setVideoRef, keyed by post id
@@ -445,7 +453,20 @@ export default {
     // long viewer list never pulls every clip at once.
     videoPreloadAttr(post) {
       const distance = this.posts.indexOf(post) - this.currentPostIndex;
-      return Math.abs(distance) <= 1 ? 'auto' : 'none';
+      return distance >= -VIDEO_FRAME_RUNWAY_BEHIND && distance <= VIDEO_FRAME_RUNWAY_AHEAD
+        ? 'auto' : 'none';
+    },
+    primeNeighbouringVideos() {
+      // The attribute above is only a hint, and engines are free to ignore one
+      // set after the element was created - phones ignore it, leaving the next
+      // clip frameless until playback starts. Loading the runway explicitly is
+      // what actually keeps a frame ready while it scrolls into view.
+      return primeNeighbouringFrames(
+        this.posts,
+        this.currentPostIndex,
+        (post) => this._videoElements?.[post.id] || null,
+        (post) => this.isVideoActive(post)
+      );
     },
     drawFrameToCanvas(post, video) {
       const canvas = this.videoCanvases[post.id];
