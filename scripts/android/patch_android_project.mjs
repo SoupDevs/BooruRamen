@@ -8,11 +8,12 @@
  * previously inserted before re-inserting).
  *
  *   1. Download permissions  - legacy WRITE_EXTERNAL_STORAGE + POST_NOTIFICATIONS
- *      (every build).
+  *      (every build).
  *   2. Sideload update plumbing - REQUEST_INSTALL_PACKAGES (inside markers, so it
  *      can be removed again) while the `sideload-updates` Cargo feature is in the
- *      default feature set. Dropping that feature (a Google Play build) also drops
- *      every trace of the sideload path from the generated project.
+ *      default feature set, plus the R8 keep rule the updater needs (see
+ *      ensureUpdaterProguardRules). Dropping that feature (a Google Play build)
+ *      also drops every trace of the sideload path from the generated project.
  *
  * The downloaded APK is shared with the installer through the FileProvider that
  * `tauri android init` already declares - never through a second one: Android
@@ -51,7 +52,11 @@ const repoRoot = findRepoRoot(scriptDir)
 const SIDELOAD_FEATURE = 'sideload-updates'
 const MARK_START = '<!-- booruramen:sideload-updates -->'
 const MARK_END = '<!-- /booruramen:sideload-updates -->'
+// The same marker idea, in ProGuard comment syntax.
+const MARK_PRO_START = '# booruramen:sideload-updates'
+const MARK_PRO_END = '# /booruramen:sideload-updates'
 const TEMPLATE_PATHS_RES = 'file_paths.xml'
+const PROGUARD_RULES = 'proguard-rules.pro'
 
 const warnings = []
 const applied = []
@@ -81,6 +86,8 @@ const identifier = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8')).identifier
 if (!identifier) fail('tauri.conf.json has no identifier')
 
 const manifestPath = path.join(androidAppDir, 'AndroidManifest.xml')
+// ProGuard rules sit in the gradle app module, one level above src/main.
+const androidAppModuleDir = path.join(repoRoot, 'src-tauri', 'gen', 'android', 'app')
 const resXmlDir = path.join(androidAppDir, 'res', 'xml')
 const mainActivityName = 'MainActivity.kt'
 const mainActivityPath = path.join(
@@ -127,12 +134,12 @@ function stripMarked(xml, start, end) {
 }
 
 /** Strip every block this script ever marked, so re-runs converge. */
-function stripAllMarked(xml) {
-  let next = xml
-  for (let i = 0; i < 10 && next.includes(MARK_START); i += 1) {
-    next = stripMarked(next, MARK_START, MARK_END)
+function stripAllMarked(text, start = MARK_START, end = MARK_END) {
+  let next = text
+  for (let i = 0; i < 10 && next.includes(start); i += 1) {
+    next = stripMarked(next, start, end)
   }
-  if (next.includes(MARK_START)) fail('unbalanced sideload-update markers in AndroidManifest.xml')
+  if (next.includes(start)) fail('unbalanced sideload-update markers in the generated project')
   return next
 }
 
@@ -176,6 +183,48 @@ function ensureUpdateCachePath() {
   }
   const next = paths.replace(/\n/g, eolPaths)
   if (next !== original) fs.writeFileSync(pathsPath, next)
+}
+
+/**
+ * Keep the one androidx method the updater calls from Rust.
+ *
+ * The install intent is built over JNI, and `getUriForFile` is looked up by
+ * name. R8 cannot see that reference, so a minified build renames the static
+ * factory away and the call fails with NoSuchMethodError - which reaches the
+ * user as "JNI error: Java exception was thrown" with no installer in sight.
+ * Debug builds are not minified, so this only ever broke in release builds.
+ */
+function ensureUpdaterProguardRules() {
+  const rulesPath = path.join(androidAppModuleDir, PROGUARD_RULES)
+  const original = fs.existsSync(rulesPath) ? fs.readFileSync(rulesPath, 'utf8') : ''
+  const eolRules = original.includes('\r\n') ? '\r\n' : '\n'
+  let rules = stripAllMarked(original.replace(/\r\n/g, '\n'), MARK_PRO_START, MARK_PRO_END)
+
+  if (rules.includes('getUriForFile')) {
+    note(`${PROGUARD_RULES}: already keeps FileProvider.getUriForFile()`)
+  } else {
+    const block = [
+      MARK_PRO_START,
+      '# The updater builds the installer intent from Rust over JNI and looks',
+      '# FileProvider.getUriForFile() up by name. R8 cannot see that reference, so a',
+      '# minified build renames the method away and every install fails with',
+      '# "JNI error: Java exception was thrown" (NoSuchMethodError) - release builds',
+      '# only, because debug builds are not minified.',
+      '-keep class androidx.core.content.FileProvider {',
+      '    public static android.net.Uri getUriForFile(android.content.Context, java.lang.String, java.io.File);',
+      '}',
+      MARK_PRO_END
+    ].join('\n')
+    note(`${PROGUARD_RULES}: keeping FileProvider.getUriForFile() for the updater`)
+    const trimmed = rules.replace(/[\nt ]+$/, '')
+    rules = (trimmed.length ? trimmed + '\n\n' : '') + block + '\n'
+  }
+
+  const next = rules.replace(/\n/g, eolRules)
+  if (next !== original) fs.writeFileSync(rulesPath, next)
+  if (!fs.readFileSync(rulesPath, 'utf8').includes('-keep class androidx.core.content.FileProvider')) {
+    fail(`${PROGUARD_RULES} does not keep FileProvider.getUriForFile()`)
+  }
 }
 
 /** Remove a `<provider>` element identified by its FileProvider authority. */
@@ -283,6 +332,7 @@ if (sideload) {
   }
 
   ensureUpdateCachePath()
+  ensureUpdaterProguardRules()
 } else {
   // Feature off: leave no trace of the sideload path, including in a manifest
   // patched by something older than this script.
@@ -303,6 +353,15 @@ if (sideload) {
     if (stripped !== original) {
       fs.writeFileSync(pathsPath, stripped)
       note(`${TEMPLATE_PATHS_RES}: removed the updates cache path`)
+    }
+  }
+  const rulesPath = path.join(androidAppModuleDir, PROGUARD_RULES)
+  if (fs.existsSync(rulesPath)) {
+    const original = fs.readFileSync(rulesPath, 'utf8')
+    const stripped = stripAllMarked(original, MARK_PRO_START, MARK_PRO_END)
+    if (stripped !== original) {
+      fs.writeFileSync(rulesPath, stripped)
+      note(`${PROGUARD_RULES}: removed the updater keep rule`)
     }
   }
 }

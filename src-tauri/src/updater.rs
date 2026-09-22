@@ -340,9 +340,10 @@ where
     .map_err(|_| "The Android installer did not respond".to_string())?
 }
 
-/// Run `f`, and if it failed with a Java exception pending, print that
-/// exception to logcat before handing the message back. A bare JNI error
-/// string hides the actual cause.
+/// Run `f`, and if it failed with a Java exception pending, describe that
+/// exception in logcat and append its class and message to the error. The
+/// message the user sees is the only diagnostic they can pass on, and a bare
+/// "Java exception was thrown" hides the cause completely.
 #[cfg(all(target_os = "android", feature = "sideload-updates"))]
 fn with_java_exceptions<F>(env: &mut jni::JNIEnv, f: F) -> Result<(), String>
 where
@@ -350,10 +351,43 @@ where
 {
   let result = f(env);
   if result.is_err() && env.exception_check().unwrap_or(false) {
+    // Read the exception before clearing it: the throwable reference stays
+    // valid for the rest of this native frame.
+    let summary = pending_exception_summary(env);
     let _ = env.exception_describe();
     let _ = env.exception_clear();
+    if let (Err(message), Some(summary)) = (&result, summary) {
+      return Err(format!("{message} ({summary})"));
+    }
   }
   result
+}
+
+/// The pending Java exception as "class: message", for the error the webview
+/// shows. Falls back to None when it cannot be read, in which case the call
+/// site's own message stands on its own.
+#[cfg(all(target_os = "android", feature = "sideload-updates"))]
+fn pending_exception_summary(env: &mut jni::JNIEnv) -> Option<String> {
+  use jni::objects::JString;
+
+  let throwable = env.exception_occurred().ok()?;
+  if throwable.is_null() {
+    return None;
+  }
+  let text = env
+    .call_method(&throwable, "toString", "()Ljava/lang/String;", &[])
+    .ok()?
+    .l()
+    .ok()?;
+  let java_text = JString::from(text);
+  let text = env.get_string(&java_text).ok()?;
+  let text: String = text.into();
+  // The whole point is to shorten "it threw" into something actionable; a
+  // monster message helps nobody.
+  if text.len() > 300 {
+    return Some(format!("{}...", &text[..300]));
+  }
+  Some(text)
 }
 
 #[cfg(all(target_os = "android", feature = "sideload-updates"))]
