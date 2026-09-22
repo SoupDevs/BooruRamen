@@ -27,3 +27,7 @@ src-tauri/target/*
 # Android signing
 src-tauri/gen/android/keystore.properties
 *.jks
+
+# Local agent working files (not part of the project)
+IDEA.md
+.hermes/
