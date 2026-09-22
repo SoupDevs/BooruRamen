@@ -12,7 +12,12 @@
     <div class="h-screen relative overflow-hidden">
     
       <!-- Post details sidebar -->
-      <PostDetailsSidebar :show="showPostDetails" :post="currentPost" @report-block="openReportModal" />
+      <PostDetailsSidebar
+        :show="showPostDetails"
+        :post="currentPost"
+        @report-block="openReportModal"
+        @share="openShareSheet"
+      />
       
       <button 
         v-if="currentPost"
@@ -35,6 +40,7 @@
             :commentsSheetHeight="commentsSheetHeight"
             @current-post-changed="updateCurrentPost"
             @video-state-change="handleVideoStateChange"
+            @post-like-request="onPostLikeRequest"
           ></router-view>
         </transition>
         
@@ -268,6 +274,13 @@
         @close="commentsPost = null; commentsSheetHeight = 0"
         @height-change="commentsSheetHeight = $event"
       />
+
+      <!-- Share sheet: share targets on mobile, Copy Link everywhere -->
+      <ShareSheet
+        v-if="sharePost"
+        :post="sharePost"
+        @close="sharePost = null"
+      />
     </div>
     <BottomNavBar @navigate-feed="navigateToFeed" />
 
@@ -291,6 +304,7 @@ import { useSettingsStore } from './stores/settings';
 import { usePlayerStore } from './stores/player';
 import { useInteractionsStore } from './stores/interactions';
 import { useUpdaterStore } from './stores/updater';
+import { useEffectsStore } from './stores/effects';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
 import recommendationSystem from './services/RecommendationSystem.js';
@@ -301,6 +315,7 @@ import CommentsSheet from './components/CommentsSheet.vue';
 import PostDetailsSidebar from './components/PostDetailsSidebar.vue';
 import ReportBlockModal from './components/ReportBlockModal.vue';
 import SettingsSidebar from './components/SettingsSidebar.vue';
+import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 
 export default {
@@ -317,6 +332,7 @@ export default {
     PostDetailsSidebar,
     ReportBlockModal,
     SettingsSidebar,
+    ShareSheet,
     UpdateSplash,
   },
   data() {
@@ -335,6 +351,9 @@ export default {
 
       // Report/Block splash state
       reportModalPost: null,
+
+      // Share sheet state
+      sharePost: null,
 
       routerViewKey: 0,
       pageTransitionName: 'page-fade',
@@ -641,6 +660,29 @@ export default {
       if (!this.currentPost) return;
       this.reportModalPost = this.currentPost;
     },
+
+    openShareSheet(post) {
+      this.sharePost = post || this.currentPost;
+    },
+
+    // A double tap on a post always means "like": it never un-likes, which
+    // is how the gesture reads in every other app. A post that is already
+    // liked just replays the feedback.
+    onPostLikeRequest(post) {
+      if (!post) return;
+      if (post.liked) {
+        this.showMediaBurst(post, 'like');
+        return;
+      }
+      this.toggleLike(post);
+    },
+
+    // The media belongs to whichever view is on screen, so the burst is
+    // requested through the effects store and played by that view.
+    showMediaBurst(post, type) {
+      if (!post) return;
+      useEffectsStore().triggerBurst(post, type);
+    },
     onReported() {
       this.reportModalPost = null;
       // Refresh the feed so newly blocked content (including the reported post
@@ -675,6 +717,7 @@ export default {
             if (this.downloadLiked) {
               this.downloadPostFile(post, 'liked');
             }
+            this.showMediaBurst(post, 'like');
         }
     },
     toggleDislike(post) {
@@ -695,6 +738,7 @@ export default {
                 value: 0,
                 metadata: { post }
             });
+            this.showMediaBurst(post, 'dislike');
         }
     },
     toggleFavorite(post) {
@@ -710,6 +754,9 @@ export default {
         // Auto-download if enabled
         if (post.favorited && this.downloadFavorited) {
           this.downloadPostFile(post, 'favorited');
+        }
+        if (post.favorited) {
+          this.showMediaBurst(post, 'favorite');
         }
     },
 

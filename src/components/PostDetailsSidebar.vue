@@ -90,11 +90,12 @@
             View in Browser
           </button>
           <button
-            @click="copyLink"
-            class="relative text-gray-400 hover:text-white transition-colors p-2 rounded-full hover:bg-gray-800"
-            title="Copy link"
+            @click="share"
+            class="relative flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors p-2 rounded-full hover:bg-gray-800"
+            :title="isMobile ? 'Share post' : 'Copy link'"
           >
-            {{ linkCopied ? 'Copied!' : 'Copy Link' }}
+            <Share2 class="h-4 w-4" />
+            Share
             <span
               v-if="linkCopied"
               class="absolute top-0 right-0 bottom-0 left-0 bg-green-600 rounded-full flex items-center justify-center text-white"
@@ -120,16 +121,18 @@
 
 <script>
 import TagSection from './TagSection.vue';
+import { Share2 } from 'lucide-vue-next';
 import { isTauri } from '../services/DownloadService';
+import { copyToClipboard, isMobilePlatform } from '../services/ShareService';
 
 export default {
   name: 'PostDetailsSidebar',
-  components: { TagSection },
+  components: { TagSection, Share2 },
   props: {
     show: Boolean,
     post: Object,
   },
-  emits: ['report-block'],
+  emits: ['report-block', 'share'],
   data() {
     return {
       linkCopied: false,
@@ -198,6 +201,9 @@ export default {
         return source.charAt(0).toUpperCase() + source.slice(1);
       }
     },
+    isMobile() {
+      return isMobilePlatform();
+    },
     postUrl() {
       if (!this.post) return null;
       return this.post.post_url || (this.post.id ? `https://danbooru.donmai.us/posts/${this.post.id}` : null);
@@ -233,15 +239,23 @@ export default {
     openInBrowser() {
       this.openExternal(this.postUrl);
     },
-    copyLink() {
+    share() {
       if (!this.post) return;
-      const url = this.postUrl;
-      navigator.clipboard.writeText(url).then(() => {
-        this.linkCopied = true;
-        setTimeout(() => {
-          this.linkCopied = false;
-        }, 1500);
-      });
+      // Phones get the share sheet; desktop keeps the old one-tap copy.
+      if (this.isMobile) {
+        this.$emit('share', this.post);
+        return;
+      }
+      this.copyLink();
+    },
+    async copyLink() {
+      if (!this.post) return;
+      const copied = await copyToClipboard(this.postUrl);
+      if (!copied) return;
+      this.linkCopied = true;
+      setTimeout(() => {
+        this.linkCopied = false;
+      }, 1500);
     }
   }
 }

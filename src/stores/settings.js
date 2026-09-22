@@ -11,6 +11,12 @@ export const useSettingsStore = defineStore('settings', {
         autoScrollSpeed: 'medium',
         disableScrollAnimation: false,
         disableHistory: false,
+        // Post interaction feedback: the double-tap gesture and the burst
+        // played over a post's media for each kind of interaction
+        doubleTapToLike: true,
+        showLikeAnimation: true,
+        showDislikeAnimation: true,
+        showFavoriteAnimation: true,
         autoplayVideos: true,
         loopVideos: true,
         mediaType: { images: false, videos: true },
@@ -139,6 +145,10 @@ export const useSettingsStore = defineStore('settings', {
                     autoScrollSpeed: this.autoScrollSpeed,
                     disableScrollAnimation: this.disableScrollAnimation,
                     disableHistory: this.disableHistory,
+                    doubleTapToLike: this.doubleTapToLike,
+                    showLikeAnimation: this.showLikeAnimation,
+                    showDislikeAnimation: this.showDislikeAnimation,
+                    showFavoriteAnimation: this.showFavoriteAnimation,
                     autoplayVideos: this.autoplayVideos,
                     loopVideos: this.loopVideos,
                     mediaType: this.mediaType,

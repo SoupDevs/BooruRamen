@@ -55,7 +55,7 @@
                 </div>
                 <div class="text-left">
                   <div class="font-medium">UI</div>
-                  <div class="text-xs text-gray-400">Theme, colors, fonts</div>
+                  <div class="text-xs text-gray-400">Theme, colors, gestures</div>
                 </div>
               </div>
               <svg viewBox="0 0 24 24" class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" stroke-width="2">
@@ -208,6 +208,39 @@
                   >
                     Reset custom theme
                   </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Gestures & animations -->
+            <div class="p-4 bg-gray-800 rounded-lg">
+              <div class="mb-3">
+                <label class="font-medium">Gestures &amp; Animations</label>
+                <p class="text-xs text-gray-400 mt-1">
+                  Control the double-tap gesture and the feedback shown over a post's media.
+                </p>
+              </div>
+
+              <div class="space-y-2">
+                <div
+                  v-for="option in interactionOptions"
+                  :key="option.key"
+                  class="flex items-center justify-between p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
+                  @click="toggleInteraction(option.key)"
+                >
+                  <div class="flex flex-col">
+                    <label class="text-sm font-medium cursor-pointer">{{ option.label }}</label>
+                    <span class="text-xs text-gray-400">{{ option.hint }}</span>
+                  </div>
+                  <div
+                    class="relative inline-flex h-6 w-11 items-center rounded-full"
+                    :class="isInteractionEnabled(option.key) ? 'bg-pink-600' : 'bg-gray-600'"
+                  >
+                    <span
+                      class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                      :class="isInteractionEnabled(option.key) ? 'translate-x-6' : 'translate-x-1'"
+                    ></span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -918,6 +951,14 @@ export default {
       // Folder picker status
       folderStatus: null,
 
+      // Gesture/animation switches; keys are settings-store flags
+      interactionOptions: [
+        { key: 'doubleTapToLike', label: 'Double-Tap to Like', hint: 'Double-tap a post to like it' },
+        { key: 'showLikeAnimation', label: 'Like Animation', hint: 'Hearts over the media when a post is liked' },
+        { key: 'showDislikeAnimation', label: 'Dislike Animation', hint: 'Thumbs down over the media when a post is disliked' },
+        { key: 'showFavoriteAnimation', label: 'Favorite Animation', hint: 'Star over the media when a post is favorited' },
+      ],
+
       // Reported & Blocked management
       reportedArtists: [],
       reportedUploaders: [],
@@ -929,6 +970,7 @@ export default {
     ...mapWritableState(useSettingsStore, [
       'disableHistory', 'debugMode', 'customSources', 'activeSource',
       'tagAlwaysInclude', 'tagNeverInclude',
+      'doubleTapToLike', 'showLikeAnimation', 'showDislikeAnimation', 'showFavoriteAnimation',
       'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders',
       'theme', 'customTheme'
     ]),
@@ -1100,6 +1142,16 @@ export default {
     },
     toggleDebugMode() {
       this.debugMode = !this.debugMode;
+      this.saveSettings();
+    },
+
+    // Gesture/animation switches read and write the store flags mapped above,
+    // so a change survives leaving the page and the next launch.
+    isInteractionEnabled(key) {
+      return !!this[key];
+    },
+    toggleInteraction(key) {
+      this[key] = !this[key];
       this.saveSettings();
     },
 

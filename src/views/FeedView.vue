@@ -28,13 +28,20 @@
       <div
         v-for="post in visiblePosts"
         :key="getCompositeKey(post)"
-        class="w-full snap-start snap-always flex justify-center relative shrink-0"
+        class="w-full snap-start snap-always flex justify-center relative shrink-0 touch-manipulation"
         :class="commentsSheetHeight > 0 ? 'items-end' : 'items-center'"
         :style="postContainerStyle"
+        @click="onMediaTap(post, $event)"
         v-observe-visibility
       >
         <!-- Post media -->
         <div class="relative h-full max-w-full flex items-center justify-center">
+          <!-- Feedback for the interaction that was just logged -->
+          <PostActionBurst
+            v-if="mediaBurst(post)"
+            :key="mediaBurst(post).id"
+            :type="mediaBurst(post).type"
+          />
           <ProgressiveImage
             v-if="['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(getFileExtension(post))"
             :src="post.file_url"
@@ -125,11 +132,16 @@ import {
   VIDEO_FRAME_RUNWAY_BEHIND
 } from '../services/videoFramePriming.js';
 import ProgressiveImage from '../components/ProgressiveImage.vue';
+import PostActionBurst from '../components/PostActionBurst.vue';
+import { postGestureMixin } from '../mixins/postGestureMixin';
+import { postKey } from '../services/postKey';
 
 export default {
   name: 'FeedView',
+  mixins: [postGestureMixin],
   components: {
     ProgressiveImage,
+    PostActionBurst,
   },
   props: {
     commentsSheetHeight: {
@@ -274,8 +286,7 @@ export default {
   },
   methods: {
     getCompositeKey(post) {
-      if (!post) return '';
-      return post.source ? `${post.source}|${post.id}` : String(post.id);
+      return postKey(post);
     },
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
