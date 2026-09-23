@@ -1089,24 +1089,28 @@ export default {
   100% { opacity: 1; transform: translateY(0); }
 }
 
-/* Apply the animation to the fixed buttons */
-.fixed.flex.flex-col button {
+/* Apply the animation to the action bar's own buttons. Direct children
+   only: dialogs that are themselves .fixed.flex.flex-col (the share sheet)
+   used to inherit this fade and its nth-child delays, so a single tile
+   re-ran the animation whenever the grid re-rendered and blinked. The
+   share grid animates itself, in reading order, instead. */
+.fixed.flex.flex-col > button {
   animation: fadeIn 0.3s ease-out forwards;
 }
 
 /* Stagger the animations for each button */
-.fixed.flex.flex-col button:nth-child(1) {
+.fixed.flex.flex-col > button:nth-child(1) {
   animation-delay: 0s;
 }
-.fixed.flex.flex-col button:nth-child(2) {
+.fixed.flex.flex-col > button:nth-child(2) {
   animation-delay: 0.1s;
 }
-.fixed.flex.flex-col button:nth-child(3) {
+.fixed.flex.flex-col > button:nth-child(3) {
   animation-delay: 0.2s;
 }
 
 /* Add a box-shadow to the buttons to make them stand out against any background */
-.fixed.flex.flex-col button {
+.fixed.flex.flex-col > button {
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 

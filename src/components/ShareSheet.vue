@@ -56,10 +56,12 @@
              a per-network brand hex. -->
         <div v-if="gridTargets.length" class="grid grid-cols-4 gap-x-2 gap-y-4 px-4 pt-4 pb-2">
           <button
-            v-for="target in gridTargets"
-            :key="target.id"
+            v-for="(target, index) in gridTargets"
+            :key="revealSeq + '-' + target.id"
             type="button"
             class="flex flex-col items-center gap-1.5 group"
+            :class="leavingIds.includes(target.id) ? 'share-tile-out' : 'share-tile-in'"
+            :style="tileStyle(target, index)"
             :data-share-target="target.id"
             @click="shareTo(target)"
           >
@@ -151,6 +153,13 @@ const DRAG_CLOSE_DISTANCE = 96;
 const DRAG_FLING_VELOCITY = 0.6;
 const DRAG_FLING_MIN_DISTANCE = 24;
 const DRAG_SETTLE_MS = 180;
+// The grid unfolds in reading order — left to right, then the next row —
+// both when the sheet opens and when More expands.
+const REVEAL_BASE_MS = 100;
+const REVEAL_STAGGER_MS = 40;
+// Collapsing swipes the hidden tiles back out, quickly and in that order.
+const LEAVE_STAGGER_MS = 35;
+const LEAVE_MS = 150;
 
 export default {
   name: 'ShareSheet',
@@ -172,6 +181,14 @@ export default {
       linkCopied: false,
       // Everything beyond what this user actually uses waits behind More.
       showAll: false,
+      // Reveal state: the key bumps to replay the entrance, the order
+      // freezes so a layout shift can never change a finished tile's
+      // animation-delay (a changed delay restarts it — that was the blink),
+      // and leavingIds holds the collapse animation open while it plays.
+      revealSeq: 0,
+      tileOrder: {},
+      leavingIds: [],
+      collapseTimer: null,
       downloading: false,
       downloaded: false,
       downloadError: false,
@@ -257,16 +274,26 @@ export default {
       return 'Download';
     }
   },
+  created() {
+    this.tileOrder = this.snapshotOrder();
+  },
   beforeUnmount() {
     clearTimeout(this.closeTimer);
     clearTimeout(this.copiedTimer);
     clearTimeout(this.downloadTimer);
+    clearTimeout(this.collapseTimer);
   },
   methods: {
     shareTo(target) {
       if (!target) return;
       if (target.action === 'more') {
-        this.showAll = !this.showAll;
+        if (this.leavingIds.length) return; // a collapse is already running
+        if (this.showAll) {
+          this.collapseGrid();
+          return;
+        }
+        this.showAll = true;
+        this.revealNow();
         return;
       }
       // Download is the one entry that stays in the app, so it neither opens
@@ -280,6 +307,43 @@ export default {
       useSettingsStore().recordShareUse(target.id);
       openExternalUrl(target.url);
       this.requestClose();
+    },
+    snapshotOrder() {
+      const order = {};
+      this.gridTargets.forEach((target, index) => {
+        order[target.id] = index;
+      });
+      return order;
+    },
+    // Replaying the reveal means re-mounting the tiles under a new key.
+    revealNow() {
+      this.revealSeq += 1;
+      this.tileOrder = this.snapshotOrder();
+    },
+    collapseGrid() {
+      const leaving = this.hiddenTargets.map(target => target.id);
+      if (!leaving.length) {
+        this.showAll = false;
+        return;
+      }
+      // Keep them mounted while they swipe out, then drop them for real.
+      this.leavingIds = leaving;
+      const total = LEAVE_STAGGER_MS * (leaving.length - 1) + LEAVE_MS + 60;
+      clearTimeout(this.collapseTimer);
+      this.collapseTimer = setTimeout(() => {
+        this.showAll = false;
+        this.leavingIds = [];
+      }, total);
+    },
+    tileStyle(target, index) {
+      const at = this.leavingIds.indexOf(target.id);
+      if (at !== -1) {
+        return { animationDelay: `${at * LEAVE_STAGGER_MS}ms` };
+      }
+      // Positions come from the frozen reveal order, never the live grid.
+      const pos = this.tileOrder[target.id];
+      const at2 = pos === undefined ? index : pos;
+      return { animationDelay: `${REVEAL_BASE_MS + at2 * REVEAL_STAGGER_MS}ms` };
     },
     targetLabel(target) {
       if (target.action === 'download') return this.downloadLabel;
@@ -424,5 +488,39 @@ export default {
   to {
     opacity: 0;
   }
+}
+
+/* The grid's own entrance: one tile after another in reading order. The
+   dialog deliberately does not use App.vue's global fadeIn rules — those
+   are for the action bar and used to leak in here through the shared
+   .fixed.flex.flex-col class. */
+@keyframes share-tile-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes share-tile-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(14px) scale(0.92);
+  }
+}
+
+.share-tile-in {
+  animation: share-tile-in 300ms ease-out both;
+}
+
+.share-tile-out {
+  animation: share-tile-out 150ms ease-in both;
 }
 </style>
