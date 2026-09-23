@@ -23,7 +23,8 @@
         v-if="currentPost"
         @click="togglePostDetails" 
         class="absolute left-0 z-30 p-2 rounded-r-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
-        :class="focusChromeClass"
+        :class="sidebarToggleClass(showPostDetails)"
+        data-sidebar-toggle="details"
         :style="{ 
           transform: showPostDetails ? 'translateX(320px)' : 'translateX(0)',
           top: `calc(1rem + env(safe-area-inset-top, 0))`
@@ -41,6 +42,7 @@
             :commentsSheetHeight="commentsSheetHeight"
             @current-post-changed="updateCurrentPost"
             @video-state-change="handleVideoStateChange"
+            @focus-image-tap="revealFocusUiFromImageTap"
             @post-like-request="onPostLikeRequest"
             @post-favorite-request="onPostFavoriteRequest"
             @post-dislike-request="onPostDislikeRequest"
@@ -225,7 +227,8 @@
         v-if="showSettingsToggle"
         @click="showSettingsSidebar = !showSettingsSidebar"
         class="absolute right-0 z-30 p-2 rounded-l-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
-        :class="focusChromeClass"
+        :class="sidebarToggleClass(showSettingsSidebar)"
+        data-sidebar-toggle="settings"
         :style="{
           transform: showSettingsSidebar ? 'translateX(-320px)' : 'translateX(0)',
           top: `calc(1rem + env(safe-area-inset-top, 0))`
@@ -328,7 +331,8 @@ import SettingsSidebar from './components/SettingsSidebar.vue';
 import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 
-// Focus mode: how long the chrome stays on screen after the last input.
+// Focus mode: how long the chrome stays on screen after the last input on
+// classic routes, and how long a tap-revealed chrome lingers on the feed.
 // Deliberately short - the controls are there to be used, then get out of the way.
 const FOCUS_IDLE_MS = 1000;
 
@@ -361,6 +365,9 @@ export default {
 
       // Focus mode: true while the chrome has faded out for lack of input
       focusUiHidden: false,
+      // Focus mode (feed/viewer): a lone tap on an image has asked for the
+      // chrome; cleared by the idle window or a post/route change.
+      focusImageRevealed: false,
 
       // Comments sheet state
       commentsPost: null,
@@ -409,6 +416,12 @@ export default {
       if (this.commentsPost && newPost && newPost.id !== this.commentsPost.id) {
         this.commentsPost = newPost;
       }
+
+      // A new post gets a fresh focus state: the previous image's tap
+      // reveal must not carry over.
+      this.focusImageRevealed = false;
+      clearTimeout(this._focusImageTimer);
+      this.applyFocusChrome();
     },
     debugMode(newVal) {
         if (newVal && this.currentPost) {
@@ -431,6 +444,12 @@ export default {
       if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
         this.showSettingsSidebar = false;
       }
+      // Focus reveal state never carries across routes; arriving somewhere
+      // new re-evaluates (event-driven routes apply their rules, other
+      // routes get the classic show-then-idle-fade).
+      this.focusImageRevealed = false;
+      clearTimeout(this._focusImageTimer);
+      this.pokeFocusUi();
     },
     showSettingsSidebar(isOpen) {
       if (!isOpen) return;
@@ -447,6 +466,8 @@ export default {
       this.scheduleControlsHide();
     },
     isPlaying(playing) {
+      // Focus mode: chrome follows the pause state on the feed/viewer.
+      this.applyFocusChrome();
       if (playing) {
         this.scheduleControlsHide();
       } else {
@@ -457,8 +478,12 @@ export default {
       }
     },
     focusMode(enabled) {
+      clearTimeout(this._focusImageTimer);
+      this.focusImageRevealed = false;
       if (enabled) {
-        // Start the idle clock now so the chrome fades even without input
+        // Re-evaluate immediately: a paused video keeps the chrome, anything
+        // else fades out (right away on the feed, after the idle window
+        // elsewhere).
         this.pokeFocusUi();
       } else {
         clearTimeout(this._focusTimer);
@@ -537,6 +562,12 @@ export default {
       return this.focusMode && this.focusUiHidden
         ? 'focus-chrome focus-chrome-hidden'
         : 'focus-chrome';
+    },
+    // Focus mode drives chrome from media state only where that state is
+    // wired end to end: the feed and the viewer emit play/pause and carry
+    // the tap gestures. Settings pages keep the classic idle fade.
+    focusEventDriven() {
+      return this.$route.name === 'Home' || this.$route.name === 'Viewer';
     },
   },
   methods: {
@@ -913,18 +944,63 @@ export default {
       this.showVideoControls = true;
       this.scheduleControlsHide();
     },
-    // Focus mode: the chrome fades out shortly after the last input and comes
-    // straight back on the next touch, move, wheel or key press.
+    // Focus mode, event-driven routes (feed/viewer): chrome visibility comes
+    // from the media itself — a paused video, or a lone tap on an image
+    // (revealed through the same 200ms single/double-tap delay, so a double
+    // tap still likes instead). Other routes keep the classic idle fade.
+    applyFocusChrome() {
+      if (!this.focusMode) {
+        this.focusUiHidden = false;
+        return;
+      }
+      if (!this.focusEventDriven) return;
+      const shown = this.currentPost && this.isCurrentPostVideo
+        ? !this.isPlaying
+        : this.focusImageRevealed;
+      this.focusUiHidden = !shown;
+    },
+    // A lone tap on a still image: hold the chrome for the idle window,
+    // extended by further activity, then let it fade.
+    revealFocusUiFromImageTap() {
+      if (!this.focusMode || !this.focusEventDriven) return;
+      if (this.currentPost && this.isCurrentPostVideo) return;
+      this.focusImageRevealed = true;
+      this._armImageRevealIdle();
+      this.applyFocusChrome();
+    },
+    _armImageRevealIdle() {
+      clearTimeout(this._focusImageTimer);
+      this._focusImageTimer = setTimeout(() => {
+        this.focusImageRevealed = false;
+        this.applyFocusChrome();
+      }, FOCUS_IDLE_MS);
+    },
+    // Generic input (pointer, wheel, key): on event-driven routes it never
+    // reveals the chrome on its own — at most it extends an image reveal
+    // that is already on screen. Classic routes keep "show, fade after
+    // FOCUS_IDLE_MS".
+    // A sidebar's open/close handle must survive that fade while its
+    // sidebar is open — hiding it would trap the panel on screen.
+    sidebarToggleClass(isOpen) {
+      return isOpen ? 'focus-chrome' : this.focusChromeClass;
+    },
     pokeFocusUi() {
       clearTimeout(this._focusTimer);
       if (!this.focusMode) {
         this.focusUiHidden = false;
         return;
       }
-      this.focusUiHidden = false;
-      this._focusTimer = setTimeout(() => {
-        if (this.focusMode) this.focusUiHidden = true;
-      }, FOCUS_IDLE_MS);
+      if (!this.focusEventDriven) {
+        this.focusUiHidden = false;
+        this._focusTimer = setTimeout(() => {
+          if (this.focusMode && !this.focusEventDriven) this.focusUiHidden = true;
+        }, FOCUS_IDLE_MS);
+        return;
+      }
+      if (this.focusImageRevealed && !(this.currentPost && this.isCurrentPostVideo)) {
+        this._armImageRevealIdle();
+      }
+      this.applyFocusChrome();
     },
     // Drive the seek bar from the media clock every frame instead of the
     // ~4Hz timeupdate event, so it fills smoothly even on low-fps videos.
@@ -1115,6 +1191,9 @@ export default {
       if (DownloadService.isTauri()) {
           useUpdaterStore().checkForUpdates({ manual: false });
       }
+      // Focus mode starts from a defined state (hidden on the feed unless
+      // the current clip is already paused).
+      this.applyFocusChrome();
   },
   beforeUnmount() {
       window.removeEventListener('keydown', this.handleKeydown);
@@ -1122,6 +1201,7 @@ export default {
       window.removeEventListener('pointerdown', this.handleUserActivity);
       window.removeEventListener('wheel', this.pokeFocusUi, { passive: true });
       clearTimeout(this._focusTimer);
+      clearTimeout(this._focusImageTimer);
       clearTimeout(this._hideControlsTimer);
       this.stopProgressLoop();
   }

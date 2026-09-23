@@ -578,6 +578,12 @@ export default {
     onMediaSingleTap(event) {
       this.togglePlayPause(event);
     },
+    // Deferred single tap on a still image: in focus mode this is the only
+    // way to call the chrome back — the 200ms window has already proven it
+    // wasn't a double-tap like.
+    onMediaImageTap() {
+      this.$emit('focus-image-tap');
+    },
     togglePlayPause(event) {
         const video = event.target;
         if (video.paused) video.play();

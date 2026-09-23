@@ -104,10 +104,6 @@
         <div class="flex items-center justify-between gap-3">
           <div>
             <label class="text-sm font-medium">Focus mode</label>
-            <p class="text-xs text-gray-400 mt-0.5">
-              Fade the on-screen controls out while you are not interacting, and
-              bring them straight back on the next touch.
-            </p>
           </div>
           <button 
             @click="focusMode = !focusMode" 

@@ -32,10 +32,11 @@ const TAP_SUPPRESS_MS = 500;  // window where a gesture swallows its trailing cl
  * favorite, swipe left to dislike, hold a video for a second to scrub).
  *
  * Tap handling rides on click (a drag or a scroll never produces one). A
- * single tap over a video is held back for SINGLE_TAP_DELAY_MS before it is
- * acted on: if a second tap lands inside that window the pair is a double tap
- * (like/unlike) and the pending pause/play is dropped; otherwise the single
- * tap fires 'media-single-tap' and the host toggles playback.
+ * single tap is held back for SINGLE_TAP_DELAY_MS before it is acted on: if
+ * a second tap lands inside that window the pair is a double tap
+ * (like/unlike) and the pending action is dropped; otherwise the single tap
+ * calls onMediaSingleTap (video: toggle playback) or onMediaImageTap
+ * (stills: hosts may reveal chrome).
  *
  * The swipe/hold detectors ride on pointer events on the media row:
  *   - vertical movement is a scroll and cancels everything,
@@ -50,8 +51,8 @@ const TAP_SUPPRESS_MS = 500;  // window where a gesture swallows its trailing cl
  *
  * Hosts must:
  *   - call onMediaTap(post, event) from a click handler covering the media,
- *   - implement onMediaSingleTap(event) to toggle playback (the default
- *     implementation is a no-op),
+ *   - implement onMediaSingleTap(event) to toggle playback and
+ *     onMediaImageTap(event) for stills (both default to no-ops),
  *   - forward onMediaPointerDown/Move/Up/Cancel from pointer handlers on the
  *     same element,
  *   - listen for 'post-like-request', 'post-favorite-request',
@@ -109,31 +110,39 @@ export const postGestureMixin = {
 
       this._lastMediaTap = { key, time: now, x: event.clientX, y: event.clientY };
 
-      // A single tap only means anything over a video (pause/play); image
-      // taps exist purely as (potential) double-tap likes.
-      if (!this._tapTargetsVideo(event)) return;
+      // The same deferral serves both kinds of media: on a video the single
+      // tap toggles playback, on a still image the host may reveal chrome —
+      // and either way a second tap inside the window wins as a like.
+      const runSingleTap = () => {
+        if (this.isTapSuppressed()) return;
+        if (this._tapTargetsVideo(event)) {
+          this.onMediaSingleTap(event);
+        } else {
+          this.onMediaImageTap(event);
+        }
+      };
 
       // Double-tap switched off: nothing to disambiguate, act now.
       if (!this.doubleTapToLike) {
-        this.onMediaSingleTap(event);
+        runSingleTap();
         return;
       }
 
-      // Hold the pause/play back for a beat so a second tap can still turn
-      // the gesture into a like.
       this._clearSingleTap();
-      this._singleTapTimer = setTimeout(() => {
-        this._singleTapTimer = null;
-        if (this.isTapSuppressed()) return;
-        this.onMediaSingleTap(event);
-      }, SINGLE_TAP_DELAY_MS);
+      this._singleTapTimer = setTimeout(runSingleTap, SINGLE_TAP_DELAY_MS);
     },
 
     /**
-     * Deferred single tap landed. A no-op here; hosts override it to toggle
-     * playback (they own the media element).
+     * Deferred single tap landed on a video. A no-op here; hosts override it
+     * to toggle playback (they own the media element).
      */
     onMediaSingleTap() {},
+
+    /**
+     * Deferred single tap landed on a still image. A no-op here; hosts
+     * override it (focus mode uses it to reveal the chrome).
+     */
+    onMediaImageTap() {},
 
     /** True when the tap landed on (or inside) a video element. */
     _tapTargetsVideo(event) {
