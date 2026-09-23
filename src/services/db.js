@@ -14,7 +14,7 @@
  * Replaces localStorage for better performance and unlimited storage
  */
 import Dexie from 'dexie';
-import { getActiveProfileDbName, DEFAULT_DB_NAME } from './ProfileService.js';
+import { getActiveProfileDbName, DEFAULT_DB_NAME, applyProfileSchema } from './ProfileService.js';
 
 /**
  * Resolve the database name for the active profile. Each profile owns a
@@ -33,54 +33,10 @@ const resolveDbName = () => {
 
 export const db = new Dexie(resolveDbName());
 
-// Define database schema
-db.version(1).stores({
-    // Interactions: stores user interactions with posts (likes, dislikes, favorites, timeSpent, views)
-    // Indexed by auto-increment id, with compound index for finding existing interactions
-    interactions: '++id, postId, type, source, timestamp, [postId+type+source]',
-
-    // View history: stores viewed posts with their full data
-    // Key is composite "source|postId" for deduplication across sources
-    viewHistory: 'key, lastViewed',
-
-    // Preferences: single-row store for user preferences (avoided tags, active sources, etc.)
-    // Uses 'singleton' as the fixed id
-    preferences: 'id',
-
-    // App settings: single-row store for app-level settings (ratings, debug mode, etc.)
-    // Uses 'singleton' as the fixed id
-    appSettings: 'id',
-
-    // Gelbooru tag cache: maps tag names to category numbers
-    // Category: 0=General, 1=Artist, 3=Copyright, 4=Character, 5=Meta
-    tagCache: 'tag'
-});
-
-// Update schema to include profileSnapshot
-db.version(2).stores({
-    interactions: '++id, postId, type, source, timestamp, [postId+type+source]',
-    viewHistory: 'key, lastViewed',
-    preferences: 'id',
-    appSettings: 'id',
-    tagCache: 'tag',
-    // Snapshot of the user profile including ML model, embeddings, and bandit state
-    // key: 'singleton'
-    profileSnapshot: 'id'
-});
-
-// Update schema to include reports (reported/blocked posts, artists, uploaders)
-db.version(3).stores({
-    interactions: '++id, postId, type, source, timestamp, [postId+type+source]',
-    viewHistory: 'key, lastViewed',
-    preferences: 'id',
-    appSettings: 'id',
-    tagCache: 'tag',
-    profileSnapshot: 'id',
-    // Reports: type is 'post' | 'artist' | 'uploader'.
-    // value is the composite post key ("source|postId") for posts,
-    // or the normalized (lowercased) name for artists/uploaders.
-    reports: '++id, type, value, timestamp, [type+value]'
-});
+// The schema lives in ProfileService so exports and imports can open any
+// profile's database with identical table definitions; the three versions
+// (v1 base tables, v2 profileSnapshot, v3 reports) are applied from there.
+applyProfileSchema(db);
 
 /**
  * Migrate data from localStorage to IndexedDB
