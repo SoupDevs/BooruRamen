@@ -11,6 +11,12 @@ export const useSettingsStore = defineStore('settings', {
         autoScrollSpeed: 'medium',
         disableScrollAnimation: false,
         disableHistory: false,
+        // Post interaction feedback: the double-tap gesture and the burst
+        // played over a post's media for each kind of interaction
+        doubleTapToLike: true,
+        showLikeAnimation: true,
+        showDislikeAnimation: true,
+        showFavoriteAnimation: true,
         autoplayVideos: true,
         loopVideos: true,
         mediaType: { images: false, videos: true },
@@ -29,6 +35,9 @@ export const useSettingsStore = defineStore('settings', {
         downloadLiked: false,
         downloadFavorited: false,
         downloadSeparateFolders: true,
+        // Share sheet: which networks this user actually reaches for, as
+        // id -> { count, lastUsed }. Everything unrecorded stays behind More.
+        shareTargetUsage: {},
         // Age confirmation: stores DOB once verified
         confirmedDateOfBirth: null,
         // Theming: preset id ('default', 'blackwhite', 'terminal', 'claude')
@@ -66,6 +75,7 @@ export const useSettingsStore = defineStore('settings', {
                     downloadLiked: saved.settings && saved.settings.downloadLiked !== undefined ? saved.settings.downloadLiked : this.downloadLiked,
                     downloadFavorited: saved.settings && saved.settings.downloadFavorited !== undefined ? saved.settings.downloadFavorited : this.downloadFavorited,
                     downloadSeparateFolders: saved.settings && saved.settings.downloadSeparateFolders !== undefined ? saved.settings.downloadSeparateFolders : this.downloadSeparateFolders,
+                    shareTargetUsage: saved.settings && saved.settings.shareTargetUsage ? saved.settings.shareTargetUsage : this.shareTargetUsage,
                     confirmedDateOfBirth: saved.settings && saved.settings.confirmedDateOfBirth ? saved.settings.confirmedDateOfBirth : this.confirmedDateOfBirth,
                     theme: saved.settings && saved.settings.theme ? saved.settings.theme : this.theme,
                     customTheme: saved.settings && saved.settings.customTheme ? { ...DEFAULT_CUSTOM_THEME, ...saved.settings.customTheme } : this.customTheme
@@ -116,6 +126,16 @@ export const useSettingsStore = defineStore('settings', {
             this.saveSettings()
         },
 
+        recordShareUse(targetId) {
+            if (!targetId) return
+            const current = this.shareTargetUsage[targetId] || { count: 0 }
+            this.shareTargetUsage = {
+                ...this.shareTargetUsage,
+                [targetId]: { count: (current.count || 0) + 1, lastUsed: Date.now() }
+            }
+            this.saveSettings()
+        },
+
         setTheme(themeId) {
             this.theme = themeId
             applyTheme(this.theme, this.customTheme)
@@ -139,6 +159,10 @@ export const useSettingsStore = defineStore('settings', {
                     autoScrollSpeed: this.autoScrollSpeed,
                     disableScrollAnimation: this.disableScrollAnimation,
                     disableHistory: this.disableHistory,
+                    doubleTapToLike: this.doubleTapToLike,
+                    showLikeAnimation: this.showLikeAnimation,
+                    showDislikeAnimation: this.showDislikeAnimation,
+                    showFavoriteAnimation: this.showFavoriteAnimation,
                     autoplayVideos: this.autoplayVideos,
                     loopVideos: this.loopVideos,
                     mediaType: this.mediaType,
@@ -155,6 +179,7 @@ export const useSettingsStore = defineStore('settings', {
                     downloadLiked: this.downloadLiked,
                     downloadFavorited: this.downloadFavorited,
                     downloadSeparateFolders: this.downloadSeparateFolders,
+                    shareTargetUsage: { ...this.shareTargetUsage },
                     confirmedDateOfBirth: this.confirmedDateOfBirth,
                     theme: this.theme,
                     customTheme: { ...this.customTheme }

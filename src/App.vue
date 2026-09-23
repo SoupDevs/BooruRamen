@@ -12,7 +12,12 @@
     <div class="h-screen relative overflow-hidden">
     
       <!-- Post details sidebar -->
-      <PostDetailsSidebar :show="showPostDetails" :post="currentPost" @report-block="openReportModal" />
+      <PostDetailsSidebar
+        :show="showPostDetails"
+        :post="currentPost"
+        @report-block="openReportModal"
+        @share="openShareSheet"
+      />
       
       <button 
         v-if="currentPost"
@@ -35,6 +40,7 @@
             :commentsSheetHeight="commentsSheetHeight"
             @current-post-changed="updateCurrentPost"
             @video-state-change="handleVideoStateChange"
+            @post-like-request="onPostLikeRequest"
           ></router-view>
         </transition>
         
@@ -268,6 +274,13 @@
         @close="commentsPost = null; commentsSheetHeight = 0"
         @height-change="commentsSheetHeight = $event"
       />
+
+      <!-- Share sheet: share targets on mobile, Copy Link everywhere -->
+      <ShareSheet
+        v-if="sharePost"
+        :post="sharePost"
+        @close="sharePost = null"
+      />
     </div>
     <BottomNavBar @navigate-feed="navigateToFeed" />
 
@@ -291,6 +304,7 @@ import { useSettingsStore } from './stores/settings';
 import { usePlayerStore } from './stores/player';
 import { useInteractionsStore } from './stores/interactions';
 import { useUpdaterStore } from './stores/updater';
+import { useEffectsStore } from './stores/effects';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
 import recommendationSystem from './services/RecommendationSystem.js';
@@ -301,6 +315,7 @@ import CommentsSheet from './components/CommentsSheet.vue';
 import PostDetailsSidebar from './components/PostDetailsSidebar.vue';
 import ReportBlockModal from './components/ReportBlockModal.vue';
 import SettingsSidebar from './components/SettingsSidebar.vue';
+import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 
 export default {
@@ -317,6 +332,7 @@ export default {
     PostDetailsSidebar,
     ReportBlockModal,
     SettingsSidebar,
+    ShareSheet,
     UpdateSplash,
   },
   data() {
@@ -335,6 +351,9 @@ export default {
 
       // Report/Block splash state
       reportModalPost: null,
+
+      // Share sheet state
+      sharePost: null,
 
       routerViewKey: 0,
       pageTransitionName: 'page-fade',
@@ -641,6 +660,29 @@ export default {
       if (!this.currentPost) return;
       this.reportModalPost = this.currentPost;
     },
+
+    openShareSheet(post) {
+      this.sharePost = post || this.currentPost;
+    },
+
+    // A double tap on a post always means "like": it never un-likes, which
+    // is how the gesture reads in every other app. A post that is already
+    // liked just replays the feedback.
+    onPostLikeRequest(post) {
+      if (!post) return;
+      if (post.liked) {
+        this.showMediaBurst(post, 'like');
+        return;
+      }
+      this.toggleLike(post);
+    },
+
+    // The media belongs to whichever view is on screen, so the burst is
+    // requested through the effects store and played by that view.
+    showMediaBurst(post, type) {
+      if (!post) return;
+      useEffectsStore().triggerBurst(post, type);
+    },
     onReported() {
       this.reportModalPost = null;
       // Refresh the feed so newly blocked content (including the reported post
@@ -675,6 +717,7 @@ export default {
             if (this.downloadLiked) {
               this.downloadPostFile(post, 'liked');
             }
+            this.showMediaBurst(post, 'like');
         }
     },
     toggleDislike(post) {
@@ -695,6 +738,7 @@ export default {
                 value: 0,
                 metadata: { post }
             });
+            this.showMediaBurst(post, 'dislike');
         }
     },
     toggleFavorite(post) {
@@ -710,6 +754,9 @@ export default {
         // Auto-download if enabled
         if (post.favorited && this.downloadFavorited) {
           this.downloadPostFile(post, 'favorited');
+        }
+        if (post.favorited) {
+          this.showMediaBurst(post, 'favorite');
         }
     },
 
@@ -1042,24 +1089,28 @@ export default {
   100% { opacity: 1; transform: translateY(0); }
 }
 
-/* Apply the animation to the fixed buttons */
-.fixed.flex.flex-col button {
+/* Apply the animation to the action bar's own buttons. Direct children
+   only: dialogs that are themselves .fixed.flex.flex-col (the share sheet)
+   used to inherit this fade and its nth-child delays, so a single tile
+   re-ran the animation whenever the grid re-rendered and blinked. The
+   share grid animates itself, in reading order, instead. */
+.fixed.flex.flex-col > button {
   animation: fadeIn 0.3s ease-out forwards;
 }
 
 /* Stagger the animations for each button */
-.fixed.flex.flex-col button:nth-child(1) {
+.fixed.flex.flex-col > button:nth-child(1) {
   animation-delay: 0s;
 }
-.fixed.flex.flex-col button:nth-child(2) {
+.fixed.flex.flex-col > button:nth-child(2) {
   animation-delay: 0.1s;
 }
-.fixed.flex.flex-col button:nth-child(3) {
+.fixed.flex.flex-col > button:nth-child(3) {
   animation-delay: 0.2s;
 }
 
 /* Add a box-shadow to the buttons to make them stand out against any background */
-.fixed.flex.flex-col button {
+.fixed.flex.flex-col > button {
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
 }
 

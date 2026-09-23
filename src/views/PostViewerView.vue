@@ -15,10 +15,17 @@
         v-for="(post, index) in posts"
         :key="post.id"
         :data-post-key="post.id"
-        class="h-full w-full snap-start flex items-center justify-center relative"
+        class="h-full w-full snap-start flex items-center justify-center relative touch-manipulation"
+        @click="onMediaTap(post, $event)"
       >
         <!-- Post media -->
         <div class="relative max-h-full max-w-full">
+          <!-- Feedback for the interaction that was just logged -->
+          <PostActionBurst
+            v-if="mediaBurst(post)"
+            :key="mediaBurst(post).id"
+            :type="mediaBurst(post).type"
+          />
           <BooruImage
             v-if="isImage(post)" 
             :src="post.large_file_url || post.file_url" 
@@ -100,12 +107,15 @@ import {
   VIDEO_FRAME_RUNWAY_BEHIND
 } from '../services/videoFramePriming.js';
 import BooruImage from '../components/BooruImage.vue';
+import PostActionBurst from '../components/PostActionBurst.vue';
+import { postGestureMixin } from '../mixins/postGestureMixin';
 
 export default {
   name: 'PostViewerView',
-  mixins: [postFilterMixin],
+  mixins: [postFilterMixin, postGestureMixin],
   components: {
     BooruImage,
+    PostActionBurst,
   },
   props: {
     source: {

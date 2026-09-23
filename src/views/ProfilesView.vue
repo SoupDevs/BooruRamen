@@ -32,9 +32,40 @@
       <div
         v-for="profile in profiles"
         :key="profile.id"
+        :data-profile-id="profile.id"
         class="flex items-center gap-2"
       >
+        <!-- Editing swaps the whole row for a name field -->
+        <div
+          v-if="editingId === profile.id"
+          class="flex-1 min-w-0 flex items-center gap-2 p-2 bg-gray-800 rounded-lg"
+        >
+          <input
+            data-profile-action="edit-input"
+            v-model="editName"
+            @keyup.enter="saveEdit(profile)"
+            @keyup.esc="editingId = null"
+            type="text"
+            maxlength="40"
+            placeholder="Profile name"
+            class="flex-1 min-w-0 bg-gray-900 border border-gray-700 focus:border-pink-500 rounded px-3 py-2 text-sm outline-none"
+          />
+          <button
+            data-profile-action="edit-save"
+            @click="saveEdit(profile)"
+            class="px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded text-sm font-medium transition"
+          >
+            Save
+          </button>
+          <button
+            @click="editingId = null"
+            class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm transition"
+          >
+            Cancel
+          </button>
+        </div>
         <button
+          v-else
           class="flex-1 min-w-0 flex items-center justify-between p-4 bg-gray-800 hover:bg-gray-750 rounded-lg transition-colors group select-none"
           :class="{ 'ring-1 ring-pink-500/60': profile.id === activeProfileId }"
           @pointerdown="startLongPress(profile, $event)"
@@ -60,6 +91,25 @@
             class="w-5 h-5 text-pink-400 flex-shrink-0"
           />
         </button>
+
+        <template v-if="editingId !== profile.id">
+          <button
+            data-profile-action="edit"
+            aria-label="Edit profile"
+            @click="startEdit(profile)"
+            class="w-12 h-12 flex-shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+          >
+            <Pencil class="w-5 h-5 text-gray-300" />
+          </button>
+          <button
+            data-profile-action="export"
+            aria-label="Export profile"
+            @click="exportProfile(profile)"
+            class="w-12 h-12 flex-shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+          >
+            <Download class="w-5 h-5 text-gray-300" />
+          </button>
+        </template>
 
         <!-- Delete button, revealed by long press -->
         <transition name="delete-reveal">
@@ -107,6 +157,42 @@
         <Plus class="w-5 h-5" />
         <span class="font-medium">New Profile</span>
       </button>
+
+      <!-- Import / export: a profile export is a .json file carrying the
+           profile's registry entry and every row of its database. -->
+      <div class="flex gap-2 pt-2">
+        <button
+          data-profile-action="import"
+          @click="openImport"
+          class="flex-1 flex items-center justify-center gap-2 p-3 border border-dashed border-gray-600 hover:border-pink-500 hover:text-pink-400 text-gray-400 rounded-lg transition-colors"
+        >
+          <Upload class="w-5 h-5" />
+          <span class="font-medium">Import</span>
+        </button>
+        <button
+          data-profile-action="export-all"
+          @click="exportAll"
+          class="flex-1 flex items-center justify-center gap-2 p-3 border border-dashed border-gray-600 hover:border-pink-500 hover:text-pink-400 text-gray-400 rounded-lg transition-colors"
+        >
+          <Download class="w-5 h-5" />
+          <span class="font-medium">Export all</span>
+        </button>
+      </div>
+      <input
+        ref="importInput"
+        data-profile-action="import-input"
+        type="file"
+        accept="application/json,.json"
+        class="hidden"
+        @change="onImportFile"
+      />
+      <p
+        v-if="feedback"
+        data-profile-action="feedback"
+        role="status"
+        class="text-xs text-center pt-1"
+        :class="feedbackError ? 'text-red-400' : 'text-green-400'"
+      >{{ feedback }}</p>
     </div>
 
     <!-- Delete confirmation splash -->
@@ -159,14 +245,24 @@
 </template>
 
 <script>
-import { User, Check, Plus, Trash2, AlertTriangle, RefreshCw } from 'lucide-vue-next';
-import { getProfiles, getActiveProfile, createProfile, switchProfile, deleteProfile } from '../services/ProfileService';
+import { User, Check, Plus, Trash2, AlertTriangle, RefreshCw, Pencil, Download, Upload } from 'lucide-vue-next';
+import {
+  getProfiles,
+  getActiveProfile,
+  createProfile,
+  switchProfile,
+  deleteProfile,
+  renameProfile,
+  dumpProfile,
+  dumpAllProfiles,
+  importProfilesFromJson
+} from '../services/ProfileService';
 
 const LONG_PRESS_MS = 500;
 
 export default {
   name: 'ProfilesView',
-  components: { User, Check, Plus, Trash2, AlertTriangle, RefreshCw },
+  components: { User, Check, Plus, Trash2, AlertTriangle, RefreshCw, Pencil, Download, Upload },
   data() {
     return {
       profiles: [],
@@ -174,6 +270,11 @@ export default {
       creating: false,
       newProfileName: '',
       deleteRevealedId: null,
+      editingId: null,
+      editName: '',
+      feedback: '',
+      feedbackError: false,
+      feedbackTimer: null,
       confirmTarget: null,
       deleting: false,
       switching: false,
@@ -186,6 +287,7 @@ export default {
   },
   beforeUnmount() {
     clearTimeout(this.longPressTimer);
+    clearTimeout(this.feedbackTimer);
   },
   methods: {
     refresh() {
@@ -224,6 +326,89 @@ export default {
       if (profile.id === this.activeProfileId) return;
       this.switching = true;
       switchProfile(profile.id);
+    },
+    setFeedback(message, isError = false) {
+      this.feedback = message;
+      this.feedbackError = isError;
+      clearTimeout(this.feedbackTimer);
+      this.feedbackTimer = setTimeout(() => {
+        this.feedback = '';
+      }, 4000);
+    },
+    startEdit(profile) {
+      // A revealed delete button belongs to the old row state
+      this.deleteRevealedId = null;
+      this.editingId = profile.id;
+      this.editName = profile.name;
+      this.$nextTick(() => {
+        const input = document.querySelector('[data-profile-action="edit-input"]');
+        if (input) {
+          input.focus();
+          input.select();
+        }
+      });
+    },
+    saveEdit(profile) {
+      const name = this.editName.trim();
+      if (!renameProfile(profile.id, name)) {
+        this.setFeedback('A profile needs a name.', true);
+        return;
+      }
+      this.editingId = null;
+      this.refresh();
+      this.setFeedback(`Renamed to "${name}".`);
+    },
+    downloadJson(payload, filename) {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    },
+    exportFileName(kind) {
+      const stamp = new Date().toISOString().slice(0, 10);
+      return `booruramen-${kind}-${stamp}.json`;
+    },
+    async exportProfile(profile) {
+      try {
+        const payload = await dumpProfile(profile.id);
+        const slug = profile.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'profile';
+        this.downloadJson(payload, this.exportFileName(`profile-${slug}`));
+        this.setFeedback(`Exported "${profile.name}".`);
+      } catch (e) {
+        this.setFeedback(`Export failed: ${e && e.message ? e.message : 'unknown error'}`, true);
+      }
+    },
+    async exportAll() {
+      try {
+        const payload = await dumpAllProfiles();
+        this.downloadJson(payload, this.exportFileName('profiles'));
+        this.setFeedback(`Exported ${payload.profiles.length} profile${payload.profiles.length === 1 ? '' : 's'}.`);
+      } catch (e) {
+        this.setFeedback(`Export failed: ${e && e.message ? e.message : 'unknown error'}`, true);
+      }
+    },
+    openImport() {
+      this.$refs.importInput.click();
+    },
+    async onImportFile(event) {
+      const file = event.target.files && event.target.files[0];
+      // Clear immediately so picking the same file again re-fires change;
+      // the File reference stays valid after the input is reset.
+      event.target.value = '';
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const imported = await importProfilesFromJson(text);
+        this.refresh();
+        this.setFeedback(`Imported ${imported.length} profile${imported.length === 1 ? '' : 's'}.`);
+      } catch (e) {
+        this.setFeedback(e && e.message ? e.message : 'Import failed.', true);
+      }
     },
     openCreate() {
       this.creating = true;
