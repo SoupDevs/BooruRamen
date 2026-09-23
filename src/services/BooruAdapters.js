@@ -79,6 +79,16 @@ class BooruAdapter {
         throw new Error('Not implemented');
     }
 
+    /**
+     * Tag autocomplete for the whitelist/blacklist dropdown. Sources that
+     * cannot search tags by prefix simply return nothing and the caller's
+     * local index covers them.
+     * @returns {Promise<string[]>}
+     */
+    async searchTags() {
+        return [];
+    }
+
     async testConnection() {
         try {
             const posts = await this.getPosts({ limit: 1, tags: '', _isTest: true }); // Pass _isTest flag
@@ -309,6 +319,37 @@ export class DanbooruAdapter extends BooruAdapter {
     }
 
     /**
+     * Tag autocomplete backed by Danbooru's own suggestion endpoint. It only
+     * supplements the caller's local index, so any failure (blocked, offline,
+     * changed shape) degrades to "no remote suggestions" instead of an error.
+     * @param {string} query - partial tag as typed
+     * @param {number} limit - max tag names to return
+     * @returns {Promise<string[]>}
+     */
+    async searchTags(query, limit = 10) {
+        const params = new URLSearchParams({
+            'search[query]': query,
+            'search[type]': 'tag_query',
+            'search[limit]': String(limit),
+        });
+
+        if (this.credentials.userId && this.credentials.apiKey) {
+            params.append('login', this.credentials.userId);
+            params.append('api_key', this.credentials.apiKey);
+        }
+
+        const url = `${this.baseUrl}/autocomplete/tags.json?${params.toString()}`;
+        const response = await httpFetch(url);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        if (!Array.isArray(data)) return [];
+        return data
+            .map((item) => (item && (item.value || item.label || item.name || item.tag)) || '')
+            .filter(Boolean)
+            .slice(0, limit);
+    }
+
+    /**
      * Resolve uploader/approver IDs on posts to usernames via the users API.
      * Mutates the post objects in place (they are reactive by the time the
      * lookup completes, so the UI updates automatically).
@@ -440,6 +481,17 @@ export class GelbooruAdapter extends BooruAdapter {
         this.minRequestInterval = 500; // Minimum 500ms between requests
         // Detect if this site supports actual video files (MP4/WebM)
         this.supportsVideoFiles = this.detectVideoSupport(baseUrl);
+    }
+
+    /**
+     * No remote tag search for the Gelbooru family: the dapi tag endpoint only
+     * answers exact-name lookups (a trailing wildcard is silently ignored) and
+     * the on-site autocomplete was retired. Suggestions for these sources come
+     * from the local index of tags this install has already seen.
+     * @returns {Promise<string[]>}
+     */
+    async searchTags() {
+        return [];
     }
 
     /**
@@ -1242,6 +1294,32 @@ export class MoebooruAdapter extends BooruAdapter {
             params.append('password_hash', this.credentials.apiKey);
         }
         return params;
+    }
+
+    /**
+     * Tag autocomplete: Moebooru's tag.json matches "name=foo*" (prefix) and
+     * "name=*foo*" (substring), so a plain prefix search is enough here.
+     * @param {string} query - partial tag as typed
+     * @param {number} limit - max tag names to return
+     * @returns {Promise<string[]>}
+     */
+    async searchTags(query, limit = 10) {
+        const params = new URLSearchParams({ name: `${query}*`, limit: String(limit) });
+        for (const [k, v] of this.authParams().entries()) {
+            params.append(k, v);
+        }
+
+        const cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
+        const url = toDevProxiedUrl(`${cleanBaseUrl}/tag.json?${params.toString()}`);
+
+        const response = await httpFetch(url);
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+        const data = await response.json();
+        if (!Array.isArray(data)) return [];
+        return data
+            .map((entry) => (entry && entry.name) || '')
+            .filter(Boolean)
+            .slice(0, limit);
     }
 
     async getPosts({ tags, page, limit, _isTest }) {

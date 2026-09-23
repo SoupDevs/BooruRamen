@@ -215,13 +215,65 @@
             <!-- Gestures & animations -->
             <div class="p-4 bg-gray-800 rounded-lg">
               <div class="mb-3">
-                <label class="font-medium">Gestures &amp; Animations</label>
+                <label class="font-medium">Feed Buttons, Gestures &amp; Animations</label>
                 <p class="text-xs text-gray-400 mt-1">
-                  Control the double-tap gesture and the feedback shown over a post's media.
+                  Choose which action buttons the feed shows, which gestures are armed —
+                  every gesture and button works on its own, there is no master mode —
+                  and the feedback drawn over a post's media.
                 </p>
               </div>
 
               <div class="space-y-2">
+                <!-- Action buttons shown in the feed's right-hand column -->
+                <p class="text-xs text-gray-500 font-semibold uppercase tracking-wide px-3 pt-1">Action buttons</p>
+                <div
+                  v-for="option in feedButtonOptions"
+                  :key="option.key"
+                  class="flex items-center justify-between p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
+                  :data-button-toggle="option.key"
+                  @click="toggleInteraction(option.key)"
+                >
+                  <div class="flex flex-col">
+                    <label class="text-sm font-medium cursor-pointer">{{ option.label }}</label>
+                    <span class="text-xs text-gray-400">{{ option.hint }}</span>
+                  </div>
+                  <div
+                    class="relative inline-flex h-6 w-11 items-center rounded-full"
+                    :class="isInteractionEnabled(option.key) ? 'bg-pink-600' : 'bg-gray-600'"
+                  >
+                    <span
+                      class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                      :class="isInteractionEnabled(option.key) ? 'translate-x-6' : 'translate-x-1'"
+                    ></span>
+                  </div>
+                </div>
+
+                <!-- Feed gestures, each independently armed -->
+                <p class="text-xs text-gray-500 font-semibold uppercase tracking-wide px-3 pt-2">Gestures</p>
+                <div
+                  v-for="option in feedGestureOptions"
+                  :key="option.key"
+                  class="flex items-center justify-between p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
+                  :data-gesture-toggle="option.key"
+                  @click="toggleInteraction(option.key)"
+                >
+                  <div class="flex flex-col">
+                    <label class="text-sm font-medium cursor-pointer">{{ option.label }}</label>
+                    <span class="text-xs text-gray-400">{{ option.hint }}</span>
+                  </div>
+                  <div
+                    class="relative inline-flex h-6 w-11 items-center rounded-full"
+                    :class="isInteractionEnabled(option.key) ? 'bg-pink-600' : 'bg-gray-600'"
+                  >
+                    <span
+                      class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+                      :class="isInteractionEnabled(option.key) ? 'translate-x-6' : 'translate-x-1'"
+                    ></span>
+                  </div>
+                </div>
+
+                <!-- Feedback animations over a post's media -->
+                <p class="text-xs text-gray-500 font-semibold uppercase tracking-wide px-3 pt-2">Feedback animations</p>
                 <div
                   v-for="option in interactionOptions"
                   :key="option.key"
@@ -953,10 +1005,22 @@ export default {
 
       // Gesture/animation switches; keys are settings-store flags
       interactionOptions: [
+        { key: 'showLikeAnimation', label: 'Like Animation', hint: 'White hearts when a post is liked, a muted falling heart when the like is removed' },
+        { key: 'showDislikeAnimation', label: 'Dislike Animation', hint: 'Thumbs down when a post is disliked, a muted one when it is removed' },
+        { key: 'showFavoriteAnimation', label: 'Favorite Animation', hint: 'Star when a post is favorited, a muted falling star when it is removed' },
+      ],
+      // Which buttons show in the feed's right-hand action column.
+      feedButtonOptions: [
+        { key: 'showLikeButton', label: 'Like button', hint: 'Heart button in the feed' },
+        { key: 'showDislikeButton', label: 'Dislike button', hint: 'Thumbs-down button in the feed' },
+        { key: 'showFavoriteButton', label: 'Favorite button', hint: 'Star button in the feed' },
+      ],
+      // Feed gestures, each independently switchable — no master mode.
+      feedGestureOptions: [
         { key: 'doubleTapToLike', label: 'Double-Tap to Like', hint: 'Double-tap a post to like it' },
-        { key: 'showLikeAnimation', label: 'Like Animation', hint: 'Hearts over the media when a post is liked' },
-        { key: 'showDislikeAnimation', label: 'Dislike Animation', hint: 'Thumbs down over the media when a post is disliked' },
-        { key: 'showFavoriteAnimation', label: 'Favorite Animation', hint: 'Star over the media when a post is favorited' },
+        { key: 'swipeRightToFavorite', label: 'Swipe Right to Favorite', hint: 'Swipe a post right to add it to favorites' },
+        { key: 'swipeLeftToDislike', label: 'Swipe Left to Dislike', hint: 'Swipe a post left to dislike it' },
+        { key: 'holdToSeek', label: 'Hold to Seek Video', hint: 'Hold a video for a second to pause, then drag left or right to scrub' },
       ],
 
       // Reported & Blocked management
@@ -971,6 +1035,8 @@ export default {
       'disableHistory', 'debugMode', 'customSources', 'activeSource',
       'tagAlwaysInclude', 'tagNeverInclude',
       'doubleTapToLike', 'showLikeAnimation', 'showDislikeAnimation', 'showFavoriteAnimation',
+      'showLikeButton', 'showDislikeButton', 'showFavoriteButton',
+      'swipeRightToFavorite', 'swipeLeftToDislike', 'holdToSeek',
       'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders',
       'theme', 'customTheme'
     ]),

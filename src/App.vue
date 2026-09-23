@@ -23,6 +23,8 @@
         v-if="currentPost"
         @click="togglePostDetails" 
         class="absolute left-0 z-30 p-2 rounded-r-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
+        :class="sidebarToggleClass(showPostDetails)"
+        data-sidebar-toggle="details"
         :style="{ 
           transform: showPostDetails ? 'translateX(320px)' : 'translateX(0)',
           top: `calc(1rem + env(safe-area-inset-top, 0))`
@@ -40,7 +42,11 @@
             :commentsSheetHeight="commentsSheetHeight"
             @current-post-changed="updateCurrentPost"
             @video-state-change="handleVideoStateChange"
+            @focus-image-tap="revealFocusUiFromImageTap"
             @post-like-request="onPostLikeRequest"
+            @post-favorite-request="onPostFavoriteRequest"
+            @post-dislike-request="onPostDislikeRequest"
+            @seek-gesture="handleSeekGesture"
           ></router-view>
         </transition>
         
@@ -149,7 +155,7 @@
       <div 
         v-if="isCurrentPostVideo && currentPost" 
         class="fixed left-0 right-0 bg-black bg-opacity-60 backdrop-blur-sm py-2 px-4 flex items-center gap-4 transition-opacity duration-300 z-40"
-        :class="videoControlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'"
+        :class="[videoControlsVisible ? 'opacity-100' : 'opacity-0 pointer-events-none', focusChromeClass]"
         :style="{ bottom: `calc(3.5rem + env(safe-area-inset-bottom, 0))` }"
         @mouseenter="isVideoControlsHovered = true"
         @mouseleave="isVideoControlsHovered = false"
@@ -221,6 +227,8 @@
         v-if="showSettingsToggle"
         @click="showSettingsSidebar = !showSettingsSidebar"
         class="absolute right-0 z-30 p-2 rounded-l-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
+        :class="sidebarToggleClass(showSettingsSidebar)"
+        data-sidebar-toggle="settings"
         :style="{
           transform: showSettingsSidebar ? 'translateX(-320px)' : 'translateX(0)',
           top: `calc(1rem + env(safe-area-inset-top, 0))`
@@ -232,10 +240,13 @@
       <!-- Floating post action buttons - repositioned to appear below sidebar but above content -->
       <div 
         class="fixed right-4 flex flex-col items-center gap-4 z-15" 
+        :class="focusChromeClass"
         :style="{ bottom: `calc(6.5rem + env(safe-area-inset-bottom, 0))` }"
         v-if="currentPost"
       >
+        <!-- Each action button can be hidden on its own (Profile > UI) -->
         <button 
+          v-if="showLikeButton"
           @click="toggleLike(currentPost)"
           class="p-3 rounded-full bg-black bg-opacity-70 hover:bg-pink-600 transition-colors backdrop-blur-sm"
           :class="{ 'bg-pink-600': currentPost.liked }"
@@ -244,6 +255,7 @@
         </button>
         
         <button 
+          v-if="showDislikeButton"
           @click="toggleDislike(currentPost)"
           class="p-3 rounded-full bg-black bg-opacity-70 hover:bg-gray-900 transition-colors backdrop-blur-sm"
           :class="{ 'bg-gray-700': currentPost.disliked }"
@@ -252,6 +264,7 @@
         </button>
         
         <button
+          v-if="showFavoriteButton"
           @click="toggleFavorite(currentPost)"
           class="p-3 rounded-full bg-black bg-opacity-70 hover:bg-yellow-600 transition-colors backdrop-blur-sm"
           :class="{ 'bg-yellow-600': currentPost.favorited }"
@@ -282,7 +295,7 @@
         @close="sharePost = null"
       />
     </div>
-    <BottomNavBar @navigate-feed="navigateToFeed" />
+    <BottomNavBar @navigate-feed="navigateToFeed" :class="focusChromeClass" />
 
     <!-- Report/Block splash -->
     <ReportBlockModal
@@ -318,6 +331,11 @@ import SettingsSidebar from './components/SettingsSidebar.vue';
 import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 
+// Focus mode: how long the chrome stays on screen after the last input on
+// classic routes, and how long a tap-revealed chrome lingers on the feed.
+// Deliberately short - the controls are there to be used, then get out of the way.
+const FOCUS_IDLE_MS = 1000;
+
 export default {
   name: 'App',
   components: {
@@ -344,6 +362,12 @@ export default {
       showSettingsSidebar: false,
       newWhitelistTag: '',
       newBlacklistTag: '',
+
+      // Focus mode: true while the chrome has faded out for lack of input
+      focusUiHidden: false,
+      // Focus mode (feed/viewer): a lone tap on an image has asked for the
+      // chrome; cleared by the idle window or a post/route change.
+      focusImageRevealed: false,
 
       // Comments sheet state
       commentsPost: null,
@@ -392,6 +416,12 @@ export default {
       if (this.commentsPost && newPost && newPost.id !== this.commentsPost.id) {
         this.commentsPost = newPost;
       }
+
+      // A new post gets a fresh focus state: the previous image's tap
+      // reveal must not carry over.
+      this.focusImageRevealed = false;
+      clearTimeout(this._focusImageTimer);
+      this.applyFocusChrome();
     },
     debugMode(newVal) {
         if (newVal && this.currentPost) {
@@ -414,6 +444,12 @@ export default {
       if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
         this.showSettingsSidebar = false;
       }
+      // Focus reveal state never carries across routes; arriving somewhere
+      // new re-evaluates (event-driven routes apply their rules, other
+      // routes get the classic show-then-idle-fade).
+      this.focusImageRevealed = false;
+      clearTimeout(this._focusImageTimer);
+      this.pokeFocusUi();
     },
     showSettingsSidebar(isOpen) {
       if (!isOpen) return;
@@ -430,6 +466,8 @@ export default {
       this.scheduleControlsHide();
     },
     isPlaying(playing) {
+      // Focus mode: chrome follows the pause state on the feed/viewer.
+      this.applyFocusChrome();
       if (playing) {
         this.scheduleControlsHide();
       } else {
@@ -437,6 +475,19 @@ export default {
         // preceded by a pointer/key event that showed the bar via
         // handleUserActivity; a natural end (autoscroll) shows nothing.
         clearTimeout(this._hideControlsTimer);
+      }
+    },
+    focusMode(enabled) {
+      clearTimeout(this._focusImageTimer);
+      this.focusImageRevealed = false;
+      if (enabled) {
+        // Re-evaluate immediately: a paused video keeps the chrome, anything
+        // else fades out (right away on the feed, after the idle window
+        // elsewhere).
+        this.pokeFocusUi();
+      } else {
+        clearTimeout(this._focusTimer);
+        this.focusUiHidden = false;
       }
     },
   },
@@ -467,7 +518,11 @@ export default {
       'customSources',
       'debugMode',
       'downloadLiked',
-      'downloadFavorited'
+      'downloadFavorited',
+      'focusMode',
+      'showLikeButton',
+      'showDislikeButton',
+      'showFavoriteButton'
     ]),
     // Map player store state
     ...mapWritableState(usePlayerStore, [
@@ -500,6 +555,19 @@ export default {
       // Only show settings on feed, history, likes, favorites, and viewer
       const routeName = this.$route.name;
       return !['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'].includes(routeName);
+    },
+    // Chrome Focus mode fades out while the user is idle. The class itself is
+    // always present so the opacity transition runs on both directions.
+    focusChromeClass() {
+      return this.focusMode && this.focusUiHidden
+        ? 'focus-chrome focus-chrome-hidden'
+        : 'focus-chrome';
+    },
+    // Focus mode drives chrome from media state only where that state is
+    // wired end to end: the feed and the viewer emit play/pause and carry
+    // the tap gestures. Settings pages keep the classic idle fade.
+    focusEventDriven() {
+      return this.$route.name === 'Home' || this.$route.name === 'Viewer';
     },
   },
   methods: {
@@ -665,16 +733,31 @@ export default {
       this.sharePost = post || this.currentPost;
     },
 
-    // A double tap on a post always means "like": it never un-likes, which
-    // is how the gesture reads in every other app. A post that is already
-    // liked just replays the feedback.
+    // Gestures toggle exactly like the buttons they mirror: a double tap on a
+    // liked post removes the like, a repeat swipe undoes the favorite or the
+    // dislike. The removal plays its own muted burst (see toggleLike etc.).
     onPostLikeRequest(post) {
       if (!post) return;
-      if (post.liked) {
-        this.showMediaBurst(post, 'like');
-        return;
-      }
       this.toggleLike(post);
+    },
+    onPostFavoriteRequest(post) {
+      if (!post) return;
+      this.toggleFavorite(post);
+    },
+    onPostDislikeRequest(post) {
+      if (!post) return;
+      this.toggleDislike(post);
+    },
+    // Hold-to-seek in the feed: the seek bar stays up for the whole scrub and
+    // is handed back to the normal hide schedule when the finger lifts.
+    handleSeekGesture(state) {
+      this._seekGestureActive = !!(state && state.active);
+      if (this._seekGestureActive) {
+        clearTimeout(this._hideControlsTimer);
+        this.showVideoControls = true;
+      } else {
+        this.scheduleControlsHide();
+      }
     },
 
     // The media belongs to whichever view is on screen, so the burst is
@@ -718,6 +801,9 @@ export default {
               this.downloadPostFile(post, 'liked');
             }
             this.showMediaBurst(post, 'like');
+        } else {
+            // Removed: a muted heart that falls away instead of popping.
+            this.showMediaBurst(post, 'unlike');
         }
     },
     toggleDislike(post) {
@@ -739,6 +825,8 @@ export default {
                 metadata: { post }
             });
             this.showMediaBurst(post, 'dislike');
+        } else {
+            this.showMediaBurst(post, 'undislike');
         }
     },
     toggleFavorite(post) {
@@ -757,6 +845,8 @@ export default {
         }
         if (post.favorited) {
           this.showMediaBurst(post, 'favorite');
+        } else {
+          this.showMediaBurst(post, 'unfavorite');
         }
     },
 
@@ -839,17 +929,78 @@ export default {
     // Fade the seek bar out after 1.5s without interaction while playing.
     // Only pointer/key activity (handleUserActivity) brings it back; while
     // paused the pending hide is cancelled so it stays visible once shown.
+    // A hold-to-seek scrub overrides the schedule until the finger lifts.
     scheduleControlsHide() {
       clearTimeout(this._hideControlsTimer);
+      if (this._seekGestureActive) return;
       if (!this.isPlaying) return;
       this._hideControlsTimer = setTimeout(() => {
-        if (this.isPlaying) this.showVideoControls = false;
+        if (this.isPlaying && !this._seekGestureActive) this.showVideoControls = false;
       }, 1500);
     },
     handleUserActivity() {
+      this.pokeFocusUi();
       if (!this.isCurrentPostVideo) return;
       this.showVideoControls = true;
       this.scheduleControlsHide();
+    },
+    // Focus mode, event-driven routes (feed/viewer): chrome visibility comes
+    // from the media itself — a paused video, or a lone tap on an image
+    // (revealed through the same 200ms single/double-tap delay, so a double
+    // tap still likes instead). Other routes keep the classic idle fade.
+    applyFocusChrome() {
+      if (!this.focusMode) {
+        this.focusUiHidden = false;
+        return;
+      }
+      if (!this.focusEventDriven) return;
+      const shown = this.currentPost && this.isCurrentPostVideo
+        ? !this.isPlaying
+        : this.focusImageRevealed;
+      this.focusUiHidden = !shown;
+    },
+    // A lone tap on a still image: hold the chrome for the idle window,
+    // extended by further activity, then let it fade.
+    revealFocusUiFromImageTap() {
+      if (!this.focusMode || !this.focusEventDriven) return;
+      if (this.currentPost && this.isCurrentPostVideo) return;
+      this.focusImageRevealed = true;
+      this._armImageRevealIdle();
+      this.applyFocusChrome();
+    },
+    _armImageRevealIdle() {
+      clearTimeout(this._focusImageTimer);
+      this._focusImageTimer = setTimeout(() => {
+        this.focusImageRevealed = false;
+        this.applyFocusChrome();
+      }, FOCUS_IDLE_MS);
+    },
+    // Generic input (pointer, wheel, key): on event-driven routes it never
+    // reveals the chrome on its own — at most it extends an image reveal
+    // that is already on screen. Classic routes keep "show, fade after
+    // FOCUS_IDLE_MS".
+    // A sidebar's open/close handle must survive that fade while its
+    // sidebar is open — hiding it would trap the panel on screen.
+    sidebarToggleClass(isOpen) {
+      return isOpen ? 'focus-chrome' : this.focusChromeClass;
+    },
+    pokeFocusUi() {
+      clearTimeout(this._focusTimer);
+      if (!this.focusMode) {
+        this.focusUiHidden = false;
+        return;
+      }
+      if (!this.focusEventDriven) {
+        this.focusUiHidden = false;
+        this._focusTimer = setTimeout(() => {
+          if (this.focusMode && !this.focusEventDriven) this.focusUiHidden = true;
+        }, FOCUS_IDLE_MS);
+        return;
+      }
+      if (this.focusImageRevealed && !(this.currentPost && this.isCurrentPostVideo)) {
+        this._armImageRevealIdle();
+      }
+      this.applyFocusChrome();
     },
     // Drive the seek bar from the media clock every frame instead of the
     // ~4Hz timeupdate event, so it fills smoothly even on low-fps videos.
@@ -980,6 +1131,7 @@ export default {
 
     
     handleKeydown(e) {
+      this.pokeFocusUi();
       if (e.target.tagName === 'INPUT') return;
       this.handleUserActivity();
       if (e.code === 'Space') {
@@ -1032,17 +1184,24 @@ export default {
       window.addEventListener('keydown', this.handleKeydown);
       window.addEventListener('pointermove', this.handleUserActivity);
       window.addEventListener('pointerdown', this.handleUserActivity);
+      window.addEventListener('wheel', this.pokeFocusUi, { passive: true });
 
       // Check for a new release on app open. Only in the installed app:
       // dev builds in the browser would always trail the published version.
       if (DownloadService.isTauri()) {
           useUpdaterStore().checkForUpdates({ manual: false });
       }
+      // Focus mode starts from a defined state (hidden on the feed unless
+      // the current clip is already paused).
+      this.applyFocusChrome();
   },
   beforeUnmount() {
       window.removeEventListener('keydown', this.handleKeydown);
       window.removeEventListener('pointermove', this.handleUserActivity);
       window.removeEventListener('pointerdown', this.handleUserActivity);
+      window.removeEventListener('wheel', this.pokeFocusUi, { passive: true });
+      clearTimeout(this._focusTimer);
+      clearTimeout(this._focusImageTimer);
       clearTimeout(this._hideControlsTimer);
       this.stopProgressLoop();
   }
@@ -1226,6 +1385,18 @@ export default {
   -webkit-user-select: none;
   -moz-user-select: none;
   -ms-user-select: none;
+}
+
+/* Focus mode: the app chrome (action buttons, sidebar handles, bottom nav,
+   video controls) fades out while the user is idle and fades back in on the
+   next touch. The !important beats the fadeIn keyframes above, which would
+   otherwise pin the action buttons at opacity 1. */
+.focus-chrome {
+  transition: opacity 0.25s ease;
+}
+.focus-chrome-hidden {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }
 
 /* Page transition: slide left (going deeper into settings/profile) */

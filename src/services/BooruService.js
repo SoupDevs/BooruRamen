@@ -173,6 +173,46 @@ class BooruService {
         return mergedPosts;
     }
 
+    /**
+     * Tag autocomplete across every enabled source. Each adapter decides
+     * whether it can search tags at all; a slow or failing source resolves to
+     * nothing instead of holding up the dropdown, which already has the local
+     * index to fall back on.
+     * @param {string} query - partial tag as typed
+     * @param {number} [limit] - max tag names per source
+     * @returns {Promise<string[]>} - de-duplicated tag names
+     */
+    async searchTags(query, limit = 10) {
+        const q = (query || '').trim().toLowerCase();
+        if (!q) return [];
+        if (this.adapters.length === 0) await this.initialize();
+        if (this.adapters.length === 0) return [];
+
+        const timeout = (ms) => new Promise((resolve) => setTimeout(() => resolve([]), ms));
+
+        const results = await Promise.all(this.adapters.map((adapter) =>
+            Promise.race([
+                Promise.resolve().then(() => adapter.searchTags(q, limit)),
+                timeout(2500),
+            ]).catch((err) => {
+                console.warn(`[BooruService] Tag search failed for ${adapter.baseUrl}:`, err);
+                return [];
+            })
+        ));
+
+        const seen = new Set();
+        const merged = [];
+        for (const list of results) {
+            for (const tag of list || []) {
+                const name = String(tag || '').trim().toLowerCase();
+                if (!name || seen.has(name)) continue;
+                seen.add(name);
+                merged.push(name);
+            }
+        }
+        return merged;
+    }
+
     getTagLimit() {
         // Return the generic limit. If we have multiple sources, 
         // we should probably use the LOWEST limit if we want to be safe,

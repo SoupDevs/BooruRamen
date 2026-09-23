@@ -8,11 +8,11 @@
 
       <div class="space-y-4" v-if="post">
         <!-- Tag sections ordered and colored to match Danbooru -->
-        <TagSection v-if="post.tag_string_artist" title="Artist Tags" :tagString="post.tag_string_artist" colorClass="bg-pink-900" />
-        <TagSection v-if="post.tag_string_copyright" title="Copyright Tags" :tagString="post.tag_string_copyright" colorClass="bg-[#c797ff] text-gray-900" />
-        <TagSection v-if="post.tag_string_character" title="Character Tags" :tagString="post.tag_string_character" colorClass="bg-green-900" />
-        <TagSection v-if="post.tag_string_general" title="General Tags" :tagString="post.tag_string_general" colorClass="bg-gray-700" />
-        <TagSection v-if="post.tag_string_meta" title="Meta Tags" :tagString="post.tag_string_meta" colorClass="bg-[#ead084] text-gray-900" />
+        <TagSection v-if="post.tag_string_artist" title="Artist Tags" :tagString="post.tag_string_artist" colorClass="bg-pink-900" @tag-click="addTagToWhitelist" />
+        <TagSection v-if="post.tag_string_copyright" title="Copyright Tags" :tagString="post.tag_string_copyright" colorClass="bg-[#c797ff] text-gray-900" @tag-click="addTagToWhitelist" />
+        <TagSection v-if="post.tag_string_character" title="Character Tags" :tagString="post.tag_string_character" colorClass="bg-green-900" @tag-click="addTagToWhitelist" />
+        <TagSection v-if="post.tag_string_general" title="General Tags" :tagString="post.tag_string_general" colorClass="bg-gray-700" @tag-click="addTagToWhitelist" />
+        <TagSection v-if="post.tag_string_meta" title="Meta Tags" :tagString="post.tag_string_meta" colorClass="bg-[#ead084] text-gray-900" @tag-click="addTagToWhitelist" />
 
         <!-- Fallback if specific tags don't exist but master string does -->
         <TagSection
@@ -20,6 +20,7 @@
           title="All Tags"
           :tagString="post.tag_string"
           colorClass="bg-gray-700"
+          @tag-click="addTagToWhitelist"
         />
 
         <div>
@@ -116,6 +117,21 @@
         </div>
       </div>
     </div>
+
+    <!-- Tag feedback: a short note that pops where the tag was tapped, sits
+         solid for a beat, then fades downward. Teleported so the sidebar's
+         scroll container cannot clip it. -->
+    <Teleport to="body">
+      <div
+        v-if="tagPop"
+        :key="tagPop.id"
+        data-tag-pop
+        class="pr-tag-pop fixed z-[100] pointer-events-none whitespace-nowrap rounded-md border border-pink-600/60 bg-gray-900/95 px-2 py-1 text-xs text-white shadow-lg"
+        :style="{ left: tagPop.x + 'px', top: tagPop.y + 'px' }"
+      >
+        {{ tagPop.text }}
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -124,6 +140,7 @@ import TagSection from './TagSection.vue';
 import { Share2 } from 'lucide-vue-next';
 import { isTauri } from '../services/DownloadService';
 import { copyToClipboard, isMobilePlatform } from '../services/ShareService';
+import { useSettingsStore } from '../stores/settings';
 
 export default {
   name: 'PostDetailsSidebar',
@@ -136,6 +153,7 @@ export default {
   data() {
     return {
       linkCopied: false,
+      tagPop: null,
     };
   },
   computed: {
@@ -210,6 +228,71 @@ export default {
     },
   },
   methods: {
+    // Tapping a tag in this sidebar whitelists it: the tag becomes a
+    // mandatory filter for the next feed fetch, which is the fast path from
+    // "I like what this post has" to "show me more of it". The feed is
+    // refreshed straight away so the new filter is visible without an
+    // Apply Settings round trip.
+    addTagToWhitelist(tag, event) {
+      if (!tag) return;
+      const settings = useSettingsStore();
+      const alreadyWhitelisted = settings.whitelistTags.includes(tag);
+      settings.addWhitelistTag(tag);
+      this.showTagPop(
+        alreadyWhitelisted ? `${tag} is already whitelisted` : `Added ${tag} to whitelist`,
+        event
+      );
+      this.refreshFeed();
+    },
+    // Feedback under the finger: solid for ~1s, then fades out while it
+    // drifts down. A new tap replaces it and restarts the animation.
+    showTagPop(text, event) {
+      const x = event && Number.isFinite(event.clientX) ? event.clientX : window.innerWidth / 2;
+      const y = event && Number.isFinite(event.clientY) ? event.clientY : window.innerHeight / 2;
+      this.tagPop = {
+        id: Date.now(),
+        text,
+        x: Math.round(x),
+        // keep the bubble on screen when the tag sits near the top edge
+        y: Math.round(Math.max(y, 44)),
+      };
+      // The bubble is centred on the cursor, so a long message near the
+      // left edge would hang off the window; nudge it fully inside.
+      // Measure the laid-out width (offsetWidth ignores the transform):
+      // the fade animation may not have applied its translate(-50%) yet.
+      // The correction goes back into tagPop.x — an imperative style write
+      // would be clobbered by the next re-render of this sidebar.
+      this.$nextTick(() => {
+        const el = document.querySelector('[data-tag-pop]');
+        if (!el || !this.tagPop) return;
+        const half = el.offsetWidth / 2;
+        const popX = this.tagPop.x;
+        let dx = 0;
+        if (popX - half < 8) dx = 8 - (popX - half);
+        else if (popX + half > window.innerWidth - 8) {
+          dx = (window.innerWidth - 8) - (popX + half);
+        }
+        if (dx !== 0) this.tagPop.x = Math.round(popX + dx);
+      });
+      clearTimeout(this._tagPopTimer);
+      this._tagPopTimer = setTimeout(() => {
+        this.tagPop = null;
+      }, 1700);
+    },
+    // Re-run the feed's query with the updated whitelist. Only the feed
+    // reads it, and only a route change makes it refetch.
+    refreshFeed() {
+      if (this.$route.name !== 'Home') return;
+      const settings = useSettingsStore();
+      const query = {
+        images: settings.mediaType.images ? '1' : '0',
+        videos: settings.mediaType.videos ? '1' : '0',
+        whitelist: settings.whitelistTags.join(','),
+        blacklist: settings.blacklistTags.join(','),
+      };
+      if (JSON.stringify(this.$route.query) === JSON.stringify(query)) return;
+      this.$router.replace({ name: 'Home', query });
+    },
     getRatingFromCode(code) {
       if (!code) return 'Unknown';
       const map = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
@@ -260,3 +343,31 @@ export default {
   }
 }
 </script>
+
+<style>
+/* Tag-tap feedback. Global (not scoped) because the bubble is teleported to
+   <body>; the pr-tag-pop prefix keeps it out of everyone else's way. */
+.pr-tag-pop {
+  transform: translate(-50%, -130%);
+  animation: pr-tag-pop-fade 1.7s ease forwards;
+}
+@keyframes pr-tag-pop-fade {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -105%);
+  }
+  10% {
+    opacity: 1;
+    transform: translate(-50%, -130%);
+  }
+  /* hold solid for about a second, right where the tag was tapped */
+  65% {
+    opacity: 1;
+    transform: translate(-50%, -130%);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -60%);
+  }
+}
+</style>

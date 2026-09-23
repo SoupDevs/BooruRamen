@@ -12,7 +12,9 @@ let burstSequence = 0
 
 export const useEffectsStore = defineStore('effects', {
     state: () => ({
-        // post key -> { id, type }, where type is like | dislike | favorite
+        // post key -> { id, type }, where type is like | unlike | dislike |
+        // undislike | favorite | unfavorite — the "un*" types play the muted
+        // removal animation instead of the pop.
         bursts: {}
     }),
 
@@ -51,9 +53,9 @@ export const useEffectsStore = defineStore('effects', {
 
         isBurstEnabled(type) {
             const settings = useSettingsStore()
-            if (type === 'like') return settings.showLikeAnimation
-            if (type === 'dislike') return settings.showDislikeAnimation
-            if (type === 'favorite') return settings.showFavoriteAnimation
+            if (type === 'like' || type === 'unlike') return settings.showLikeAnimation
+            if (type === 'dislike' || type === 'undislike') return settings.showDislikeAnimation
+            if (type === 'favorite' || type === 'unfavorite') return settings.showFavoriteAnimation
             return false
         }
     }

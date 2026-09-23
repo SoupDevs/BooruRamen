@@ -17,6 +17,18 @@ export const useSettingsStore = defineStore('settings', {
         showLikeAnimation: true,
         showDislikeAnimation: true,
         showFavoriteAnimation: true,
+        // Which buttons show in the feed's right-hand action column.
+        showLikeButton: true,
+        showDislikeButton: true,
+        showFavoriteButton: true,
+        // Focus mode: chrome fades out when the user stops interacting and
+        // snaps back on the next touch (see App.vue).
+        focusMode: false,
+        // Feed gestures: each one is armed by its own switch — no master
+        // mode. The swipe/hold detectors run whenever their switch is on.
+        swipeRightToFavorite: true,
+        swipeLeftToDislike: true,
+        holdToSeek: true,
         autoplayVideos: true,
         loopVideos: true,
         mediaType: { images: false, videos: true },
@@ -163,6 +175,13 @@ export const useSettingsStore = defineStore('settings', {
                     showLikeAnimation: this.showLikeAnimation,
                     showDislikeAnimation: this.showDislikeAnimation,
                     showFavoriteAnimation: this.showFavoriteAnimation,
+                    showLikeButton: this.showLikeButton,
+                    showDislikeButton: this.showDislikeButton,
+                    showFavoriteButton: this.showFavoriteButton,
+                    focusMode: this.focusMode,
+                    swipeRightToFavorite: this.swipeRightToFavorite,
+                    swipeLeftToDislike: this.swipeLeftToDislike,
+                    holdToSeek: this.holdToSeek,
                     autoplayVideos: this.autoplayVideos,
                     loopVideos: this.loopVideos,
                     mediaType: this.mediaType,

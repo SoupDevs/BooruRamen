@@ -5,8 +5,11 @@
       <span 
         v-for="tag in visibleTags" 
         :key="tag"
-        class="px-2 py-0.5 rounded text-xs"
+        class="px-2 py-0.5 rounded text-xs cursor-pointer hover:opacity-80 transition-opacity"
         :class="colorClass"
+        :data-tag="tag"
+        :title="`Add '${tag}' to whitelist`"
+        @click="$emit('tag-click', tag, $event)"
       >
         {{ tag }}
       </span>
@@ -31,6 +34,9 @@
 <script>
 export default {
   name: 'TagSection',
+  // tag-click fires with the tag name so the host (the Post Details sidebar)
+  // can send it straight to the whitelist.
+  emits: ['tag-click'],
   props: {
     title: String,
     tagString: String,
