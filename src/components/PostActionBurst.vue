@@ -20,7 +20,7 @@
     <span
       v-for="satellite in satellites"
       :key="satellite.id"
-      class="post-burst__satellite text-white"
+      class="post-burst__satellite text-pink-600"
       :style="satelliteStyle(satellite)"
     >
       <Heart class="w-full h-full" fill="currentColor" />
@@ -46,13 +46,23 @@ const SATELLITE_RADIUS = 104;
 const ICONS = {
   like: Heart,
   dislike: ThumbsDown,
-  favorite: Star
+  favorite: Star,
+  // Undo plays the same glyph as the action it reverses, muted.
+  unlike: Heart,
+  undislike: ThumbsDown,
+  unfavorite: Star
 };
 
+// Tailwind's pink scale is the theme's accent ramp (--c-accent-*), so the
+// like hearts track whatever accent the active theme defines.
 const ICON_CLASSES = {
-  like: 'text-white',
+  like: 'text-pink-600',
   dislike: 'text-white',
-  favorite: 'text-yellow-400'
+  favorite: 'text-yellow-400',
+  // Removals read as the muted opposite of their action.
+  unlike: 'text-gray-400',
+  undislike: 'text-gray-400',
+  unfavorite: 'text-gray-400'
 };
 
 export default {
@@ -114,6 +124,14 @@ export default {
 /* Favorite spins as it lands. */
 .post-burst__icon.post-burst--favorite {
   animation-name: post-burst-pop-spin;
+}
+
+/* Removals (unlike / undislike / unfavorite): a muted icon that deflates
+   and drops away — the visual opposite of the pop that applied it. */
+.post-burst__icon.post-burst--unlike,
+.post-burst__icon.post-burst--undislike,
+.post-burst__icon.post-burst--unfavorite {
+  animation-name: post-burst-pop-drop;
 }
 
 .post-burst__satellite {
@@ -190,6 +208,30 @@ export default {
   }
   100% {
     transform: scale(1.1) rotate(6deg);
+    opacity: 0;
+  }
+}
+
+/* Removal: land like the pop, then deflate and drop out of frame — reads as
+   "taken back" instead of "given". */
+@keyframes post-burst-pop-drop {
+  0% {
+    transform: scale(0.3) translateY(-14px);
+    opacity: 0;
+  }
+  18% {
+    transform: scale(1.15) translateY(0);
+    opacity: 1;
+  }
+  40% {
+    transform: scale(0.96) translateY(0);
+  }
+  55% {
+    transform: scale(1.02) translateY(-2px);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0.4) translateY(56px);
     opacity: 0;
   }
 }

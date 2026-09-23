@@ -65,7 +65,6 @@
                 { 'opacity-0': !isVideoActive(post) },
                 videoOverlayClass(post)
               ]"
-              @click="togglePlayPause"
               @loadeddata="onVideoLoadedData($event, post)"
               @playing="onVideoPlaying(post)"
               @play="handleVideoStateUpdate($event, index)"
@@ -78,6 +77,33 @@
               :ref="(el) => setCanvasRef(el, post)"
               class="absolute inset-0 m-auto max-h-full max-w-full pointer-events-none"
             ></canvas>
+            <!-- Playback glyph on a mildly transparent grey disc: the icon
+                 pops in/out, the disc just fades (styles below). -->
+            <div
+              v-if="pauseOverlayState[post.id]"
+              data-pause-overlay
+              :class="pauseOverlayState[post.id] === 'paused'
+                ? 'pause-pop--in'
+                : 'pause-pop--out'"
+              class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"
+            >
+              <span class="pause-pop__disc">
+                <Pause
+                  v-if="pauseOverlayState[post.id] === 'paused'"
+                  :size="88"
+                  fill="currentColor"
+                  :stroke-width="0"
+                  class="pause-pop__glyph text-white"
+                />
+                <Play
+                  v-else
+                  :size="88"
+                  fill="currentColor"
+                  :stroke-width="0"
+                  class="pause-pop__glyph text-white"
+                />
+              </span>
+            </div>
           </div>
           <div 
             v-else
@@ -108,7 +134,12 @@ import {
 } from '../services/videoFramePriming.js';
 import BooruImage from '../components/BooruImage.vue';
 import PostActionBurst from '../components/PostActionBurst.vue';
+import { Pause, Play } from 'lucide-vue-next';
 import { postGestureMixin } from '../mixins/postGestureMixin';
+
+// How long the play glyph lingers while popping out after an unpause: the
+// 380ms pop-out plus a margin before the element is dropped.
+const PAUSE_GLYPH_FADE_MS = 550;
 
 export default {
   name: 'PostViewerView',
@@ -116,6 +147,8 @@ export default {
   components: {
     BooruImage,
     PostActionBurst,
+    Pause,
+    Play,
   },
   props: {
     source: {
@@ -136,6 +169,7 @@ export default {
       videoCanvases: {}, // post id -> canvas holding the decoded stand-in frame
       videoFrameStates: {}, // post id -> true once a frame has been captured
       videoActiveStates: {}, // post id -> true while the video is actually playing
+      pauseOverlayState: {}, // post id -> 'paused' | 'resuming' | null (playback glyph over the video)
       posterErrorStates: {}, // post id -> true when the clip's thumbnail failed to load
     };
   },
@@ -501,15 +535,48 @@ export default {
       // Playback is rendering: reveal the video, hide the stand-in, and keep a
       // frame in hand for the next pause.
       this.videoActiveStates[post.id] = true;
+      this._fadeOutPauseGlyph(post.id);
       const video = this._videoElements?.[post.id];
       if (video) this.drawFrameToCanvas(post, video);
     },
     onVideoPause(event, post, index) {
       // Keep the frame the video stopped on (frame 0 before it ever played) so a
       // paused post shows a picture instead of the webview's play glyph.
+      const wasActive = this.videoActiveStates[post.id];
       this.drawFrameToCanvas(post, event.target);
       this.videoActiveStates[post.id] = false;
+      // Only a video that was actually running earns the pause glyph.
+      if (wasActive) this._showPauseGlyph(post.id);
       this.handleVideoStateUpdate(event, index);
+    },
+    // Pop the pause glyph in (cancelling any pending fade-out).
+    _showPauseGlyph(key) {
+      this._clearPauseFadeTimer(key);
+      this.pauseOverlayState[key] = 'paused';
+    },
+    // Swap the pause glyph for a play glyph, then drop it once the fade ends.
+    _fadeOutPauseGlyph(key) {
+      if (this.pauseOverlayState[key] !== 'paused') return;
+      this._clearPauseFadeTimer(key);
+      this.pauseOverlayState[key] = 'resuming';
+      this._pauseFadeTimers = this._pauseFadeTimers || {};
+      this._pauseFadeTimers[key] = setTimeout(() => {
+        if (this.pauseOverlayState[key] === 'resuming') {
+          this.pauseOverlayState[key] = null;
+        }
+        delete this._pauseFadeTimers[key];
+      }, PAUSE_GLYPH_FADE_MS);
+    },
+    _clearPauseFadeTimer(key) {
+      if (this._pauseFadeTimers && this._pauseFadeTimers[key]) {
+        clearTimeout(this._pauseFadeTimers[key]);
+        delete this._pauseFadeTimers[key];
+      }
+    },
+    // Deferred single tap from the gesture mixin: this view owns the video
+    // elements, so playback toggling stays here.
+    onMediaSingleTap(event) {
+      this.togglePlayPause(event);
     },
     togglePlayPause(event) {
         const video = event.target;
@@ -543,3 +610,93 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+/* Playback glyph over a video: a mildly transparent grey disc with the icon
+   on top. The icon pops in like the interaction bursts and, on resume,
+   swaps to a play glyph that pops away; the disc only fades. */
+.pause-pop__disc {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 144px;
+  height: 144px;
+  border-radius: 50%;
+  /* Mildly transparent grey: the frame still reads through it. */
+  background: rgba(120, 120, 120, 0.45);
+}
+
+.pause-pop--in .pause-pop__disc {
+  animation: pause-disc-in 300ms ease-out both;
+}
+
+.pause-pop--out .pause-pop__disc {
+  animation: pause-disc-out 380ms ease-out both;
+}
+
+.pause-pop--in .pause-pop__glyph {
+  animation: pause-pop-in 380ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+/* Leaving motion borrowed from post-burst-pop's tail — settle at scale(1),
+   expand to 1.12 while fading — stretched a little longer than the bursts'
+   212ms so the play glyph doesn't wink out. */
+.pause-pop--out .pause-pop__glyph {
+  animation: pause-pop-out 380ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+}
+
+.pause-pop__glyph {
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.55));
+}
+
+@keyframes pause-pop-in {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  25% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.96);
+  }
+  75% {
+    transform: scale(1.03);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes pause-pop-out {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1.12);
+    opacity: 0;
+  }
+}
+
+@keyframes pause-disc-in {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes pause-disc-out {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+</style>

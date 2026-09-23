@@ -28,10 +28,15 @@
       <div
         v-for="post in visiblePosts"
         :key="getCompositeKey(post)"
-        class="w-full snap-start snap-always flex justify-center relative shrink-0 touch-manipulation"
+        class="w-full snap-start snap-always flex justify-center relative shrink-0 select-none"
         :class="commentsSheetHeight > 0 ? 'items-end' : 'items-center'"
-        :style="postContainerStyle"
+        :style="[postContainerStyle, { touchAction: 'pan-y pinch-zoom' }]"
         @click="onMediaTap(post, $event)"
+        @pointerdown="onMediaPointerDown(post, $event)"
+        @pointermove="onMediaPointerMove($event)"
+        @pointerup="onMediaPointerUp($event)"
+        @pointercancel="onMediaPointerCancel()"
+        @dragstart.prevent="blockRowDrag"
         v-observe-visibility
       >
         <!-- Post media -->
@@ -69,7 +74,6 @@
               :class="{ 'opacity-0': !videoActiveStates[getCompositeKey(post)] }"
               :preload="videoPreloadAttr(post)"
               @loadeddata="onVideoLoadedData($event, post)"
-              @click="togglePlayPause"
               @play="onVideoPlay($event, post)"
               @pause="onVideoPause($event, post)"
               @timeupdate="onVideoTimeUpdate($event, post)"
@@ -87,6 +91,33 @@
               :ref="(el) => setCanvasRef(el, post)"
               class="absolute inset-0 m-auto max-w-full max-h-full pointer-events-none"
             ></canvas>
+            <!-- Playback glyph on a mildly transparent grey disc: the icon
+                 pops in/out, the disc just fades (styles below). -->
+            <div
+              v-if="pauseOverlayState[getCompositeKey(post)]"
+              data-pause-overlay
+              :class="pauseOverlayState[getCompositeKey(post)] === 'paused'
+                ? 'pause-pop--in'
+                : 'pause-pop--out'"
+              class="absolute inset-0 z-10 flex items-center justify-center pointer-events-none"
+            >
+              <span class="pause-pop__disc">
+                <Pause
+                  v-if="pauseOverlayState[getCompositeKey(post)] === 'paused'"
+                  :size="88"
+                  fill="currentColor"
+                  :stroke-width="0"
+                  class="pause-pop__glyph text-white"
+                />
+                <Play
+                  v-else
+                  :size="88"
+                  fill="currentColor"
+                  :stroke-width="0"
+                  class="pause-pop__glyph text-white"
+                />
+              </span>
+            </div>
           </template>
           <!-- Custom Loading Spinner -->
           <div 
@@ -133,8 +164,14 @@ import {
 } from '../services/videoFramePriming.js';
 import ProgressiveImage from '../components/ProgressiveImage.vue';
 import PostActionBurst from '../components/PostActionBurst.vue';
+import { Pause, Play } from 'lucide-vue-next';
 import { postGestureMixin } from '../mixins/postGestureMixin';
 import { postKey } from '../services/postKey';
+import tagSuggestion from '../services/TagSuggestionService';
+
+// How long the play glyph lingers while popping out after an unpause: the
+// 380ms pop-out plus a margin before the element is dropped.
+const PAUSE_GLYPH_FADE_MS = 550;
 
 export default {
   name: 'FeedView',
@@ -142,6 +179,8 @@ export default {
   components: {
     ProgressiveImage,
     PostActionBurst,
+    Pause,
+    Play,
   },
   props: {
     commentsSheetHeight: {
@@ -169,6 +208,7 @@ export default {
       isResizing: false, // Flag to suspend scroll tracking during CSS animation
       videoLoadingStates: {}, // Map of composite key -> loading boolean
       videoActiveStates: {}, // Map of composite key -> true while video is actively playing in view (video visible, first-frame canvas hidden)
+      pauseOverlayState: {}, // Map of composite key -> 'paused' | 'resuming' | null (playback glyph over the video)
       videoErrorStates: {}, // Map of composite key -> error boolean (CDN blocked)
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
       _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
@@ -288,6 +328,10 @@ export default {
     getCompositeKey(post) {
       return postKey(post);
     },
+    // Swiping must never turn into a native image drag: Chrome fires
+    // pointercancel when a drag starts, which would kill the gesture
+    // mid-swipe. Preventing dragstart keeps the pointer stream intact.
+    blockRowDrag() {},
     getVideoSrc(post) {
       if (!post || !post.file_url) return '';
       // Use blob URL if available (set by processVideoUrls via getPlayableVideoUrl)
@@ -426,6 +470,12 @@ export default {
         }
         
         if (newPosts && newPosts.length > 0) {
+          // Feed every fresh tag into the local autocomplete index: this is
+          // what makes the whitelist/blacklist dropdown instant for the tags
+          // the enabled sources actually return.
+          for (const post of newPosts) {
+            tagSuggestion.ingestTags(post.tag_string || post.tags || '');
+          }
           this.posts = [...this.posts, ...newPosts];
           console.log(`Added ${newPosts.length} new posts. Total: ${this.posts.length}`);
           // Pre-fetch video URLs as blobs for Tauri production (non-blocking)
@@ -542,6 +592,8 @@ export default {
             // Fresh element hasn't started playback — keep it hidden behind the
             // first-frame canvas so the webview's paused-video glyph can't show (#148)
             if (this.videoActiveStates[key]) this.videoActiveStates[key] = false;
+            // ...and drop any playback glyph left over from the previous occupant
+            this._hidePauseGlyph(key);
         }
       } else if (this.videoElements[key] && !this.videoElements[key].isConnected) {
         // Post left the virtual window: drop the detached element so lookups
@@ -603,7 +655,15 @@ export default {
         (post) => !!this.videoActiveStates[this.getCompositeKey(post)]
       );
     },
+    // Deferred single tap from the gesture mixin: this view owns the video
+    // elements, so playback toggling stays here.
+    onMediaSingleTap(event) {
+      this.togglePlayPause(event);
+    },
     togglePlayPause(event) {
+        // A swipe or a hold-to-seek just ran on this pointer sequence: the
+        // trailing click must not flip playback.
+        if (this.isTapSuppressed()) return;
         const video = event.target;
         if (video.paused) {
             video.play();
@@ -612,6 +672,9 @@ export default {
         }
     },
     onVideoPlay(event, post) {
+      // Playback resumed: swap the pause glyph for a play glyph that fades
+      // away, regardless of which post the event belongs to.
+      this._fadeOutPauseGlyph(this.getCompositeKey(post));
       if (this.posts[this.currentPostIndex] && this.getCompositeKey(this.posts[this.currentPostIndex]) !== this.getCompositeKey(post)) return;
 
       // Enforce playback rate to prevent accidental speed changes
@@ -626,8 +689,41 @@ export default {
       this.$emit('video-state-change', { isPlaying: true });
     },
     onVideoPause(event, post) {
+      // Only a video that actually started playing earns the pause glyph —
+      // a fresh element's initial pause (before autoplay) must not flash it.
+      if (this._initializedVideos.has(event.target)) {
+        this._showPauseGlyph(this.getCompositeKey(post));
+      }
       if (this.posts[this.currentPostIndex] && this.getCompositeKey(this.posts[this.currentPostIndex]) !== this.getCompositeKey(post)) return;
       this.$emit('video-state-change', { isPlaying: false });
+    },
+    // Pop the pause glyph in (cancelling any pending fade-out).
+    _showPauseGlyph(key) {
+      this._clearPauseFadeTimer(key);
+      this.pauseOverlayState[key] = 'paused';
+    },
+    // Swap the pause glyph for a play glyph, then drop it once the fade ends.
+    _fadeOutPauseGlyph(key) {
+      if (this.pauseOverlayState[key] !== 'paused') return;
+      this._clearPauseFadeTimer(key);
+      this.pauseOverlayState[key] = 'resuming';
+      this._pauseFadeTimers = this._pauseFadeTimers || {};
+      this._pauseFadeTimers[key] = setTimeout(() => {
+        if (this.pauseOverlayState[key] === 'resuming') {
+          this.pauseOverlayState[key] = null;
+        }
+        delete this._pauseFadeTimers[key];
+      }, PAUSE_GLYPH_FADE_MS);
+    },
+    _hidePauseGlyph(key) {
+      this._clearPauseFadeTimer(key);
+      this.pauseOverlayState[key] = null;
+    },
+    _clearPauseFadeTimer(key) {
+      if (this._pauseFadeTimers && this._pauseFadeTimers[key]) {
+        clearTimeout(this._pauseFadeTimers[key]);
+        delete this._pauseFadeTimers[key];
+      }
     },
     onVideoTimeUpdate(event, post) {
       if (this.posts[this.currentPostIndex] && this.getCompositeKey(this.posts[this.currentPostIndex]) !== this.getCompositeKey(post)) return;
@@ -787,12 +883,21 @@ export default {
 
     // Browsers may block autoplay until user interacts with the page.
     // Add a one-time listener to unlock playback on first user gesture.
-    this._unlockAutoplay = () => {
-      const currentPost = this.posts[this.currentPostIndex];
-      if (currentPost) {
-        const videoEl = this.videoElements[this.getCompositeKey(currentPost)];
-        if (videoEl && videoEl.paused) {
-          videoEl.play().catch(() => {});
+    this._unlockAutoplay = (event) => {
+      // A tap on the media itself is the user's playback control (pause /
+      // play): unlocking must not immediately fight it by replaying the
+      // video the tap just paused. Disarm without playing — the click still
+      // counts as the user activation that unlocks later play() calls.
+      const target = event && event.target;
+      const onMedia = !!target && (target.tagName === 'VIDEO'
+        || (typeof target.closest === 'function' && !!target.closest('video')));
+      if (!onMedia) {
+        const currentPost = this.posts[this.currentPostIndex];
+        if (currentPost) {
+          const videoEl = this.videoElements[this.getCompositeKey(currentPost)];
+          if (videoEl && videoEl.paused) {
+            videoEl.play().catch(() => {});
+          }
         }
       }
       document.removeEventListener('click', this._unlockAutoplay);
@@ -1001,7 +1106,97 @@ export default {
       };
       
       requestAnimationFrame(animateScroll);
-    }
-  },
-}
-</script>
+          }
+        },
+      }
+      </script>
+
+      <style scoped>
+      /* Playback glyph over a video: a mildly transparent grey disc with the icon
+         on top. The icon pops in like the interaction bursts and, on resume,
+         swaps to a play glyph that pops away; the disc only fades. */
+      .pause-pop__disc {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 144px;
+        height: 144px;
+        border-radius: 50%;
+        /* Mildly transparent grey: the paused frame still reads through it. */
+        background: rgba(120, 120, 120, 0.45);
+      }
+
+      .pause-pop--in .pause-pop__disc {
+        animation: pause-disc-in 300ms ease-out both;
+      }
+
+      .pause-pop--out .pause-pop__disc {
+        animation: pause-disc-out 380ms ease-out both;
+      }
+
+      .pause-pop--in .pause-pop__glyph {
+        animation: pause-pop-in 380ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+      }
+
+      /* Leaving motion borrowed from post-burst-pop's tail — settle at scale(1),
+         expand to 1.12 while fading — stretched a little longer than the bursts'
+         212ms so the play glyph doesn't wink out. */
+      .pause-pop--out .pause-pop__glyph {
+        animation: pause-pop-out 380ms cubic-bezier(0.2, 0.8, 0.3, 1) both;
+      }
+
+      .pause-pop__glyph {
+        filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.55));
+      }
+
+      @keyframes pause-pop-in {
+        0% {
+          transform: scale(0.3);
+          opacity: 0;
+        }
+        25% {
+          transform: scale(1.2);
+          opacity: 1;
+        }
+        50% {
+          transform: scale(0.96);
+        }
+        75% {
+          transform: scale(1.03);
+          opacity: 1;
+        }
+        100% {
+          transform: scale(1);
+          opacity: 1;
+        }
+      }
+
+      @keyframes pause-pop-out {
+        0% {
+          transform: scale(1);
+          opacity: 1;
+        }
+        100% {
+          transform: scale(1.12);
+          opacity: 0;
+        }
+      }
+
+      @keyframes pause-disc-in {
+        0% {
+          opacity: 0;
+        }
+        100% {
+          opacity: 1;
+        }
+      }
+
+      @keyframes pause-disc-out {
+        0% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+        }
+      }
+      </style>
