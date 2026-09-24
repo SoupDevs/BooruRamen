@@ -476,9 +476,12 @@ export class GelbooruAdapter extends BooruAdapter {
     constructor(baseUrl, credentials = {}) {
         super(baseUrl, 'gelbooru');
         this.credentials = credentials;
-        // Rate limiting - Gelbooru has strict limits
+        // Rate limiting - Gelbooru has strict limits. Keep a shared promise
+        // chain so concurrent feed queries cannot all pass the same timestamp
+        // check and burst through the adapter in one tick.
         this.lastRequestTime = 0;
         this.minRequestInterval = 500; // Minimum 500ms between requests
+        this.throttleQueue = Promise.resolve();
         // Detect if this site supports actual video files (MP4/WebM)
         this.supportsVideoFiles = this.detectVideoSupport(baseUrl);
     }
@@ -769,15 +772,23 @@ export class GelbooruAdapter extends BooruAdapter {
         }
     }
 
-    // Throttle helper to prevent 429 errors
-    async throttle() {
-        const now = Date.now();
-        const timeSinceLastRequest = now - this.lastRequestTime;
-        if (timeSinceLastRequest < this.minRequestInterval) {
-            const waitTime = this.minRequestInterval - timeSinceLastRequest;
-            await new Promise(resolve => setTimeout(resolve, waitTime));
-        }
-        this.lastRequestTime = Date.now();
+    // Throttle helper to prevent 429 errors. The queue is deliberately kept
+    // per adapter instance: the recommendation feed fans out several queries
+    // at once, and all of them use the same instance.
+    throttle() {
+        const run = async () => {
+            const now = Date.now();
+            const timeSinceLastRequest = now - this.lastRequestTime;
+            if (timeSinceLastRequest < this.minRequestInterval) {
+                const waitTime = this.minRequestInterval - timeSinceLastRequest;
+                await new Promise(resolve => setTimeout(resolve, waitTime));
+            }
+            this.lastRequestTime = Date.now();
+        };
+
+        const next = this.throttleQueue.then(run, run);
+        this.throttleQueue = next.catch(() => {});
+        return next;
     }
 
     /**
