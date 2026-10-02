@@ -55,6 +55,7 @@ const packageJson = JSON.parse(readFileSync(path.resolve(__dirname, 'package.jso
 // https://vite.dev/config/
 const config = {
   plugins: [vue()],
+  worker: { format: 'es' },
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
   },

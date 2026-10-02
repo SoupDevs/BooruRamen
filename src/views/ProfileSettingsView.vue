@@ -301,6 +301,7 @@
 
         <!-- Content Settings -->
         <div v-else-if="currentPage === 'content'" key="content">
+          <div class="bg-gray-800 rounded-lg p-4 mb-3"><AiTaggingSettings /></div>
           <div class="space-y-2">
             <!-- Sources (navigate to sub-page) -->
             <button
@@ -953,11 +954,12 @@ import { detectBooruEngine } from '../services/BooruEngineDetector';
 import DownloadService from '../services/DownloadService';
 import { THEME_PRESETS, FONT_OPTIONS, DEFAULT_CUSTOM_THEME, buildCustomTheme, getThemePreview, applyTheme } from '../services/ThemeService';
 import { X, Check, AlertCircle } from 'lucide-vue-next';
+import AiTaggingSettings from '../components/AiTaggingSettings.vue';
 
 export default {
   name: 'ProfileSettingsView',
   components: {
-    X, Check, AlertCircle
+    X, Check, AlertCircle, AiTaggingSettings
   },
   data() {
     return {

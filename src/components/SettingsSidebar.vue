@@ -5,6 +5,7 @@
   >
   <div class="p-4" style="padding-top: calc(1rem + env(safe-area-inset-top, 0)); padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0));">
       <h2 class="text-xl font-bold mb-4">Settings</h2>
+      <DeepDiveControls :post="post" @started="$emit('deep-dive-started')" />
       
       <!-- Auto-scroll toggle -->
       <div class="mb-4">
@@ -301,16 +302,21 @@ import { mapState, mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
 import tagSuggestion from '../services/TagSuggestionService';
+import DeepDiveControls from './DeepDiveControls.vue';
 
 export default {
   name: 'SettingsSidebar',
+  components: { DeepDiveControls },
   props: {
     show: Boolean,
+    post: { type: Object, default: null },
   },
   data() {
     return {
       newWhitelistTag: '',
       newBlacklistTag: '',
+      unsubscribeSuggestions: null,
+      focusedTagField: null,
       // Per-field dropdown state. `items` is filled synchronously from the
       // local index on every keystroke; `remote` tags from the enabled
       // sources arrive a beat later and are merged in.
@@ -331,6 +337,16 @@ export default {
     // Warm the local index (tag cache + view history) before the first
     // keystroke so the very first dropdown is already fast.
     tagSuggestion.prime();
+    this.unsubscribeSuggestions = tagSuggestion.subscribe(() => {
+      for (const which of ['whitelist', 'blacklist']) {
+        if (this.focusedTagField === which) this.refreshSuggestions(which, this.tagInputValue(which));
+        else this.suggest[which].items = [];
+      }
+    });
+  },
+  beforeUnmount() {
+    this.unsubscribeSuggestions?.();
+    for (const state of Object.values(this.suggest)) clearTimeout(state.remoteTimer);
   },
   methods: {
     ...mapActions(useSettingsStore, [
@@ -361,11 +377,13 @@ export default {
       return which === 'whitelist' ? this.whitelistTags : this.blacklistTags;
     },
     onTagFocus(which) {
+      this.focusedTagField = which;
       tagSuggestion.prime();
       const raw = this.tagInputValue(which);
       if (raw && raw.trim()) this.refreshSuggestions(which, raw);
     },
     onTagInput(which) {
+      this.focusedTagField = which;
       this.refreshSuggestions(which, this.tagInputValue(which));
     },
     /**
@@ -396,7 +414,7 @@ export default {
       state.remoteTimer = setTimeout(async () => {
         tagSuggestion.markRemoteQuery(query);
         const remote = await tagSuggestion.remoteSuggest(query, 10);
-        if (state.query !== query || !tagSuggestion.isRemoteQueryCurrent(query)) return;
+        if (this.focusedTagField !== which || state.query !== query || !tagSuggestion.isRemoteQueryCurrent(query)) return;
         const excludeNow = this.excludeTags(which);
         const known = new Set(state.items);
         const fresh = remote.filter((tag) => tag && !known.has(tag) && !excludeNow.includes(tag));
@@ -409,6 +427,7 @@ export default {
       }, 150);
     },
     closeSuggestions(which) {
+      if (this.focusedTagField === which) this.focusedTagField = null;
       const state = this.suggest[which];
       state.open = false;
       state.active = -1;

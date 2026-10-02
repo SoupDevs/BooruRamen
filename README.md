@@ -98,6 +98,61 @@ http://localhost:5173
 
 ## Building
 
+### Background image learning and tags
+
+The feed shows an end-of-results message when no further matching posts are
+available. Exact image hashes prevent the same content from appearing again
+across sources. Perceptual hashes and spatial color, brightness, and edge
+features provide additional inputs to the recommendation model; perceptual
+hashes alone do not hide images.
+
+On first launch, the app offers an optional local
+[WD SwinV2 Tagger v3](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3)
+download (468 MB). Declining keeps it disabled. Download, progress, retry, and
+enable and **Uninstall model** controls are available in **Profile Settings → Content**. Uninstalling disables tagging, stops active download/inference, and removes the model cache. It can be downloaded again from the same controls. The downloaded
+model is cached on the device; images are analyzed locally in background
+workers. Inferred tags enrich recommendations without changing the source's
+tags or search filters. Image descriptors are cached per profile. Existing
+recommendation models are migrated while preserving their learned weights.
+
+Feed ranking also blends in a temporary session interest model, up to 25% of
+the score as evidence builds. Likes, favorites, skips, watch time, and available
+image composition influence this layer immediately, including unseen posts
+already queued. It fades with a 30-minute half-life and resets on app restart,
+recommendation reset, or 45 minutes of inactivity. Query selection uses the
+same blended interests while profile analytics retain only lasting evidence.
+Repeated interest in one topic has a limited contribution per session to the
+stored profile, embeddings, and ML training. Interests repeated across sessions
+can accumulate; the lasting profile uses a 30-day half-life.
+
+While viewing a post, open the right sidebar and choose **Deep Dive** to explore
+similar content. The selected post remains the anchor as you scroll. Shared
+tags, learned tag relationships, and cached image composition supply 90% of
+ranking, with normal recommendations providing the remaining 10%. Source,
+rating, media, tag, and blocking filters still apply. Deep Dive replaces unseen
+queued content without moving the current post, and shows an end message when
+its queries run out rather than switching to unrelated popular posts.
+Choose **End Deep Dive** in the sidebar or **End** in the feed indicator to
+return to normal recommendations. Dive interactions leave normal session
+interests unchanged and use one-tenth of their usual moderated learning weight
+for the stored profile, embeddings, and neural model. Deep Dive is temporary
+and ends on app restart or recommendation reset.
+
+Enabled sources' complete tag catalogs are retrieved a page at a time in the
+background. Catalogs resume
+after interruption and refresh weekly. Suggestions merge identical names and
+exclude disabled sources immediately. When a source rejects catalog requests,
+cached tags and live suggestions remain usable.
+Post retrieval takes priority over background catalog and image requests.
+
+Run `npm test` for the image learning, tag catalog, and model lifecycle tests.
+With the Vite development server running, open `/tests/image-workers.html` and
+click **Run worker smoke test** to verify hashing and actual local ONNX inference.
+This downloads the model if it is not already cached. Native desktop/mobile
+packaging requires the corresponding Tauri build environment.
+The `/tests/session-worker.html` fixture checks live session ranking and durable
+weights in the recommendation worker using an isolated synthetic database.
+
 1. Clone the repository:
 ```
 git clone https://github.com/SoupDevs/BooruRamen.git

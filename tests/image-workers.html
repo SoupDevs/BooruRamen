@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Image worker smoke test</title></head>
+<body style="font:16px system-ui;background:#111827;color:white;padding:32px">
+<h1>Image worker smoke test</h1>
+<p>Runs the real local model and image-hashing workers. Reuses the downloaded model cache.</p>
+<button id="run">Run worker smoke test</button><pre id="result">Not started</pre>
+<canvas id="image" width="256" height="256"></canvas>
+<script type="module">
+import tagger, { aiTaggerState } from '/src/services/AiTaggerService.js';
+import { createPinia, setActivePinia } from 'pinia';
+import { useSettingsStore } from '/src/stores/settings.js';
+import SparkMD5 from 'spark-md5';
+setActivePinia(createPinia());
+const output = document.querySelector('#result'), canvas = document.querySelector('#image');
+const ctx = canvas.getContext('2d');
+ctx.fillStyle = '#87ceeb'; ctx.fillRect(0,0,256,256);
+ctx.fillStyle = '#228b22'; ctx.fillRect(0,180,256,76);
+ctx.fillStyle = '#ffff00'; ctx.beginPath(); ctx.arc(190,50,30,0,Math.PI*2); ctx.fill();
+document.querySelector('#run').onclick = async () => {
+  let worker;
+  const timer = setInterval(() => { output.textContent = `${aiTaggerState.phase}: ${Math.round(aiTaggerState.progress*100)}%`; }, 500);
+  try {
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    worker = new Worker(new URL('/src/workers/imageAnalysis.worker.js', location.origin), {type:'module'});
+    const analysis = await new Promise((resolve,reject) => {
+      worker.onmessage = ({data}) => data.error ? reject(new Error(data.error)) : resolve(data.result);
+      worker.onerror = reject; worker.postMessage({id:1,blob,original:true});
+    });
+    if (analysis.md5 !== SparkMD5.ArrayBuffer.hash(await blob.arrayBuffer()) || analysis.composition.length !== 32 || analysis.sha256.length !== 64) throw new Error('Invalid image analysis');
+    if (!await tagger.prepare(useSettingsStore(), false)) throw new Error(aiTaggerState.error);
+    const tags = await tagger.tag(blob);
+    if (tags.some(tag => !Number.isFinite(tag.confidence))) throw new Error('Invalid tag probabilities');
+    clearInterval(timer);
+    output.textContent = `PASS: actual image worker and actual WD ONNX inference\nMD5: ${analysis.md5}\nSHA256: ${analysis.sha256}\nPerceptual hash: ${analysis.perceptualHash}\nTags: ${tags.map(tag=>tag.name).join(', ')}`;
+  } catch(error) { clearInterval(timer); output.textContent = `FAIL: ${error.message || error}`; }
+  finally {worker?.terminate()}
+};
+</script></body></html>

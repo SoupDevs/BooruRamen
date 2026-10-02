@@ -57,6 +57,7 @@
             :load-full="imagePreloadTier(post).loadFull"
             class="max-w-full max-h-full object-contain"
             @error="(e) => console.error('Image load error:', post.file_url, e)"
+            @load="onImageLoaded(post)"
           />
           <!-- No poster and no autoplay: offscreen videos buffer (preload="auto") but never
                play — the IntersectionObserver starts playback from 0 when a post enters view.
@@ -132,16 +133,13 @@
       <!-- Bottom spacer for virtual scrolling -->
       <div v-if="bottomSpacerHeight !== '0px'" class="w-full shrink-0 pointer-events-none" :style="[{ height: bottomSpacerHeight }, spacerTransitionStyle]"></div>
       
-      <!-- Pagination loading spinner -->
-      <div v-if="isFetching && !loading" class="h-full w-full snap-start flex items-center justify-center relative">
-         <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-600"></div>
-      </div>
-
-      <!-- End of Feed Indicator -->
-      <div v-if="!hasMorePosts && !loading && posts.length > 0" class="h-48 w-full snap-start flex bg-gray-900 items-center justify-center relative flex-col">
-         <p class="text-xl text-pink-500 font-bold mb-2">You're all caught up!</p>
-         <p class="text-gray-400">No more posts matching your criteria found.</p>
-         <button @click="fetchPosts(false)" class="mt-4 px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded text-sm text-white">Try Again</button>
+      <!-- Keep the same full-height scroll target when loading finishes without results. -->
+      <div v-if="!loading && posts.length > 0 && (isFetching || !hasMorePosts)" class="h-full w-full snap-start snap-always flex items-center justify-center relative px-6 text-center" role="status">
+         <div v-if="isFetching" class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-600"></div>
+         <div v-else>
+           <p class="text-xl text-pink-500 font-bold mb-2">{{ deepDiveState.active ? 'No more similar posts found' : 'No more posts found' }}</p>
+           <p class="text-gray-400">{{ deepDiveState.active ? 'Try a Deep Dive from another post, expand your search filters, or end Deep Dive to return to your usual feed.' : 'No more posts match your search requirements. Expand your search to find more content.' }}</p>
+         </div>
       </div>
     </div>
   </div>
@@ -154,7 +152,7 @@ import { usePlayerStore } from '../stores/player';
 import BooruService from '../services/BooruService';
 import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
-import recommendationSystem from '../services/RecommendationSystem';
+import recommendationSystem, { deepDiveState } from '../services/RecommendationSystem';
 import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
 import {
   drawFirstFrameNow,
@@ -168,6 +166,8 @@ import { Pause, Play } from 'lucide-vue-next';
 import { postGestureMixin } from '../mixins/postGestureMixin';
 import { postKey } from '../services/postKey';
 import tagSuggestion from '../services/TagSuggestionService';
+import imageAnalysis from '../services/ImageAnalysisService.js';
+import { contentKeys, excludeDuplicateContent } from '../services/contentIdentity.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
@@ -194,6 +194,7 @@ export default {
       loading: true,
       page: 1,
       currentPostIndex: 0,
+      currentPostKey: null,
       tags: 'rating:general',
       sort: 'score',
       sortOrder: 'desc',
@@ -217,6 +218,13 @@ export default {
       _wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
       _clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
       _initializedVideos: new Set(), // Track videos that have already started playback to prevent restart
+      unsubscribeImageAnalysis: null,
+      unsubscribeSession: null,
+      unsubscribeMode: null,
+      deepDiveState,
+      feedDisposed: false,
+      sessionRankTimer: null,
+      historyContentKeys: new Set(),
     }
   },
   directives: {
@@ -248,7 +256,7 @@ export default {
     }
   },
   computed: {
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'aiTaggingEnabled']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Container style that adjusts height for comments sheet
@@ -314,6 +322,9 @@ export default {
       const remainingPosts = Math.max(0, this.posts.length - 1 - this.visibleEndIndex);
       if (remainingPosts === 0) return '0px';
       return `calc(100% * ${remainingPosts})`;
+    },
+    lastScrollIndex() {
+      return this.posts.length - 1 + (this.posts.length > 0 && (this.isFetching || !this.hasMorePosts) ? 1 : 0);
     }
   },
   // beforeUpdate removed to prevent clearing refs and causing infinite loops/resetting state
@@ -325,6 +336,46 @@ export default {
     await this.recommendationSystem.initialize();
   },
   methods: {
+    onRecommendationModeChanged() {
+      if (this.feedDisposed) return;
+      clearTimeout(this.sessionRankTimer);
+      // Preserve the current post and all rows behind it; replace the runway
+      // with candidates fetched for the new mode.
+      this.posts = this.posts.slice(0, Math.max(0, this.currentPostIndex + 1));
+      this.hasMorePosts = true;
+      this.page = 1;
+      this.fetchPosts();
+    },
+    scheduleSessionRanking() {
+      clearTimeout(this.sessionRankTimer);
+      this.sessionRankTimer = setTimeout(async () => {
+        // Keep the visible row and scroll history fixed. Discard a ranking
+        // result if navigation or a background fetch changed the queue.
+        const posts = this.posts, index = this.currentPostIndex;
+        const start = Math.max(0, index + 1);
+        if (posts.length - start < 2) return;
+        try {
+          const ranked = await this.recommendationSystem.rankPosts(posts.slice(start));
+          if (this.posts !== posts || this.currentPostIndex !== index) return;
+          this.posts = [...posts.slice(0, start), ...ranked];
+          this.analyzeUpcomingImages();
+        } catch (error) { console.warn('[Feed] Session ranking unavailable:', error.message); }
+      }, 150);
+    },
+    onImageLoaded(post) {
+      imageAnalysis.enqueue([post], true);
+    },
+    analyzeUpcomingImages() {
+      imageAnalysis.enqueue(this.posts.slice(Math.max(0, this.currentPostIndex), this.currentPostIndex + 8));
+    },
+    onImageAnalysisReady() {
+      // Only remove duplicates ahead of the user; keep the visible post and
+      // previous scroll positions stable when a background hash completes.
+      const end = Math.max(0, this.currentPostIndex + 1);
+      const seen = new Set([...this.historyContentKeys, ...this.posts.slice(0, end).flatMap(contentKeys)]);
+      const remaining = excludeDuplicateContent(this.posts.slice(end), seen);
+      if (remaining.length !== this.posts.length - end) this.posts = [...this.posts.slice(0, end), ...remaining];
+    },
     getCompositeKey(post) {
       return postKey(post);
     },
@@ -369,7 +420,8 @@ export default {
       }
     },
     async fetchPosts(newSearch = false) {
-      if (this.isFetching) return;
+      if (this.isFetching || this.feedDisposed) return;
+      const modeGeneration = deepDiveState.generation;
       this.isFetching = true;
 
       // Settings load asynchronously at app startup; the first fetch must wait for
@@ -381,12 +433,15 @@ export default {
 
       // Get view history to exclude seen posts
       const viewedHistory = await StorageService.getViewedPosts();
+      this.historyContentKeys = new Set(Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)));
       // Reported/blocked posts, artists, and uploaders must never enter the feed
       const blockSets = await ReportService.getBlockSets();
       // Create a set of IDs to exclude (viewed history + currently loaded posts + reported posts)
       const blockedKeys = new Set([
         ...Object.keys(viewedHistory),
+        ...Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)),
         ...this.posts.map(p => this.getCompositeKey(p)),
+        ...this.posts.flatMap(contentKeys),
         ...blockSets.postKeys
       ]);
       
@@ -398,6 +453,7 @@ export default {
         this.page = 1;
         this.posts = [];
         this.currentPostIndex = -1;
+        this.currentPostKey = null;
         this._hasUserScrolled = false;
         if (this.$refs.feedContainer) {
           this.$refs.feedContainer.scrollTop = 0;
@@ -460,12 +516,14 @@ export default {
             wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : this.mediaType.images,
             wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : this.mediaType.videos,
           });
+          if (this.feedDisposed || modeGeneration !== deepDiveState.generation) return;
           
           if (batch.length > 0) {
             // Drop anything blocked via Report/Block (post, artist, or uploader)
-            const allowedBatch = ReportService.filterPosts(batch, blockSets);
+            const allowedBatch = excludeDuplicateContent(ReportService.filterPosts(batch, blockSets), blockedKeys);
             newPosts = [...newPosts, ...allowedBatch];
             batch.forEach(p => blockedKeys.add(this.getCompositeKey(p)));
+            batch.forEach(p => contentKeys(p).forEach(key => blockedKeys.add(key)));
           }
         }
         
@@ -474,23 +532,28 @@ export default {
           // what makes the whitelist/blacklist dropdown instant for the tags
           // the enabled sources actually return.
           for (const post of newPosts) {
-            tagSuggestion.ingestTags(post.tag_string || post.tags || '');
+            tagSuggestion.ingestTags(post.tag_string || post.tags || '', post.source);
           }
           this.posts = [...this.posts, ...newPosts];
+          this.analyzeUpcomingImages();
           console.log(`Added ${newPosts.length} new posts. Total: ${this.posts.length}`);
           // Pre-fetch video URLs as blobs for Tauri production (non-blocking)
           this.processVideoUrls(newPosts);
         } else if (newPosts.length === 0) {
             console.log("No new posts found in batch.");
+            this.hasMorePosts = false;
         }
       } catch (error) {
         console.error('Failed to fetch posts:', error);
       } finally {
         this.isFetching = false;
         this.loading = false;
+        if (!this.feedDisposed && modeGeneration !== deepDiveState.generation) this.onRecommendationModeChanged();
         
         this.$nextTick(() => {
+          if (this.feedDisposed) return;
           this.observePosts();
+          this.determineCurrentPost();
         });
       }
     },
@@ -526,7 +589,7 @@ export default {
         const direction = this._accumulatedWheelDelta > 0 ? 1 : -1;
         this._accumulatedWheelDelta = 0;
         const nextIndex = this.currentPostIndex + direction;
-        if (nextIndex >= 0 && nextIndex < this.posts.length) {
+        if (nextIndex >= 0 && nextIndex <= this.lastScrollIndex) {
           event.preventDefault();
           container.scrollTo({
             top: nextIndex * itemHeight,
@@ -546,23 +609,28 @@ export default {
 
       // We use Math.round to find which post is mostly in view
       const calculatedIndex = Math.round(container.scrollTop / itemHeight);
+      const currentPost = this.posts[calculatedIndex];
+      const currentPostKey = currentPost ? this.getCompositeKey(currentPost) : null;
 
-      // Bounds check: ensure index is valid and points to an actual post
+      // The loading/end row is a scroll target too, but has no post actions.
       if (
         calculatedIndex >= 0 && 
-        calculatedIndex < this.posts.length && 
-        calculatedIndex !== this.currentPostIndex
+        calculatedIndex <= this.lastScrollIndex &&
+        (calculatedIndex !== this.currentPostIndex || currentPostKey !== this.currentPostKey)
       ) {
         this.currentPostIndex = calculatedIndex;
+        this.currentPostKey = currentPostKey;
         // The window moved: make sure the clips about to scroll in are loading.
         this.primeNeighbouringVideos();
-        const currentPost = this.posts[this.currentPostIndex];
+        this.analyzeUpcomingImages();
         
         if (currentPost) {
           const videoEl = this.videoElements[this.getCompositeKey(currentPost)] || null;
           this.$emit('current-post-changed', currentPost, videoEl);
           
           await StorageService.trackPostView(currentPost.id, currentPost, currentPost.source);
+        } else {
+          this.$emit('current-post-changed', null, null);
         }
       }
     },
@@ -785,7 +853,7 @@ export default {
       // Snap forward if scrolled past 40 of item height, otherwise snap back
       const SNAP_THRESHOLD = 0.4;
       const targetIndex = offset / itemHeight >= SNAP_THRESHOLD ? baseIndex + 1 : baseIndex;
-      const clampedIndex = Math.max(0, Math.min(targetIndex, this.posts.length - 1));
+      const clampedIndex = Math.max(0, Math.min(targetIndex, this.lastScrollIndex));
       if (clampedIndex === this.currentPostIndex) return;
       container.scrollTo({
         top: clampedIndex * itemHeight,
@@ -884,6 +952,9 @@ export default {
     },
   },
   mounted() {
+    this.unsubscribeImageAnalysis = imageAnalysis.subscribe(this.onImageAnalysisReady);
+    this.unsubscribeSession = recommendationSystem.subscribeSession(this.scheduleSessionRanking);
+    this.unsubscribeMode = recommendationSystem.subscribeMode(this.onRecommendationModeChanged);
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
     this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
 
@@ -1037,6 +1108,11 @@ export default {
     });
   },
   beforeUnmount() {
+    this.feedDisposed = true;
+    this.unsubscribeImageAnalysis?.();
+    this.unsubscribeSession?.();
+    this.unsubscribeMode?.();
+    clearTimeout(this.sessionRankTimer);
     this.$refs.feedContainer.removeEventListener('scroll', this.handleScroll);
     this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
     if (this.observer) {
@@ -1051,6 +1127,9 @@ export default {
     Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
   },
   watch: {
+    aiTaggingEnabled(enabled) {
+      if (enabled) this.analyzeUpcomingImages();
+    },
     '$route.query': {
       handler(newQuery, oldQuery) {
         const newQueryStr = JSON.stringify(newQuery);

@@ -2,15 +2,11 @@ import StorageService from '../services/StorageService';
 import tagEmbedding from '../services/TagEmbedding';
 import { MLScorer, TRAIN_THRESHOLD } from '../services/MLScorer';
 import { BanditExplorer } from '../services/BanditExplorer';
-
-// Constants for recommendation system
-const INTERACTION_WEIGHTS = {
-  like: 1.0,
-  dislike: -1.0,
-  favorite: 2.0,
-  view: 0.2,
-  timeSpent: 0.1
-};
+import { hydrateImageAnalysis } from '../services/ImageAnalysisCache.js';
+import { learningPost } from '../services/imageFeatures.js';
+import { postKey } from '../services/postKey.js';
+import { SessionInterest, interactionSignal, PROFILE_HALF_LIFE_HOURS } from '../services/SessionInterest.js';
+import { DeepDiveInterest } from '../services/DeepDiveInterest.js';
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
 
@@ -28,7 +24,7 @@ export const COMMON_TAGS = [
   'simple_background'
 ];
 
-class RecommendationWorkerCore {
+export class RecommendationWorkerCore {
   constructor() {
     this.userEmbedding = null;
     this.rawTagScores = {};
@@ -47,6 +43,8 @@ class RecommendationWorkerCore {
 
     // ML components
     this.mlInitialized = false;
+    this.sessionInterest = new SessionInterest();
+    this.deepDive = new DeepDiveInterest();
   }
 
   async initialize() {
@@ -106,7 +104,7 @@ class RecommendationWorkerCore {
   }
 
   applyDecay(hoursPassed) {
-    const decayFactor = Math.exp(-0.05 * hoursPassed);
+    const decayFactor = Math.pow(0.5, hoursPassed / PROFILE_HALF_LIFE_HOURS);
     for (const tag in this.rawTagScores) {
       this.rawTagScores[tag] *= decayFactor;
       if (Math.abs(this.rawTagScores[tag]) < 0.01) delete this.rawTagScores[tag];
@@ -170,6 +168,10 @@ class RecommendationWorkerCore {
     const mlNeedsBackfill = this.mlInitialized && isIncremental && this.mlScorer.interactionCount === 0;
     const backfillUpTo = this.lastUpdateTime;
 
+    const settings = await StorageService.loadAppSettings();
+    await hydrateImageAnalysis(interactions.map(i => i.metadata?.post).filter(Boolean), { includeAi: !!settings?.settings?.aiTaggingEnabled });
+    interactions = interactions.map(i => i.metadata?.post ? { ...i, metadata: { ...i.metadata, post: learningPost(i.metadata.post) } } : i);
+
     // Process interactions for both heuristic profile and ML
     interactions.forEach(interaction => {
       // Undo events (un-like, un-favorite, clearing a dislike) carry no
@@ -180,15 +182,9 @@ class RecommendationWorkerCore {
       if (isToggle && !interaction.value) return;
 
       const ageInHours = (now - interaction.timestamp) / (1000 * 60 * 60);
-      const recencyWeight = Math.exp(-0.05 * ageInHours);
-      let weight = INTERACTION_WEIGHTS[interaction.type] || 0;
-
-      if (interaction.type === 'timeSpent') {
-        const seconds = interaction.value / 1000;
-        // A sub-2s view is a swipe-away: mildly negative preference signal
-        weight = seconds < 2 ? -0.2 : weight * seconds;
-      }
-      weight *= recencyWeight;
+      const recencyWeight = Math.pow(0.5, ageInHours / PROFILE_HALF_LIFE_HOURS);
+      const durableWeight = interaction.metadata?.profileWeight ?? 1;
+      const weight = interactionSignal(interaction.type, interaction.value) * recencyWeight * durableWeight;
 
       if (interaction.metadata && interaction.metadata.post) {
         this.updateProfileWithPost(interaction.metadata.post, weight);
@@ -217,14 +213,17 @@ class RecommendationWorkerCore {
             {
               ratingPreferences: this.ratingPreferences,
               mediaTypePreferences: this.mediaTypePreferences,
-            }
+            },
+            durableWeight
           );
 
           // Record reward for bandit ONLY when the post was fetched via a strategy
           // This ensures the bandit learns which query strategies
           // produce engaging content.
           const strategy = interaction.metadata.post._strategy;
-          if (strategy) {
+          if (interaction.metadata.deepDive) {
+            // A dive reflects its anchor, not the normal strategy's quality.
+          } else if (strategy) {
             this.banditExplorer.recordReward(strategy, label);
           } else {
             // Normal mode: record reward under the bandit's current best strategy
@@ -259,6 +258,7 @@ class RecommendationWorkerCore {
 
     this.lastUpdateTime = now;
     await this._saveProfileSnapshot();
+    this.postScoreCache.clear();
   }
 
   /**
@@ -279,18 +279,21 @@ class RecommendationWorkerCore {
       i.metadata?.post
     );
     if (history.length === 0) return;
+    const settings = await StorageService.loadAppSettings();
+    await hydrateImageAnalysis(history.map(i => i.metadata.post), { includeAi: !!settings?.settings?.aiTaggingEnabled });
 
     console.log(`[ML] Backfilling scorer from ${history.length} stored interactions`);
     for (const interaction of history) {
       this.mlScorer.addTrainingSample(
-        interaction.metadata.post,
+        learningPost(interaction.metadata.post),
         interaction.type,
         interaction.value,
         this.tagScores,
         {
           ratingPreferences: this.ratingPreferences,
           mediaTypePreferences: this.mediaTypePreferences,
-        }
+        },
+        interaction.metadata?.profileWeight ?? 1
       );
     }
     this.mlScorer.flushTraining();
@@ -324,9 +327,12 @@ class RecommendationWorkerCore {
   }
 
   updateProfileWithPost(post, weight) {
+    if (!weight) return;
     const avoidedSet = new Set(this.avoidedTags || []);
+    const processed = new Set();
     const processTag = (tag, category) => {
-      if (!tag || avoidedSet.has(tag)) return;
+      if (!tag || avoidedSet.has(tag) || processed.has(tag)) return;
+      processed.add(tag);
       if (this.rawTagScores[tag] === undefined) {
         this.rawTagScores[tag] = 0;
         this.tagCategories[tag] = category;
@@ -345,15 +351,7 @@ class RecommendationWorkerCore {
 
     const generalTags = post.tag_string || '';
     if (generalTags) {
-      generalTags.split(' ').forEach(tag => {
-        if (avoidedSet.has(tag)) return;
-        if (tag && this.tagCategories[tag] === undefined) {
-          processTag(tag, 'general');
-        } else if (tag && this.tagCategories[tag] === 'general') {
-          this.rawTagScores[tag] += weight;
-          this.tagEngagement[tag] += Math.abs(weight);
-        }
-      });
+      generalTags.split(' ').forEach(tag => processTag(tag, this.tagCategories[tag] || 'general'));
     }
 
     if (post.rating) {
@@ -421,6 +419,8 @@ class RecommendationWorkerCore {
    * been freshly installed.
    */
   factoryReset() {
+    this.deepDive.end();
+    this.sessionInterest.reset();
     this.initializeDefaultProfile();
     this.postScoreCache.clear();
     this.resetExploreSession();
@@ -432,6 +432,8 @@ class RecommendationWorkerCore {
   }
 
   async resetRecommendations() {
+    this.deepDive.end();
+    this.sessionInterest.reset();
     const resetTime = Date.now();
     await StorageService.storePreferences({ recommendationResetTime: resetTime });
 
@@ -466,15 +468,25 @@ class RecommendationWorkerCore {
     });
   }
 
-  async trackInteraction(postId, interactionType, value, postData, updateImmediately = false) {
+  async trackInteraction(postId, interactionType, value, postData, updateImmediately = false, context = null) {
+    // Capture mode before awaiting storage/image analysis so leaving a dive
+    // cannot turn its last watch-time event into ordinary profile evidence.
+    const diving = context?.deepDive ?? this.deepDive.active;
+    const evidence = this.deepDive;
+    const settings = await StorageService.loadAppSettings();
+    if (postData) await hydrateImageAnalysis([postData], { includeAi: !!settings?.settings?.aiTaggingEnabled });
+    const learnedPost = postData ? learningPost(postData) : null;
+    const profileWeight = diving
+      ? evidence.profileWeight(learnedPost, interactionType, value, this.avoidedTags)
+      : this.sessionInterest.record(learnedPost, interactionType, value, this.avoidedTags);
     await StorageService.storeInteraction({
       postId,
       type: interactionType,
       value,
-      metadata: { post: postData }
+      metadata: { post: postData, profileWeight, deepDive: diving }
     });
 
-    this.postScoreCache.delete(postId);
+    this.postScoreCache.clear();
 
     if (updateImmediately) {
       await this.updateUserProfile();
@@ -487,8 +499,10 @@ class RecommendationWorkerCore {
    * @returns {number} - Score (engagement probability or heuristic score)
    */
   scorePost(post) {
-    if (this.postScoreCache.has(post.id)) {
-      return this.postScoreCache.get(post.id);
+    const key = postKey(post);
+    post = learningPost(post);
+    if (this.postScoreCache.has(key)) {
+      return this.blendRankingScore(this.postScoreCache.get(key), post);
     }
 
     let score;
@@ -508,16 +522,31 @@ class RecommendationWorkerCore {
       if (score >= 0) {
         // Add small random noise for discovery
         score += Math.random() * 0.05;
-        this.postScoreCache.set(post.id, score);
-        return score;
+        this.postScoreCache.set(key, score);
+        return this.blendRankingScore(score, post);
       }
     }
 
     // Cold start: use embedding-based similarity (no heuristic)
     score = this._embeddingScore(post);
     score += Math.random() * 0.1; // more noise during cold start for exploration
-    this.postScoreCache.set(post.id, score);
-    return score;
+    this.postScoreCache.set(key, score);
+    return this.blendRankingScore(score, post);
+  }
+
+  blendRankingScore(score, post) {
+    return this.deepDive.blend(this.sessionInterest.blend(score, post, this.avoidedTags), post, this.avoidedTags, tagEmbedding);
+  }
+
+  async setDeepDive(post) {
+    if (post) {
+      const settings = await StorageService.loadAppSettings();
+      await hydrateImageAnalysis([post], { includeAi: !!settings?.settings?.aiTaggingEnabled });
+      this.deepDive = new DeepDiveInterest();
+      this.deepDive.start(learningPost(post));
+    } else this.deepDive.end();
+    this.postScoreCache.clear();
+    this.resetExploreSession();
   }
 
   /**
@@ -568,6 +597,10 @@ class RecommendationWorkerCore {
 
     const details = {
       totalScore,
+      deepDiveActive: this.deepDive.active,
+      deepDiveSimilarity: this.deepDive.active ? this.deepDive.similarity(learningPost(post), this.avoidedTags, tagEmbedding) : null,
+      sessionScore: this.sessionInterest.score(learningPost(post), this.avoidedTags),
+      sessionWeight: this.sessionInterest.weight,
       mlScore: null,
       mlConfidence: 0,
       mlFeatures: null,
@@ -616,7 +649,7 @@ class RecommendationWorkerCore {
     if (!posts || posts.length === 0) return [];
     const scoredPosts = posts.map(post => {
       let score = this.scorePost(post);
-      switch (post._strategy) {
+      switch (this.deepDive.active ? null : post._strategy) {
         case 'pivot': score += 0.3; break;
         case 'reach': score += 0.5; break;
         case 'wildcard': score += 0.4; break;
@@ -637,7 +670,7 @@ class RecommendationWorkerCore {
 
   getRecommendedTags(limit = 5) {
     if (!this.tagScores) return [];
-    return Object.entries(this.tagScores)
+    return Object.entries(this.rankingTagScores())
       .filter(([tag, score]) => score > 0 && this.tagCategories[tag] !== 'meta')
       .sort((a, b) => b[1] - a[1])
       .slice(0, limit)
@@ -671,7 +704,7 @@ class RecommendationWorkerCore {
   getQueryableTagsWithScores() {
     if (!this.tagScores) return [];
     const QUERY_CATEGORY_WEIGHTS = { character: 1.0, copyright: 1.0, artist: 1.0, general: 0.5, meta: 0.0 };
-    return Object.entries(this.tagScores)
+    return Object.entries(this.rankingTagScores())
       .filter(([tag, score]) => score > 0)
       .filter(([tag]) => this.tagCategories[tag] !== 'meta')
       .filter(([tag]) => !this.avoidedTags.includes(tag))
@@ -684,11 +717,19 @@ class RecommendationWorkerCore {
       .sort((a, b) => b.score - a.score);
   }
 
+  rankingTagScores() {
+    const weight = this.sessionInterest.weight;
+    const sessionTags = this.sessionInterest.affinities();
+    const tags = new Set([...Object.keys(this.tagScores), ...Object.keys(sessionTags)]);
+    return Object.fromEntries([...tags].map(tag => [tag, (this.tagScores[tag] || 0) * (1 - weight) + (sessionTags[tag] || 0) * weight]));
+  }
+
   /**
    * Generate multi-strategy queries using Thompson Sampling for strategy selection.
    * The bandit optimizes which strategies to use based on past performance.
    */
   generateMultiStrategyQueries(selectedRatings = ['general'], whitelist = []) {
+    if (this.deepDive.active) return this.deepDive.queries(this.avoidedTags, tagEmbedding);
     const queries = [];
     let topTagsWithScores = this.getQueryableTagsWithScores();
 
@@ -859,7 +900,7 @@ class RecommendationWorkerCore {
 const core = new RecommendationWorkerCore();
 
 // Handle incoming messages
-self.onmessage = async (e) => {
+if (typeof self !== 'undefined') self.onmessage = async (e) => {
   const { id, type, payload } = e.data;
 
   try {
@@ -886,7 +927,7 @@ self.onmessage = async (e) => {
         result = true;
         break;
       case 'trackInteraction':
-        await core.trackInteraction(payload.postId, payload.interactionType, payload.value, payload.postData, payload.updateImmediately);
+        await core.trackInteraction(payload.postId, payload.interactionType, payload.value, payload.postData, payload.updateImmediately, payload.context);
         result = true;
         break;
       case 'scorePost':
@@ -901,6 +942,21 @@ self.onmessage = async (e) => {
       case 'rankPosts':
         result = core.rankPosts(payload);
         break;
+      case 'setDeepDive':
+        await core.setDeepDive(payload);
+        result = true;
+        break;
+      case 'imageAnalysisReady': {
+        const settings = await StorageService.loadAppSettings();
+        const post = settings?.settings?.aiTaggingEnabled ? payload : { ...payload, imageAnalysis: { ...payload.imageAnalysis, aiTags: [] } };
+        core.deepDive.refresh(learningPost(post));
+        if (core.mlInitialized) core.mlScorer.refreshPostFeatures(post, core.tagScores, {
+          ratingPreferences: core.ratingPreferences, mediaTypePreferences: core.mediaTypePreferences,
+        });
+        core.postScoreCache.clear();
+        result = true;
+        break;
+      }
       case 'summarizeTagScores':
         result = core.summarizeTagScores(payload);
         break;

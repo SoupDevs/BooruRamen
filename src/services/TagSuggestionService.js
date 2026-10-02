@@ -1,196 +1,132 @@
-/*
- * BooruRamen - A personalized booru browser
- * Copyright (C) 2025 SoupDevs
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- */
-/**
- * TagSuggestionService.js
- * Instant autocomplete for the whitelist/blacklist tag fields.
- *
- * Two layers, cheapest first:
- *  - a local index of every tag this install has already seen (feed posts,
- *    view history, the tag category cache). Matching is character-order-wise
- *    so "me" finds "meme", "tail" finds "shark_tail", and "shtail" - where
- *    "sh" comes before "tail" - still finds "shark_tail".
- *  - a best-effort remote lookup against the enabled sources for tags the
- *    local index has never seen. Danbooru exposes an autocomplete endpoint and
- *    Moebooru matches prefix/substring tags; the Gelbooru-family dapis only
- *    answer exact-name lookups, so those sources stay on the local layer.
- *
- * Nothing here touches IndexedDB at import time (the heavy modules load
- * lazily inside prime()), so suggest() can never wait on a database.
- */
+import { reactive } from 'vue';
+import { getActiveProfileDbName } from './ProfileService.js';
+import { normalizeTag, sourceKey, rankTags } from './tagMatching.js';
+export { scoreTag } from './tagMatching.js';
+export const tagCatalogStatus = reactive({ sources: [] });
 
-// Remote answers are cached per query string; the cache is dropped wholesale
-// once it grows past this, which keeps a long typing session bounded.
-const MAX_REMOTE_CACHE = 60;
-
-const normalize = (value) => (value == null ? '' : String(value)).toLowerCase().trim();
-
-/** True when every character of `needle` appears in `hay` in order. */
-function isSubsequence(needle, hay) {
-  let i = 0;
-  for (let j = 0; j < hay.length && i < needle.length; j++) {
-    if (hay[j] === needle[i]) i += 1;
-  }
-  return i === needle.length;
-}
-
-/**
- * Match cost of `query` against `tag`, lower is better, or null for no match.
- * 0 exact, 1 prefix, 2 word-part prefix ("shark_tail" for "tail"),
- * 3 substring, 4 character-order-wise (subsequence).
- */
-export function scoreTag(tag, query) {
-  const t = normalize(tag);
-  const q = normalize(query);
-  if (!t || !q) return null;
-  if (t === q) return 0;
-  if (t.startsWith(q)) return 1;
-  // Underscore/space/dash separated parts: booru tags read as word sequences.
-  if (t.split(/[_\s\-/]+/).some((part) => part.length > 0 && part.startsWith(q))) return 2;
-  if (t.includes(q)) return 3;
-  if (isSubsequence(q, t)) return 4;
-  return null;
-}
-
-class TagSuggestionService {
+export class TagSuggestionService {
   constructor() {
-    this.tags = new Set();
-    this.primePromise = null;
-    this.remoteCache = new Map();
-    this.lastRemoteQuery = '';
+    this.tags = new Map(); this.sources = []; this.adapters = []; this.primePromise = null;
+    this.remoteCache = new Map(); this.lastRemoteQuery = ''; this.generation = 0;
+    this.worker = null; this.nextId = 0; this.pending = new Map(); this.jobs = new Map(); this.listeners = new Set();
   }
-
-  /**
-   * Add tags from a space-separated tag string or an array of tags.
-   * @returns {number} how many tags were new to the index
-   */
-  ingestTags(source) {
-    if (!source) return 0;
-    const list = Array.isArray(source) ? source : String(source).split(/\s+/);
-    let added = 0;
-    for (const raw of list) {
-      const tag = normalize(raw);
-      if (!tag) continue;
-      if (!this.tags.has(tag)) {
-        this.tags.add(tag);
-        added += 1;
-      }
+  subscribe(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+  notify() { this.listeners.forEach(listener => listener()); }
+  ingestTags(input, source) {
+    const key = sourceKey(source);
+    if (!input || !key) return 0; // Unscoped tags cannot prove source membership.
+    if (!this.tags.has(key)) this.tags.set(key, new Set());
+    const tags = this.tags.get(key), before = tags.size;
+    for (const raw of Array.isArray(input) ? input : String(input).split(/\s+/)) {
+      const tag = normalizeTag(raw); if (tag) tags.add(tag);
     }
-    return added;
+    return tags.size - before;
   }
-
-  /** Number of tags currently in the local index. */
-  get size() {
-    return this.tags.size;
+  get size() { return new Set(this.sources.flatMap(source => [...(this.tags.get(source) || [])])).size; }
+  request(type, payload) {
+    if (!this.worker) {
+      this.worker = new Worker(new URL('../workers/tagCatalog.worker.js', import.meta.url), { type: 'module', name: getActiveProfileDbName() });
+      this.worker.onmessage = ({ data }) => {
+        const pending = this.pending.get(data.id); if (!pending) return;
+        this.pending.delete(data.id);
+        if (data.error) pending.reject(new Error(data.error)); else pending.resolve(data.result);
+      };
+      this.worker.onerror = () => {
+        for (const pending of this.pending.values()) pending.reject(new Error('Tag catalog worker failed.'));
+        this.pending.clear(); this.worker.terminate(); this.worker = null;
+      };
+    }
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, type, payload }); });
   }
-
-  /**
-   * Load the persistent sources of known tags (category cache + view history)
-   * once per session. Safe to call on every dropdown open; only the first call
-   * does work, and failures degrade to an empty-but-working local index.
-   */
+  setSources(sources, adapters) {
+    this.sources = [...new Set(sources.map(source => sourceKey(source.url)))];
+    this.adapters = adapters;
+    this.generation++; this.remoteCache.clear(); this.lastRemoteQuery = '';
+    // Restart with the current adapter credentials, resuming persisted cursors.
+    for (const job of this.jobs.values()) job.abort();
+    this.jobs.clear();
+    tagCatalogStatus.sources = this.sources.map(source => ({ source, count: 0, phase: 'loading', error: '' }));
+    this.notify();
+    for (const adapter of adapters) this.startCatalog(adapter);
+  }
   async prime() {
     if (this.primePromise) return this.primePromise;
     this.primePromise = (async () => {
-      try {
-        const { gelbooruTagCache } = await import('./GelbooruTagCache.js');
-        await gelbooruTagCache.init();
-        for (const tag of gelbooruTagCache.memoryCache.keys()) {
-          this.ingestTags([tag]);
-        }
-      } catch (e) {
-        console.warn('[TagSuggestion] tag category cache unavailable:', e);
+      const { default: BooruService } = await import('./BooruService.js');
+      await BooruService.initialize();
+      if (!this.sources.length) this.setSources(BooruService.activeSources, BooruService.adapters);
+      const { default: StorageService } = await import('./StorageService.js');
+      const history = await StorageService.getViewedPosts();
+      for (const entry of Object.values(history)) {
+        if (entry.data) this.ingestTags(entry.data.tag_string || entry.data.tags, entry.data.source);
       }
-
-      try {
-        const { default: StorageService } = await import('./StorageService.js');
-        const history = await StorageService.getViewedPosts();
-        for (const entry of Object.values(history || {})) {
-          const post = entry && entry.data;
-          if (!post) continue;
-          this.ingestTags(post.tag_string || post.tags || '');
-        }
-      } catch (e) {
-        console.warn('[TagSuggestion] view history unavailable:', e);
-      }
-    })();
+      this.notify();
+    })().catch(error => { this.primePromise = null; console.warn('[TagSuggestion] Index unavailable:', error.message); });
     return this.primePromise;
   }
-
-  /**
-   * Synchronous suggestions from the local index.
-   * @param {string} query - what the user has typed so far
-   * @param {object} [options]
-   * @param {number} [options.limit] - max suggestions (default 8)
-   * @param {string[]} [options.exclude] - tags already in the list being edited
-   * @returns {string[]} ranked tag names
-   */
-  suggest(query, { limit = 8, exclude = [] } = {}) {
-    const q = normalize(query);
-    if (!q) return [];
-    const skip = new Set((exclude || []).map(normalize));
-
-    const scored = [];
-    for (const tag of this.tags) {
-      if (skip.has(tag)) continue;
-      const cost = scoreTag(tag, q);
-      if (cost !== null) scored.push([cost, tag]);
-    }
-
-    scored.sort((a, b) => (
-      a[0] - b[0] ||
-      a[1].length - b[1].length ||
-      (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0)
-    ));
-    return scored.slice(0, limit).map((entry) => entry[1]);
-  }
-
-  /**
-   * Best-effort remote tags from every enabled source. Resolves to [] on any
-   * failure so a slow or blocked source never delays the local suggestions.
-   * @param {string} query
-   * @param {number} [limit]
-   * @returns {Promise<string[]>}
-   */
-  async remoteSuggest(query, limit = 10) {
-    const q = normalize(query);
-    if (!q) return [];
-    if (this.remoteCache.has(q)) return this.remoteCache.get(q);
-
-    let results = [];
+  async startCatalog(adapter) {
+    const source = sourceKey(adapter.baseUrl);
+    if (this.jobs.has(source)) return;
+    const controller = new AbortController(); this.jobs.set(source, controller);
+    const update = patch => {
+      if (this.jobs.get(source) !== controller) return;
+      const status = tagCatalogStatus.sources.find(item => item.source === source);
+      if (status) Object.assign(status, patch);
+    };
     try {
-      const { default: BooruService } = await import('./BooruService.js');
-      results = await BooruService.searchTags(q, limit);
-    } catch (e) {
-      console.warn('[TagSuggestion] remote tag lookup failed:', e);
-      results = [];
-    }
-
-    results = [...new Set(results.map(normalize).filter(Boolean))];
-    if (this.remoteCache.size >= MAX_REMOTE_CACHE) this.remoteCache.clear();
-    this.remoteCache.set(q, results);
-    return results;
+      const loaded = await this.request('load', { source });
+      let state = loaded.state || {};
+      update({ count: loaded.count }); this.notify();
+      if (state.complete && Date.now() - state.updatedAt < 7 * 86400000) { update({ phase: 'ready' }); return; }
+      if (state.complete) state = {};
+      while (!controller.signal.aborted && this.sources.includes(source)) {
+        // Posts take priority; slowly retrieve every catalog page in the background.
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        if (controller.signal.aborted) return;
+        const { default: BooruService } = await import('./BooruService.js');
+        if (BooruService.activePostRequests || (typeof document !== 'undefined' && document.hidden)) continue;
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        let page;
+        try { page = await adapter.getTagPage(state.cursor, controller.signal); }
+        finally { clearTimeout(timeout); }
+        if (controller.signal.aborted) return;
+        if (page.tags.length && page.signature === state.signature) throw new Error('This source repeats tag pages; its catalog could not be completed.');
+        state = { cursor: page.nextCursor, signature: page.signature, complete: page.done, updatedAt: Date.now() };
+        const saved = await this.request('page', { source, tags: page.tags, state });
+        this.remoteCache.clear(); update({ count: saved.count, phase: page.done ? 'ready' : 'loading' }); this.notify();
+        if (page.done) return;
+      }
+    } catch (error) { update({ phase: 'failed', error: error.message }); this.notify(); }
+    finally { if (this.jobs.get(source) === controller) this.jobs.delete(source); }
   }
-
-  /**
-   * The query the most recent remoteSuggest() call was made for. Lets a UI
-   * drop an answer that arrived after the user kept typing.
-   */
-  markRemoteQuery(query) {
-    this.lastRemoteQuery = normalize(query);
+  retryCatalogs() { for (const adapter of this.adapters) this.startCatalog(adapter); }
+  suggest(query, { limit = 8, exclude = [] } = {}) {
+    const all = this.sources.flatMap(source => [...(this.tags.get(source) || [])]);
+    return rankTags(all, query, limit, exclude);
   }
-
-  isRemoteQueryCurrent(query) {
-    return this.lastRemoteQuery === normalize(query);
+  async remoteSuggest(query, limit = 10) {
+    const q = normalizeTag(query); if (!q) return [];
+    const generation = this.generation, sources = [...this.sources];
+    const cacheKey = `${generation}:${q}:${limit}`;
+    if (this.remoteCache.has(cacheKey)) return this.remoteCache.get(cacheKey);
+    const catalog = this.request('search', { sources, query: q, limit }).catch(() => []);
+    const remote = this.adapters.map(async adapter => {
+      let timer;
+      try {
+        const tags = await Promise.race([adapter.searchTags(q, limit), new Promise(resolve => { timer = setTimeout(() => resolve([]), 2500); })]);
+        if (generation === this.generation) this.ingestTags(tags, adapter.baseUrl);
+        return tags;
+      } catch { return []; } finally { clearTimeout(timer); }
+    });
+    const results = await Promise.all([catalog, ...remote]);
+    if (generation !== this.generation) return [];
+    const merged = rankTags(results.flat(), q, limit);
+    if (this.remoteCache.size >= 60) this.remoteCache.clear();
+    this.remoteCache.set(cacheKey, merged); return merged;
   }
+  markRemoteQuery(query) { this.lastRemoteQuery = normalizeTag(query); }
+  isRemoteQueryCurrent(query) { return this.lastRemoteQuery === normalizeTag(query); }
 }
-
-// Singleton instance
 export const tagSuggestionService = new TagSuggestionService();
 export default tagSuggestionService;

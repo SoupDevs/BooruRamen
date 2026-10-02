@@ -15,6 +15,14 @@
 import StorageService from './StorageService';
 import BooruService from './BooruService';
 import { getActiveProfileDbName } from './ProfileService';
+import imageAnalysis from './ImageAnalysisService.js';
+import { hydrateImageAnalysis } from './ImageAnalysisCache.js';
+import { excludeDuplicateContent } from './contentIdentity.js';
+import { useSettingsStore } from '../stores/settings.js';
+import { reactive } from 'vue';
+import { postKey } from './postKey.js';
+
+export const deepDiveState = reactive({ active: false, anchorKey: null, anchorId: null, busy: false, error: '', generation: 0 });
 
 export const COMMON_TAGS = [
   '1girl', '1boy', '2girls', '2boys', 'solo', 'comic', 'monochrome',
@@ -44,6 +52,14 @@ class RecommendationSystem {
     });
     this.messageId = 0;
     this.resolvers = new Map();
+    this.sessionListeners = new Set();
+    this.modeListeners = new Set();
+    imageAnalysis.subscribe(async post => {
+      try {
+        await this.callWorker('imageAnalysisReady', post);
+        if (deepDiveState.active) this.sessionListeners.forEach(listener => listener());
+      } catch (error) { console.warn('[Recommendation] Visual update failed:', error.message); }
+    });
 
     // Local session state for strategy pagination cursors
     this.strategyCursors = {};
@@ -106,16 +122,41 @@ class RecommendationSystem {
 
   async resetRecommendations() {
     this.strategyCursors = {};
-    return this.callWorker('resetRecommendations');
+    const result = await this.callWorker('resetRecommendations');
+    this.publishDeepDive(null);
+    return result;
   }
 
   async factoryReset() {
     this.strategyCursors = {};
-    return this.callWorker('factoryReset');
+    const result = await this.callWorker('factoryReset');
+    this.publishDeepDive(null);
+    return result;
   }
 
-  async trackInteraction(postId, interactionType, value, postData, updateImmediately = false) {
-    return this.callWorker('trackInteraction', { postId, interactionType, value, postData, updateImmediately });
+  async trackInteraction(postId, interactionType, value, postData, updateImmediately = false, context = null) {
+    const result = await this.callWorker('trackInteraction', { postId, interactionType, value, postData, updateImmediately, context: context || { deepDive: deepDiveState.active } });
+    if (postData && (value || interactionType === 'timeSpent')) this.sessionListeners.forEach(listener => listener());
+    return result;
+  }
+
+  subscribeSession(listener) { this.sessionListeners.add(listener); return () => this.sessionListeners.delete(listener); }
+
+  subscribeMode(listener) { this.modeListeners.add(listener); return () => this.modeListeners.delete(listener); }
+  publishDeepDive(post) {
+    Object.assign(deepDiveState, { active: !!post, anchorKey: post ? postKey(post) : null, anchorId: post?.id ?? null, generation: deepDiveState.generation + 1 });
+    this.strategyCursors = {};
+    this.modeListeners.forEach(listener => listener());
+  }
+  async setDeepDive(post = null) {
+    if (deepDiveState.busy) return false;
+    Object.assign(deepDiveState, { busy: true, error: '' });
+    try {
+      await this.callWorker('setDeepDive', post);
+      this.publishDeepDive(post);
+      return true;
+    } catch (error) { deepDiveState.error = error.message; return false; }
+    finally { deepDiveState.busy = false; }
   }
 
   // Returns a promise now instead of a direct value
@@ -193,6 +234,7 @@ class RecommendationSystem {
   }
 
   async getCuratedExploreFeed(fetchFunction, options = {}) {
+    const modeGeneration = deepDiveState.generation;
     const {
       postsPerFetch = 20,
       maxTotal = 10,
@@ -203,6 +245,7 @@ class RecommendationSystem {
     } = options;
 
     await this.updateUserProfile();
+    if (modeGeneration !== deepDiveState.generation) return [];
 
     const queries = await this.generateMultiStrategyQueries(selectedRatings, whitelist);
     console.log("Explore queries:", queries);
@@ -344,6 +387,7 @@ class RecommendationSystem {
       });
 
       const fetchResults = await Promise.all(fetchPromises);
+      if (modeGeneration !== deepDiveState.generation) return [];
 
       let allPosts = [];
       fetchResults.forEach((posts, index) => {
@@ -358,7 +402,7 @@ class RecommendationSystem {
         }
       });
 
-      if (allPosts.length < 10) {
+      if (allPosts.length < 10 && !deepDiveState.active) {
         console.log(`Only found ${allPosts.length} posts, trying fallback query`);
         try {
           const fallbackQuery = { tags: 'order:rank', page: 1 };
@@ -384,7 +428,7 @@ class RecommendationSystem {
         }
       }
 
-      if (allPosts.length === 0) {
+      if (allPosts.length === 0 && !deepDiveState.active) {
         console.warn("All queries returned no posts. This should not happen with our conservative approach.");
         try {
           const lastResortBaseQuery = { tags: '' };
@@ -424,6 +468,8 @@ class RecommendationSystem {
       });
 
       let uniquePosts = Array.from(uniqueMap.values());
+      await hydrateImageAnalysis(uniquePosts, { includeAi: useSettingsStore().aiTaggingEnabled });
+      uniquePosts = excludeDuplicateContent(uniquePosts, existingPostIds);
       console.log(`Found ${uniquePosts.length} unique posts after deduplication`);
 
       if (existingPostIds.size > 0) {

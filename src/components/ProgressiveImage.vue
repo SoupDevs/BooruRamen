@@ -45,7 +45,7 @@
       alt=""
       class="absolute inset-0 w-full h-full object-contain pointer-events-none transition-opacity duration-200"
       :class="{ 'opacity-0': !fullLoaded }"
-      @load="fullLoaded = true"
+      @load="onFullOverlayLoad"
       @error="onFullOverlayError"
     />
   </div>
@@ -130,6 +130,10 @@ export default {
     },
   },
   methods: {
+    onFullOverlayLoad(event) {
+      this.fullLoaded = true;
+      this.$emit('load', event);
+    },
     onInFlowLoad(event) {
       // The in-flow element *is* the full image (no preview, or a preview
       // identical to src for tiny posts): layout is final, nothing to fade.

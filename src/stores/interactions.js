@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import StorageService from '../services/StorageService'
+import RecommendationSystem, { deepDiveState } from '../services/RecommendationSystem'
 
 export const useInteractionsStore = defineStore('interactions', {
     state: () => ({
@@ -19,7 +20,16 @@ export const useInteractionsStore = defineStore('interactions', {
         },
 
         async logInteraction(interaction) {
-            await StorageService.storeInteraction(interaction)
+            const diving = interaction.metadata?.deepDive ?? deepDiveState.active
+            // Route real UI interactions through the session learner before
+            // persistence; recording here separately would lose its weight.
+            try {
+                await RecommendationSystem.trackInteraction(interaction.postId, interaction.type, interaction.value, interaction.metadata?.post, false, { deepDive: diving })
+            } catch (error) {
+                console.warn('[Interactions] Session learner unavailable:', error.message)
+                // A worker failure must not lose the user's explicit actions.
+                await StorageService.storeInteraction({ ...interaction, metadata: { ...interaction.metadata, profileWeight: diving ? 0.015 : 0.15, deepDive: diving } })
+            }
 
             // Update local state for reactivity
             const existingIndex = this.recentInteractions.findIndex(

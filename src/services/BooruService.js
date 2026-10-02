@@ -20,6 +20,7 @@ class BooruService {
     constructor() {
         this.adapters = [];
         this.activeSources = [];
+        this.activePostRequests = 0;
         this.initializationPromise = this.initializeInternal();
     }
 
@@ -60,6 +61,9 @@ class BooruService {
         // fetch (hotlink-protected engines), so their images load in both the
         // browser and the packaged app.
         registerRefererMediaSources(sources);
+        // Never await catalog downloads on the feed's request path.
+        import('./TagSuggestionService.js').then(({ default: suggestions }) => suggestions.setSources(sources, this.adapters))
+            .catch(error => console.warn('[BooruService] Tag catalogs unavailable:', error.message));
 
         if (save) {
             await StorageService.storePreferences({
@@ -121,6 +125,12 @@ class BooruService {
     }
 
     async getPosts(params) {
+        this.activePostRequests++;
+        try { return await this.fetchPosts(params); }
+        finally { this.activePostRequests--; }
+    }
+
+    async fetchPosts(params) {
         if (this.adapters.length === 0) await this.initialize();
 
         params = { ...params, tags: await this.applyTagOverrides(params.tags) };

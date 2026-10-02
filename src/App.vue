@@ -22,7 +22,7 @@
       <button 
         v-if="currentPost"
         @click="togglePostDetails" 
-        class="absolute left-0 z-30 p-2 rounded-r-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
+        class="absolute left-0 z-[60] p-2 rounded-r-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
         :class="sidebarToggleClass(showPostDetails)"
         data-sidebar-toggle="details"
         :style="{ 
@@ -32,6 +32,15 @@
       >
         <span class="text-xl font-bold">{{ showPostDetails ? '<<' : '>>' }}</span>
       </button>
+
+      <div v-if="deepDiveState.active && $route.name === 'Home'"
+        class="absolute left-1/2 -translate-x-1/2 z-20 flex items-center gap-3 rounded-lg bg-gray-900/40 px-3 py-1.5 text-sm"
+        :class="focusChromeClass"
+        :style="{ top: 'calc(1rem + env(safe-area-inset-top, 0))' }"
+      >
+        <span class="text-pink-300 whitespace-nowrap">DeepDive Active</span>
+        <button :disabled="deepDiveState.busy" class="rounded-md border border-pink-600 bg-pink-600 hover:bg-pink-700 text-white px-2 py-0.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-400 disabled:opacity-50" aria-label="End Deep Dive" @click="recommendationSystem.setDeepDive(null)">End</button>
+      </div>
       
       <div class="h-full w-full relative overflow-hidden"
         :style="routerViewContainerStyle"
@@ -220,13 +229,13 @@
       </div>
 
       <!-- Settings sidebar -->
-      <SettingsSidebar :show="showSettingsSidebar" @apply-settings="applySettings" @save-player-preferences="savePlayerPreferences" />
+      <SettingsSidebar :show="showSettingsSidebar" :post="currentPost" @deep-dive-started="showSettingsSidebar = false" @apply-settings="applySettings" @save-player-preferences="savePlayerPreferences" />
       
       <!-- Floating toggle button for settings sidebar -->
       <button
         v-if="showSettingsToggle"
         @click="showSettingsSidebar = !showSettingsSidebar"
-        class="absolute right-0 z-30 p-2 rounded-l-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
+        class="absolute right-0 z-[60] p-2 rounded-l-md bg-black hover:bg-gray-900 transition-all duration-300 ease-in-out"
         :class="sidebarToggleClass(showSettingsSidebar)"
         data-sidebar-toggle="settings"
         :style="{
@@ -307,6 +316,7 @@
 
     <!-- New release notification splash -->
     <UpdateSplash />
+    <AiModelDialog />
   </div>
 </template>
 
@@ -320,7 +330,7 @@ import { useUpdaterStore } from './stores/updater';
 import { useEffectsStore } from './stores/effects';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
-import recommendationSystem from './services/RecommendationSystem.js';
+import recommendationSystem, { deepDiveState } from './services/RecommendationSystem.js';
 import DownloadService from './services/DownloadService.js';
 
 import BottomNavBar from './components/BottomNavBar.vue';
@@ -330,6 +340,8 @@ import ReportBlockModal from './components/ReportBlockModal.vue';
 import SettingsSidebar from './components/SettingsSidebar.vue';
 import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
+import AiModelDialog from './components/AiModelDialog.vue';
+import aiTagger from './services/AiTaggerService.js';
 
 // Focus mode: how long the chrome stays on screen after the last input on
 // classic routes, and how long a tap-revealed chrome lingers on the feed.
@@ -352,6 +364,7 @@ export default {
     SettingsSidebar,
     ShareSheet,
     UpdateSplash,
+    AiModelDialog,
   },
   data() {
     return {
@@ -396,6 +409,8 @@ export default {
       // Time tracking
       watchStartTime: null,
       accumulatedWatchTime: 0,
+      watchDeepDive: false,
+      deepDiveState,
       
       // Sidebar filter state
       recommendationSystem,
@@ -404,6 +419,14 @@ export default {
     };
   },
   watch: {
+    'deepDiveState.generation'() {
+      // Split watch time at mode boundaries. A long dive must not become
+      // normal-session learning just because End was clicked before swiping.
+      if (this.currentPost) this.saveWatchTime(this.currentPost);
+      this.accumulatedWatchTime = 0;
+      this.watchStartTime = null;
+      if (this.currentPost) this.startWatchTimeTracking();
+    },
     currentPost(newPost) {
       if (!newPost) {
         this.showPostDetails = false;
@@ -663,6 +686,7 @@ export default {
 
     startWatchTimeTracking() {
         this.watchStartTime = Date.now();
+        this.watchDeepDive = deepDiveState.active;
     },
 
     saveWatchTime(post) {
@@ -676,7 +700,7 @@ export default {
                 postId: post.id,
                 type: 'timeSpent',
                 value: totalTime,
-                metadata: { post }
+                metadata: { post, deepDive: this.watchDeepDive }
             });
         }
     },
@@ -954,9 +978,12 @@ export default {
         return;
       }
       if (!this.focusEventDriven) return;
-      const shown = this.currentPost && this.isCurrentPostVideo
+      // Loading/end-of-results rows have no media to pause or tap. Keep
+      // their controls accessible; a post becoming current restores the
+      // usual playback/image-driven focus behavior.
+      const shown = !this.currentPost || (this.isCurrentPostVideo
         ? !this.isPlaying
-        : this.focusImageRevealed;
+        : this.focusImageRevealed);
       this.focusUiHidden = !shown;
     },
     // A lone tap on a still image: hold the chrome for the idle window,
@@ -1174,6 +1201,7 @@ export default {
       });
 
       await this.initializeSettings();
+      aiTagger.initialize(useSettingsStore());
       this.initializePlayer();
       this.initializeInteractions();
       
