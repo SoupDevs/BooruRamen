@@ -30,7 +30,7 @@ export const EXPORT_VERSION = 1;
 // profile is usable even if a later table is missing from an older file.
 const EXPORT_TABLES = [
     'preferences', 'appSettings', 'profileSnapshot', 'interactions',
-    'viewHistory', 'reports', 'tagCache'
+    'viewHistory', 'reports', 'tagCache', 'imageAnalysis'
 ];
 const MAX_PROFILE_NAME = 40;
 
@@ -135,6 +135,14 @@ const SCHEMA_STEPS = [
             tagCache: 'tag',
             profileSnapshot: 'id',
             reports: '++id, type, value, timestamp, [type+value]'
+        }
+    },
+    {
+        version: 4,
+        stores: {
+            imageAnalysis: 'key, updatedAt',
+            sourceTags: '[source+name], source, name',
+            tagCatalogState: 'source'
         }
     }
 ];

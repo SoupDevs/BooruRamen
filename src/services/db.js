@@ -34,8 +34,8 @@ const resolveDbName = () => {
 export const db = new Dexie(resolveDbName());
 
 // The schema lives in ProfileService so exports and imports can open any
-// profile's database with identical table definitions; the three versions
-// (v1 base tables, v2 profileSnapshot, v3 reports) are applied from there.
+// profile's database with identical definitions, including v4's analysis
+// and source-scoped tag catalog caches.
 applyProfileSchema(db);
 
 /**

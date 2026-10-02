@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint --ext .js,.vue --ignore-path .gitignore src",
+    "test": "vitest run",
     "tauri": "tauri",
     "android:init": "tauri android init && node scripts/android/patch_android_project.mjs",
     "android:build": "node scripts/android/patch_android_project.mjs && tauri android build"
@@ -20,7 +21,9 @@
     "core-js": "^3.8.3",
     "dexie": "^4.2.1",
     "lucide-vue-next": "^0.477.0",
+    "onnxruntime-web": "^1.30.0",
     "pinia": "^3.0.4",
+    "spark-md5": "^3.0.2",
     "vue": "^3.2.13",
     "vue-router": "^4.5.1"
   },
@@ -33,9 +36,11 @@
     "autoprefixer": "^10.4.14",
     "eslint": "^7.32.0",
     "eslint-plugin-vue": "^8.0.3",
+    "fake-indexeddb": "^6.2.5",
     "postcss": "^8.4.21",
     "tailwindcss": "^3.3.1",
-    "vite": "^7.2.6"
+    "vite": "^7.2.6",
+    "vitest": "^5.0.3"
   },
   "eslintConfig": {
     "root": true,

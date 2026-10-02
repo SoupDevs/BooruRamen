@@ -132,6 +132,8 @@ class TagEmbedding {
     if (!interactions || interactions.length === 0) return;
 
     for (const interaction of interactions) {
+      const weight = interaction.metadata?.profileWeight ?? 1;
+      if (!Number.isFinite(weight) || weight <= 0) continue;
       const post = interaction.metadata?.post;
       if (!post || !post.tag_string) continue;
 
@@ -141,11 +143,11 @@ class TagEmbedding {
 
       if (tags.length === 0) continue;
 
-      this.totalPosts++;
+      this.totalPosts += weight;
 
       // Update frequency
       for (const tag of tags) {
-        this.tagFrequency.set(tag, (this.tagFrequency.get(tag) || 0) + 1);
+        this.tagFrequency.set(tag, (this.tagFrequency.get(tag) || 0) + weight);
       }
 
       // Update co-occurrence (only for positive interactions)
@@ -157,8 +159,8 @@ class TagEmbedding {
       if (isPositive) {
         for (let i = 0; i < tags.length; i++) {
           for (let j = i + 1; j < tags.length; j++) {
-            this._addCooccurrence(tags[i], tags[j]);
-            this._addCooccurrence(tags[j], tags[i]);
+            this._addCooccurrence(tags[i], tags[j], weight);
+            this._addCooccurrence(tags[j], tags[i], weight);
           }
         }
       }
@@ -172,6 +174,8 @@ class TagEmbedding {
    * Incrementally update with a single interaction (for real-time updates).
    */
   addInteraction(interaction) {
+    const weight = interaction.metadata?.profileWeight ?? 1;
+    if (!Number.isFinite(weight) || weight <= 0) return;
     const post = interaction.metadata?.post;
     if (!post || !post.tag_string) return;
 
@@ -181,14 +185,14 @@ class TagEmbedding {
 
     if (tags.length === 0) return;
 
-    this.totalPosts++;
+    this.totalPosts += weight;
 
     const newTags = new Set();
     for (const tag of tags) {
       if (!this.tagFrequency.has(tag)) {
         newTags.add(tag);
       }
-      this.tagFrequency.set(tag, (this.tagFrequency.get(tag) || 0) + 1);
+      this.tagFrequency.set(tag, (this.tagFrequency.get(tag) || 0) + weight);
     }
 
     const isPositive =
@@ -199,8 +203,8 @@ class TagEmbedding {
     if (isPositive) {
       for (let i = 0; i < tags.length; i++) {
         for (let j = i + 1; j < tags.length; j++) {
-          this._addCooccurrence(tags[i], tags[j]);
-          this._addCooccurrence(tags[j], tags[i]);
+          this._addCooccurrence(tags[i], tags[j], weight);
+          this._addCooccurrence(tags[j], tags[i], weight);
         }
       }
     }
@@ -233,12 +237,12 @@ class TagEmbedding {
     }
   }
 
-  _addCooccurrence(tagA, tagB) {
+  _addCooccurrence(tagA, tagB, weight = 1) {
     if (!this.tagCooccurrence.has(tagA)) {
       this.tagCooccurrence.set(tagA, new Map());
     }
     const coocs = this.tagCooccurrence.get(tagA);
-    coocs.set(tagB, (coocs.get(tagB) || 0) + 1);
+    coocs.set(tagB, (coocs.get(tagB) || 0) + weight);
   }
 
   /**

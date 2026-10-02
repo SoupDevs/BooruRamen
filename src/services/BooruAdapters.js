@@ -89,6 +89,44 @@ class BooruAdapter {
         return [];
     }
 
+    async getTagPage(cursor = null, signal) {
+        const params = new URLSearchParams({ limit: '1000' });
+        let path;
+        if (this.type === 'danbooru') {
+            path = '/tags.json';
+            params.set('search[order]', 'date'); params.set('only', 'id,name,category');
+            params.set('page', cursor ? `b${cursor}` : '1');
+            if (this.credentials.userId && this.credentials.apiKey) {
+                params.set('login', this.credentials.userId); params.set('api_key', this.credentials.apiKey);
+            }
+        } else if (this.type === 'gelbooru') {
+            path = '/index.php';
+            params.set('page', 'dapi'); params.set('s', 'tag'); params.set('q', 'index'); params.set('json', '1');
+            params.set('pid', String(cursor || 0)); params.set('orderby', 'id'); params.set('order', 'DESC');
+            if (this.credentials.userId || this.credentials.apiKey) {
+                params.set('user_id', this.credentials.userId || ''); params.set('api_key', this.credentials.apiKey || '');
+            }
+            await this.throttle();
+        } else {
+            path = '/tag.json';
+            params.set('page', String(cursor || 1)); params.set('order', 'date');
+            for (const [key, value] of this.authParams()) params.set(key, value);
+        }
+        const endpoint = `${this.baseUrl.replace(/\/+$/, '')}${path}?${params}`;
+        const url = this.type === 'danbooru' ? endpoint : toDevProxiedUrl(endpoint);
+        const response = await httpFetch(url, { signal });
+        if (!response.ok) throw new Error(`Tag catalog unavailable (HTTP ${response.status}).`);
+        const data = await response.json();
+        const list = Array.isArray(data) ? data : data?.tag;
+        if (!Array.isArray(list)) throw new Error('This source did not return a tag catalog.');
+        const tags = list.map(tag => ({ id: Number(tag.id), name: String(tag.name || tag.tag || '').trim().toLowerCase() })).filter(tag => tag.name);
+        if (list.length && !tags.length) throw new Error('This source returned an invalid tag catalog.');
+        const ids = tags.map(tag => tag.id).filter(Number.isFinite);
+        const nextCursor = this.type === 'danbooru' ? Math.min(...ids) : (cursor || (this.type === 'gelbooru' ? 0 : 1)) + 1;
+        if (tags.length && this.type === 'danbooru' && !Number.isFinite(nextCursor)) throw new Error('This source does not support tag cursors.');
+        return { tags, nextCursor, done: list.length === 0, signature: tags.length ? `${tags[0].id}:${tags[0].name}|${tags.at(-1).id}:${tags.at(-1).name}` : '' };
+    }
+
     async testConnection() {
         try {
             const posts = await this.getPosts({ limit: 1, tags: '', _isTest: true }); // Pass _isTest flag

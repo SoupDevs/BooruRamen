@@ -3,7 +3,7 @@
  * Lightweight Multi-Layer Perceptron for post engagement prediction.
  *
  * Architecture:
- *   Input (82 features) → Dense(32, ReLU) → Dense(16, ReLU) → Dense(1, Sigmoid)
+ *   Input (179 features) → Dense(32, ReLU) → Dense(16, ReLU) → Dense(1, Sigmoid)
  *
  * Features per post:
  *   - [0..31]  User top-tag embedding, affinity-weighted, unit-normalized (32d)
@@ -14,6 +14,9 @@
  *   - [67]     Tag overlap ratio
  *   - [68..71] Post metadata: normalized score, is-video, resolution, tag count
  *   - [72..81] Top-tag affinity features (per-tag preference signal)
+ *   - [82..113] Spatial luminance, color, contrast and edge descriptors
+ *   - [114..177] Perceptual image hash bits
+ *   - [178] Visual-data availability (missing images stay neutral)
  *
  * Embeddings are fed to the MLP raw (no projection layer) — earlier versions
  * projected user/post embeddings through two *different* untrained random
@@ -28,9 +31,11 @@
 
 import StorageService from '../services/StorageService';
 import tagEmbedding from './TagEmbedding';
+import { VISUAL_FEATURE_COUNT, writeVisualFeatures, learningPost } from './imageFeatures.js';
+import { postKey } from './postKey.js';
 
 const EMB_DIM = 32;              // must match TagEmbedding EMBEDDING_DIM
-const INPUT_DIM = 82;            // 2*32 embeddings + 8 scalars + 10 top-tag affinities
+const INPUT_DIM = 82 + VISUAL_FEATURE_COUNT;
 const HIDDEN1 = 32;
 const HIDDEN2 = 16;
 const OUTPUT_DIM = 1;
@@ -194,8 +199,15 @@ class MLScorer {
     this.featureStds = this._deserializeVector(data.featureStds);
     this.interactionCount = data.interactionCount || 0;
     this.trainingHistory = data.trainingHistory || [];
-    // Note: no dimension migration — feature semantics changed between
-    // versions, so init() re-initializes on any INPUT_DIM mismatch.
+    // Preserve the old tag model exactly: zero-weight visual inputs add no
+    // score until interaction history teaches them. No cold-start regression.
+    if (this.weights1?.length === 82) {
+      while (this.weights1.length < INPUT_DIM) this.weights1.push(new Float32Array(HIDDEN1));
+      const means = new Float32Array(INPUT_DIM), stds = new Float32Array(INPUT_DIM).fill(1);
+      means.set(this.featureMeans || []); stds.set(this.featureStds || []);
+      this.featureMeans = means; this.featureStds = stds;
+    }
+    // Other incompatible dimensions still reset through init().
   }
 
   _deserializeMatrix(data) {
@@ -241,9 +253,10 @@ class MLScorer {
    * @param {Object} post - Post object with tag_string
    * @param {Map|Object} userTagScores - User's tag affinity scores
    * @param {Object} userProfile - { ratingPreferences, mediaTypePreferences }
-   * @returns {Float32Array} - 82-dim feature vector
+   * @returns {Float32Array} - 179-dim feature vector
    */
   extractFeatures(post, userTagScores, userProfile) {
+    post = learningPost(post);
     const features = new Float32Array(INPUT_DIM);
 
     // Normalize userTagScores to an entries array (handles both Map and plain objects)
@@ -332,6 +345,7 @@ class MLScorer {
       }
     }
 
+    writeVisualFeatures(features, 82, post.imageAnalysis);
     return features;
   }
 
@@ -409,7 +423,7 @@ class MLScorer {
    * @param {Map} userTagScores
    * @param {Object} userProfile
    */
-  addTrainingSample(post, interactionType, value, userTagScores, userProfile) {
+  addTrainingSample(post, interactionType, value, userTagScores, userProfile, profileWeight = 1) {
     // Undo events (un-like, un-favorite, clearing a dislike) carry no
     // preference signal — training on them poisons the labels: e.g. liking
     // a post also logs a dislike-clear, which would train label 0.0 on a
@@ -425,11 +439,13 @@ class MLScorer {
       label = timeSpentLabel(value);
       if (label === SKIP_LABEL) weight = SAMPLE_WEIGHTS.timeSpentSkip;
     }
-    if (label === undefined) return;
+    if (label === undefined || !Number.isFinite(profileWeight) || profileWeight <= 0) return;
+    weight *= Math.min(1, profileWeight);
 
     const features = this.extractFeatures(post, userTagScores, userProfile);
-    this.pendingBatch.push({ features, label, weight });
-    this.replayBuffer.push({ features, label, weight });
+    const sample = { features, label, weight, postKey: postKey(post) };
+    this.pendingBatch.push(sample);
+    this.replayBuffer.push(sample);
     if (this.replayBuffer.length > REPLAY_CAP) {
       this.replayBuffer.shift();
     }
@@ -444,6 +460,17 @@ class MLScorer {
     if (this.interactionCount >= TRAIN_THRESHOLD) {
       this.isTrained = true;
     }
+  }
+
+  refreshPostFeatures(post, userTagScores, userProfile) {
+    const samples = new Set([...this.pendingBatch, ...this.replayBuffer]);
+    let changed = false;
+    for (const sample of samples) {
+      if (sample.postKey !== postKey(post)) continue;
+      sample.features = this.extractFeatures(post, userTagScores, userProfile);
+      changed = true;
+    }
+    if (changed) this.flushTraining();
   }
 
   /**

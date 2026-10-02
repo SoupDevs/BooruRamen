@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Session ranking worker test</title></head>
+<body style="font:16px system-ui;background:#111827;color:white;padding:32px">
+<h1>Session ranking worker test</h1>
+<p>Runs the recommendation worker against synthetic posts in an isolated test database.</p>
+<button id="run">Run session worker test</button><pre id="result">Not started</pre>
+<script type="module">
+import Dexie from 'dexie';
+import { DEFAULT_DB_NAME } from '/src/services/ProfileService.js';
+const output = document.querySelector('#result');
+document.querySelector('#run').onclick = async () => {
+  const name = `${DEFAULT_DB_NAME}_session_test_${crypto.randomUUID()}`;
+  const worker = new Worker(new URL('/src/workers/recommendation.worker.js', location.origin), { type: 'module', name });
+  const pending = new Map(); let id = 0;
+  worker.onmessage = ({ data }) => {
+    const request = pending.get(data.id); if (!request) return;
+    pending.delete(data.id);
+    if (data.error) request.reject(new Error(data.error)); else request.resolve(data.result);
+  };
+  worker.onerror = event => { for (const request of pending.values()) request.reject(new Error(event.message)); pending.clear(); };
+  const request = (type, payload) => new Promise((resolve, reject) => { const key = ++id; pending.set(key, { resolve, reject }); worker.postMessage({ id: key, type, payload }); });
+  let db;
+  try {
+    output.textContent = 'Testing…';
+    const post = { id: 1, source: 'synthetic', tag_string: 'landscape', file_ext: 'jpg' };
+    const before = await request('getPostScoreDetails', post);
+    await request('trackInteraction', { postId: 1, interactionType: 'favorite', value: 1, postData: post });
+    const after = await request('getPostScoreDetails', { ...post, id: 2 });
+    const other = await request('getPostScoreDetails', { ...post, id: 3, tag_string: 'portrait' });
+    if (before.sessionWeight !== 0 || after.sessionWeight <= 0 || after.sessionWeight > 0.25 || after.sessionScore <= other.sessionScore) throw new Error('Session adaptation failed');
+    const queries = await request('getQueryableTagsWithScores');
+    if (!queries.some(item => item.tag === 'landscape')) throw new Error('Session query interests missing');
+    db = new Dexie(name); await db.open();
+    const stored = await db.table('interactions').toArray();
+    if (stored[0]?.metadata?.profileWeight !== 0.35) throw new Error('Durable weight was not persisted');
+    await request('setDeepDive', post);
+    const dive = await request('getPostScoreDetails', { ...post, id: 4 });
+    const unrelated = await request('getPostScoreDetails', { ...post, id: 5, tag_string: 'portrait' });
+    if (!dive.deepDiveActive || dive.deepDiveSimilarity <= unrelated.deepDiveSimilarity) throw new Error('Deep Dive similarity failed');
+    await request('trackInteraction', { postId: 4, interactionType: 'like', value: 1, postData: { ...post, id: 4 } });
+    const diveStored = (await db.table('interactions').toArray()).find(item => item.postId === 4);
+    if (Math.abs(diveStored.metadata.profileWeight - 0.035) > 1e-8 || !diveStored.metadata.deepDive) throw new Error('Deep Dive profile weight failed');
+    await request('setDeepDive', null);
+    if ((await request('getPostScoreDetails', post)).deepDiveActive) throw new Error('Deep Dive exit failed');
+    await request('factoryReset');
+    if ((await request('getPostScoreDetails', post)).sessionWeight !== 0) throw new Error('Session reset failed');
+    output.textContent = `PASS: actual recommendation worker\nSession weight: ${(after.sessionWeight * 100).toFixed(1)}%\nMatching session score: ${after.sessionScore.toFixed(3)}\nUnrelated session score: ${other.sessionScore.toFixed(3)}\nStored profile weight: ${stored[0].metadata.profileWeight}\nDeep Dive similarity: ${dive.deepDiveSimilarity.toFixed(3)}\nDeep Dive profile weight: ${diveStored.metadata.profileWeight}\nQuery interests, mode exit, and reset verified`;
+  } catch (error) { output.textContent = `FAIL: ${error.message}`; }
+  finally { db?.close(); worker.terminate(); await Dexie.delete(name); }
+};
+</script></body></html>
