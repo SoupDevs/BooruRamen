@@ -1,7 +1,7 @@
 import { postKey } from './postKey.js';
 
-export const SESSION_IDLE_MS = 45 * 60 * 1000;
-export const SESSION_HALF_LIFE_MS = 30 * 60 * 1000;
+export const SESSION_IDLE_MS = 15 * 60 * 1000;
+export const SESSION_HALF_LIFE_MS = 5 * 60 * 1000;
 export const MAX_SESSION_WEIGHT = 0.25;
 export const PROFILE_HALF_LIFE_HOURS = 30 * 24;
 

@@ -118,8 +118,8 @@ recommendation models are migrated while preserving their learned weights.
 Feed ranking also blends in a temporary session interest model, up to 25% of
 the score as evidence builds. Likes, favorites, skips, watch time, and available
 image composition influence this layer immediately, including unseen posts
-already queued. It fades with a 30-minute half-life and resets on app restart,
-recommendation reset, or 45 minutes of inactivity. Query selection uses the
+already queued. It fades with a 5-minute half-life and resets on app restart,
+recommendation reset, or 15 minutes of inactivity. Query selection uses the
 same blended interests while profile analytics retain only lasting evidence.
 Repeated interest in one topic has a limited contribution per session to the
 stored profile, embeddings, and ML training. Interests repeated across sessions

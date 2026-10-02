@@ -17,12 +17,36 @@ describe('session interests', () => {
     const session = new SessionInterest(() => now);
     session.record(post(1, 'landscape'), 'like', 1);
     const weight = session.weight;
-    now += SESSION_HALF_LIFE_MS;
+    now += Math.min(SESSION_HALF_LIFE_MS, SESSION_IDLE_MS) / 2;
     expect(session.weight).toBeLessThan(weight);
+    now = 15 * 60 * 1000 - 1;
+    expect(session.weight).toBeGreaterThan(0);
     now = SESSION_IDLE_MS;
     expect(session.weight).toBe(0);
     expect(session.affinities()).toEqual({});
     expect(new SessionInterest().weight).toBe(0);
+  });
+  it('restarts the 15-minute inactivity timer after a new like', () => {
+    let now = 0;
+    const session = new SessionInterest(() => now);
+    session.record(post(1, 'landscape'), 'like', 1);
+    now = 14 * 60 * 1000;
+    session.record(post(2, 'landscape'), 'like', 1);
+    now += 15 * 60 * 1000 - 1;
+    expect(session.weight).toBeGreaterThan(0);
+    now += 1;
+    expect(session.weight).toBe(0);
+  });
+  it('halves existing interest evidence every five minutes', () => {
+    let now = 0;
+    const session = new SessionInterest(() => now);
+    session.record(post(1, 'landscape'), 'like', 1);
+    now = 5 * 60 * 1000;
+    session.advance();
+    expect(session.tags.get('landscape')).toBeCloseTo(0.5);
+    now = 10 * 60 * 1000;
+    session.advance();
+    expect(session.tags.get('landscape')).toBeCloseTo(0.25);
   });
   it('caps durable topic evidence within a session but allows growth across sessions', () => {
     const session = new SessionInterest();
