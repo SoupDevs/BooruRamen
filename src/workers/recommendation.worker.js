@@ -25,6 +25,8 @@ const EXPLORE_UCB = 0.5;
 const EXPLORE_SCORE_FLOOR_QUANTILE = 0.3;
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
+// Slow "core" profile: long-standing favourites outlive a month-long phase.
+const CORE_HALF_LIFE_HOURS = 180 * 24;
 
 
 
@@ -44,6 +46,7 @@ export class RecommendationWorkerCore {
   constructor() {
     this.userEmbedding = null;
     this.rawTagScores = {};
+    this.rawCoreTagScores = {};
     this.rawRatingPreferences = { general: 0, sensitive: 0, questionable: 0, explicit: 0 };
     this.rawMediaTypePreferences = { image: 0, video: 0 };
     this.tagScores = {};
@@ -132,6 +135,11 @@ export class RecommendationWorkerCore {
   }
 
   applyDecay(hoursPassed) {
+    const coreDecay = Math.pow(0.5, hoursPassed / CORE_HALF_LIFE_HOURS);
+    for (const tag in this.rawCoreTagScores) {
+      this.rawCoreTagScores[tag] *= coreDecay;
+      if (Math.abs(this.rawCoreTagScores[tag]) < 0.01) delete this.rawCoreTagScores[tag];
+    }
     const decayFactor = Math.pow(0.5, hoursPassed / PROFILE_HALF_LIFE_HOURS);
     for (const tag in this.rawTagScores) {
       this.rawTagScores[tag] *= decayFactor;
@@ -170,6 +178,8 @@ export class RecommendationWorkerCore {
 
     if (snapshot && (!resetTimestamp || snapshot.timestamp > resetTimestamp)) {
       this.rawTagScores = snapshot.rawTagScores || snapshot.tagScores || {};
+      // Older snapshots have no core profile: seed it from the current one.
+      this.rawCoreTagScores = snapshot.coreTagScores || { ...this.rawTagScores };
       this.tagEngagement = snapshot.tagEngagement || {};
       this.tagCategories = snapshot.tagCategories || {};
       this.rawRatingPreferences = snapshot.ratingPreferences || { general: 0, sensitive: 0, questionable: 0, explicit: 0 };
@@ -219,11 +229,12 @@ export class RecommendationWorkerCore {
 
       const ageInHours = (now - interaction.timestamp) / (1000 * 60 * 60);
       const recencyWeight = Math.pow(0.5, ageInHours / PROFILE_HALF_LIFE_HOURS);
+      const coreRecency = Math.pow(0.5, ageInHours / CORE_HALF_LIFE_HOURS);
       const durableWeight = interaction.metadata?.profileWeight ?? 1;
       const weight = interactionSignal(interaction.type, interaction.value, interaction.metadata?.engagement) * recencyWeight * durableWeight;
 
       if (interaction.metadata && interaction.metadata.post) {
-        this.updateProfileWithPost(interaction.metadata.post, weight);
+        this.updateProfileWithPost(interaction.metadata.post, weight, recencyWeight ? weight * coreRecency / recencyWeight : 0);
 
         // Feed interaction to ML components
         if (this.mlInitialized) {
@@ -319,6 +330,7 @@ export class RecommendationWorkerCore {
     const snapshot = {
       timestamp: this.lastUpdateTime,
       rawTagScores: this.rawTagScores,
+      coreTagScores: this.rawCoreTagScores,
       tagEngagement: this.tagEngagement,
       tagCategories: this.tagCategories,
       ratingPreferences: this.rawRatingPreferences,
@@ -338,8 +350,8 @@ export class RecommendationWorkerCore {
     this.normalizeScores();
   }
 
-  updateProfileWithPost(post, weight) {
-    if (!weight) return;
+  updateProfileWithPost(post, weight, coreWeight = weight) {
+    if (!weight && !coreWeight) return;
     const avoidedSet = new Set(this.avoidedTags || []);
     const processed = new Set();
     const processTag = (tag, category) => {
@@ -353,6 +365,7 @@ export class RecommendationWorkerCore {
         this.tagEngagement[tag] = 0;
       }
       this.rawTagScores[tag] += weight;
+      this.rawCoreTagScores[tag] = (this.rawCoreTagScores[tag] || 0) + coreWeight;
       this.tagEngagement[tag] += Math.abs(weight);
     };
 
@@ -411,6 +424,7 @@ export class RecommendationWorkerCore {
 
   initializeDefaultProfile() {
     this.rawTagScores = {};
+    this.rawCoreTagScores = {};
     this.tagScores = {};
     this.tagEngagement = {};
     this.tagCategories = {};
@@ -897,11 +911,14 @@ export class RecommendationWorkerCore {
       }
     }
 
-    // Reach strategy
-    if (selectedStrategies.has('reach') && tier2Pool.length > 0) {
-      const reachTag = this.weightedRandomSelect(tier2Pool, usedTags);
+    // Reach strategy: secondary interests, or half the time a long-time
+    // favourite that has gone quiet lately
+    const dormant = this.dormantInterests();
+    if (selectedStrategies.has('reach') && (tier2Pool.length > 0 || dormant.length > 0)) {
+      const rediscover = dormant.length > 0 && (tier2Pool.length === 0 || Math.random() < 0.5);
+      const reachTag = this.weightedRandomSelect(rediscover ? dormant : tier2Pool, usedTags);
       if (reachTag && !this.exhaustedStrategies.has(reachTag.tag)) {
-        queries.push({ tags: reachTag.tag, type: 'reach', intent: 'Secondary interest - expanding horizons' });
+        queries.push({ tags: reachTag.tag, type: 'reach', intent: rediscover ? 'Rediscovering a long-time favourite' : 'Secondary interest - expanding horizons' });
         usedTags.add(reachTag.tag);
       }
     }
@@ -945,6 +962,24 @@ export class RecommendationWorkerCore {
     }
 
     return queries.filter((query, index, self) => self.findIndex(q => q.tags === query.tags) === index);
+  }
+
+  /**
+   * Tags that are strong in the slow core profile but weak in the current
+   * one: favourites the user has drifted away from, worth resurfacing now
+   * and then rather than letting them decay away entirely.
+   */
+  dormantInterests(limit = 10) {
+    const core = Object.entries(this.rawCoreTagScores || {}).filter(([, score]) => score > 0);
+    if (!core.length) return [];
+    const maxCore = Math.max(...core.map(([, score]) => score));
+    const avoided = new Set(this.avoidedTags);
+    return core
+      .map(([tag, score]) => ({ tag, core: score / maxCore, current: Math.max(0, this.tagScores?.[tag] || 0) }))
+      .filter(item => item.core > 0.3 && item.current < item.core * 0.5 && !avoided.has(item.tag) && this.tagCategories[item.tag] !== 'meta')
+      .map(item => ({ tag: item.tag, score: item.core - item.current }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
   }
 
   /** Neighbours of the user's interests that the user has little history with. */

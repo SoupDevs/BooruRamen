@@ -111,3 +111,21 @@ describe('discovery strategies', () => {
     expect(queries.find(q => q.type === 'trending')?.tags).toBe('witch order:rank');
   });
 });
+
+describe('two-speed profile', () => {
+  it('resurfaces a long-time favourite that has gone quiet', () => {
+    const core = new RecommendationWorkerCore();
+    core.rawCoreTagScores = { witch: 10, cat: 6, current: 2 };
+    core.tagScores = { witch: 0.1, cat: 0.9, current: 1 };
+    core.tagCategories = {};
+    expect(core.dormantInterests().map(item => item.tag)).toEqual(['witch']);
+  });
+  it('decays the core profile far slower than the current one', () => {
+    const core = new RecommendationWorkerCore();
+    core.rawTagScores = { witch: 1 };
+    core.rawCoreTagScores = { witch: 1 };
+    core.applyDecay(60 * 24);
+    expect(core.rawTagScores.witch).toBeCloseTo(0.25, 2);
+    expect(core.rawCoreTagScores.witch).toBeGreaterThan(0.75);
+  });
+});
