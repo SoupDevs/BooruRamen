@@ -349,10 +349,12 @@ export default {
     scheduleSessionRanking() {
       clearTimeout(this.sessionRankTimer);
       this.sessionRankTimer = setTimeout(async () => {
-        // Keep the visible row and scroll history fixed. Discard a ranking
-        // result if navigation or a background fetch changed the queue.
+        // Keep the visible row, scroll history and the preloaded runway
+        // fixed: swapping a post whose media is already buffering would
+        // waste the download and show a spinner. Discard a ranking result if
+        // navigation or a background fetch changed the queue.
         const posts = this.posts, index = this.currentPostIndex;
-        const start = Math.max(0, index + 1);
+        const start = Math.max(0, index + 1 + VIDEO_FRAME_RUNWAY_AHEAD);
         if (posts.length - start < 2) return;
         try {
           const ranked = await this.recommendationSystem.rankPosts(posts.slice(start));

@@ -43,6 +43,10 @@ export class RecommendationWorkerCore {
 
     // ML components
     this.mlInitialized = false;
+    // Set by new interactions; refreshUserProfile skips the rebuild (and its
+    // snapshot write) when nothing changed.
+    this.profileDirty = true;
+    this.profileRefreshedAt = 0;
     this.sessionInterest = new SessionInterest();
     this.deepDive = new DeepDiveInterest();
   }
@@ -117,7 +121,15 @@ export class RecommendationWorkerCore {
     }
   }
 
+  async refreshUserProfile(maxAgeMs = 5 * 60 * 1000) {
+    if (this.profileDirty || Date.now() - this.profileRefreshedAt > maxAgeMs) await this.updateUserProfile();
+  }
+
   async updateUserProfile() {
+    // Cleared before the awaits: an interaction stored mid-rebuild marks the
+    // profile dirty again and is picked up by the next refresh.
+    this.profileDirty = false;
+    this.profileRefreshedAt = Date.now();
     const preferences = await StorageService.getPreferences();
     if (preferences.avoidedTags && Array.isArray(preferences.avoidedTags)) {
       this.avoidedTags = preferences.avoidedTags;
@@ -419,6 +431,7 @@ export class RecommendationWorkerCore {
    * been freshly installed.
    */
   factoryReset() {
+    this.profileDirty = true;
     this.deepDive.end();
     this.sessionInterest.reset();
     this.initializeDefaultProfile();
@@ -432,6 +445,7 @@ export class RecommendationWorkerCore {
   }
 
   async resetRecommendations() {
+    this.profileDirty = true;
     this.deepDive.end();
     this.sessionInterest.reset();
     const resetTime = Date.now();
@@ -485,6 +499,7 @@ export class RecommendationWorkerCore {
       value,
       metadata: { post: postData, profileWeight, deepDive: diving }
     });
+    this.profileDirty = true;
 
     this.postScoreCache.clear();
 
@@ -916,6 +931,10 @@ if (typeof self !== 'undefined') self.onmessage = async (e) => {
         break;
       case 'updateUserProfile':
         await core.updateUserProfile();
+        result = true;
+        break;
+      case 'refreshUserProfile':
+        await core.refreshUserProfile();
         result = true;
         break;
       case 'resetRecommendations':

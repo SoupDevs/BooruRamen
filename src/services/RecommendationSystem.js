@@ -244,7 +244,9 @@ class RecommendationSystem {
       existingPostIds = new Set()
     } = options;
 
-    await this.updateUserProfile();
+    // Only rebuilds when interactions arrived since the last build: the feed
+    // can call this many times while filling one runway.
+    await this.callWorker('refreshUserProfile');
     if (modeGeneration !== deepDiveState.generation) return [];
 
     const queries = await this.generateMultiStrategyQueries(selectedRatings, whitelist);
@@ -402,82 +404,56 @@ class RecommendationSystem {
         }
       });
 
-      if (allPosts.length < 10 && !deepDiveState.active) {
-        console.log(`Only found ${allPosts.length} posts, trying fallback query`);
-        try {
-          const fallbackQuery = { tags: 'order:rank', page: 1 };
-          const { apiQuery, clientSideFilterNeeded } = buildHybridQuery(fallbackQuery);
-          const limit = clientSideFilterNeeded ? 100 : postsPerFetch;
-
-          console.log(`Running fallback query: "${apiQuery.tags}" (ClientFilter: ${clientSideFilterNeeded})`);
-          const fallbackPosts = await fetchFunction(apiQuery, limit);
-
-          let processedFallbackPosts = fallbackPosts;
-          if (clientSideFilterNeeded) {
-            const beforeCount = processedFallbackPosts.length;
-            processedFallbackPosts = this.applyClientSideFilters(processedFallbackPosts, { whitelist, blacklist });
-            console.log(`Fallback Client-filter: ${beforeCount} -> ${processedFallbackPosts.length} posts`);
-          }
-
-          if (processedFallbackPosts && processedFallbackPosts.length) {
-            console.log(`Fallback query found ${processedFallbackPosts.length} posts`);
-            allPosts = [...allPosts, ...processedFallbackPosts];
-          }
-        } catch (fallbackError) {
-          console.error("Fallback query failed:", fallbackError);
-        }
-      }
-
-      if (allPosts.length === 0 && !deepDiveState.active) {
-        console.warn("All queries returned no posts. This should not happen with our conservative approach.");
-        try {
-          const lastResortBaseQuery = { tags: '' };
-          const { apiQuery, clientSideFilterNeeded } = buildHybridQuery(lastResortBaseQuery);
-          const limit = clientSideFilterNeeded ? 100 : postsPerFetch;
-
-          console.log(`Trying last resort query: "${apiQuery.tags}" (ClientFilter: ${clientSideFilterNeeded})`);
-          const lastResortPosts = await fetchFunction(apiQuery, limit);
-          let processedLastResortPosts = lastResortPosts;
-
-          if (clientSideFilterNeeded) {
-            processedLastResortPosts = this.applyClientSideFilters(processedLastResortPosts, { whitelist, blacklist });
-          }
-
-          if (processedLastResortPosts && processedLastResortPosts.length) {
-            console.log(`Last resort query found ${processedLastResortPosts.length} posts`);
-            allPosts = processedLastResortPosts;
-          } else {
-            console.error("Last resort query returned no posts. API may be down or filters are too strict.");
-          }
-        } catch (lastResortError) {
-          console.error("Last resort query failed:", lastResortError);
-        }
-      }
-
-      const uniqueMap = new Map();
-      allPosts.forEach(post => {
-        const key = post.source ? `${post.source}|${post.id}` : String(post.id);
-        if (!uniqueMap.has(key)) {
-          uniqueMap.set(key, post);
-        } else {
-          const existing = uniqueMap.get(key);
-          if (existing._strategy !== 'duo' && post._strategy === 'duo') {
-            uniqueMap.set(key, post);
-          }
-        }
-      });
-
-      let uniquePosts = Array.from(uniqueMap.values());
-      await hydrateImageAnalysis(uniquePosts, { includeAi: useSettingsStore().aiTaggingEnabled });
-      uniquePosts = excludeDuplicateContent(uniquePosts, existingPostIds);
-      console.log(`Found ${uniquePosts.length} unique posts after deduplication`);
-
-      if (existingPostIds.size > 0) {
-        uniquePosts = uniquePosts.filter(post => {
+      const prepare = async (posts) => {
+        const uniqueMap = new Map();
+        posts.forEach(post => {
           const key = post.source ? `${post.source}|${post.id}` : String(post.id);
-          return !existingPostIds.has(key);
+          if (!uniqueMap.has(key)) uniqueMap.set(key, post);
         });
+        let unique = Array.from(uniqueMap.values());
+        await hydrateImageAnalysis(unique, { includeAi: useSettingsStore().aiTaggingEnabled });
+        unique = excludeDuplicateContent(unique, existingPostIds);
+        if (existingPostIds.size > 0) {
+          unique = unique.filter(post => {
+            const key = post.source ? `${post.source}|${post.id}` : String(post.id);
+            return !existingPostIds.has(key);
+          });
+        }
+        return unique;
+      };
+
+      // Broad queries with their own page cursors. They only run when the
+      // strategies came back (nearly) all seen, and each call moves one page
+      // deeper, so a long session keeps finding unseen posts instead of
+      // re-requesting page 1 and running dry.
+      const fetchFallback = async (tags) => {
+        const cursorKey = `fallback:${tags}`;
+        const { apiQuery, clientSideFilterNeeded } = buildHybridQuery({ tags });
+        const page = this.strategyCursors[cursorKey] || 1;
+        apiQuery.page = page;
+        console.log(`Running fallback query: "${apiQuery.tags}" Page: ${page}`);
+        const posts = await fetchFunction(apiQuery, clientSideFilterNeeded ? 100 : postsPerFetch);
+        if (!posts || posts.length === 0) return [];
+        this.strategyCursors[cursorKey] = page + 1;
+        const filtered = clientSideFilterNeeded ? this.applyClientSideFilters(posts, { whitelist, blacklist }) : posts;
+        return filtered.map(post => Object.assign(post, {
+          _strategy: 'fallback',
+          _searchCriteria: apiQuery.tags,
+          _debugMetadata: { apiQuery: apiQuery.tags, strategy: 'fallback', intent: 'Broad fallback' }
+        }));
+      };
+
+      let uniquePosts = await prepare(allPosts);
+      const minFresh = Math.min(5, maxTotal);
+      const FALLBACK_QUERIES = ['order:rank', 'order:favcount', ''];
+      for (let attempt = 0; uniquePosts.length < minFresh && !deepDiveState.active && attempt < FALLBACK_QUERIES.length * 2; attempt++) {
+        let extra = [];
+        try { extra = await fetchFallback(FALLBACK_QUERIES[attempt % FALLBACK_QUERIES.length]); }
+        catch (fallbackError) { console.error('Fallback query failed:', fallbackError); }
+        if (modeGeneration !== deepDiveState.generation) return [];
+        if (extra.length) uniquePosts = await prepare([...uniquePosts, ...extra]);
       }
+      console.log(`Found ${uniquePosts.length} unique posts after deduplication`);
 
       const DISCOVERY_INTERVAL = 4;
 
