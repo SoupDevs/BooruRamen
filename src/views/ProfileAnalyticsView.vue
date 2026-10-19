@@ -24,7 +24,14 @@
         <section class="bg-gray-800 rounded-lg p-5">
           <div v-for="section in story.sections" :key="section.title" class="mb-4 last:mb-0">
             <h2 class="text-xs font-semibold uppercase tracking-wider text-pink-400 mb-1">{{ section.title }}</h2>
-            <p class="text-gray-100 leading-relaxed">{{ section.sentences.join(' ') }}</p>
+            <p class="text-gray-100 leading-relaxed">
+              <template v-for="(sentence, s) in section.sentences" :key="s">
+                <template v-for="(segment, i) in segments(sentence)" :key="i">
+                  <span v-if="segment.category" class="font-semibold" :style="{ color: categoryColor(segment.category) }">{{ segment.text }}</span>
+                  <template v-else>{{ segment.text }}</template>
+                </template>{{ s < section.sentences.length - 1 ? ' ' : '' }}
+              </template>
+            </p>
           </div>
           <p class="text-xs text-gray-500 mt-4">Written from your interactions with fixed rules, not an AI model. Deep Dives are left out, and your avoided tags are ignored.</p>
         </section>
@@ -168,7 +175,8 @@ import StorageService from '../services/StorageService';
 import { COMMON_TAGS } from '../services/RecommendationSystem';
 import { computeFeedMetrics } from '../services/FeedMetrics.js';
 import { analyzeTaste, CATEGORIES } from '../services/TasteAnalysis.js';
-import { describeTaste, tagLabel, tagEvidence } from '../services/TasteNarrative.js';
+import { describeTaste, tagLabel, tagEvidence, splitSegments } from '../services/TasteNarrative.js';
+import { tagColor } from '../services/tagColors.js';
 import TagMap from '../components/TagMap.vue';
 
 const ACTION_LABELS = {
@@ -260,6 +268,7 @@ export default {
       }
     },
     label(entry) { return tagLabel(entry); },
+    segments(sentence) { return splitSegments(sentence); },
     evidence(entry) { return tagEvidence(entry); },
     whySentence(entry) {
       const lift = entry.lift;
@@ -271,7 +280,7 @@ export default {
       return `${Math.max(6, (entry.score / top) * 100)}%`;
     },
     categoryColor(category) {
-      return { artist: 'rgb(var(--c-accent-400))', copyright: '#c797ff', character: '#35c64a', general: '#4ea8de' }[category];
+      return tagColor(category);
     },
     hourHeight(count) {
       const max = Math.max(1, ...this.analysis.engagement.hours);

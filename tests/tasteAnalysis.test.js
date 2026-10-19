@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeTaste, layoutGraph } from '../src/services/TasteAnalysis.js';
-import { describeTaste, joinList, tagLabel, tagEvidence } from '../src/services/TasteNarrative.js';
+import { describeTaste, joinList, tagLabel, tagEvidence, plainText, splitSegments } from '../src/services/TasteNarrative.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = new Date('2026-10-19T21:00:00').getTime();
@@ -66,14 +66,19 @@ describe('taste narrative', () => {
   it('reads as plain sentences grounded in the numbers', () => {
     const { ready, sections } = describeTaste(analyzeTaste(history(), { now: NOW }));
     expect(ready).toBe(true);
-    const text = sections.map(section => section.sentences.join(' ')).join('\n');
+    const text = sections.map(section => section.sentences.map(plainText).join(' ')).join('\n');
     expect(text).toContain('You mostly come here for Zenless Zone Zero');
     expect(text).toContain('Wise (Zenless Zone Zero)');
     expect(text).toMatch(/you engage with 100% of g7jay's posts/);
     expect(text).toContain('You reliably pass on');
     expect(text).toMatch(/New this week: [^.]*New Show/);
     expect(text).toContain("You've saved 1 post. The feed treats that as a stronger signal than a like.");
-    expect(text).not.toMatch(/undefined|NaN|null/);
+    expect(text).not.toMatch(/undefined|NaN|null|[\u0001-\u0003]/);
+    // Tag names carry their category so the page can colour them.
+    const segments = splitSegments(sections[0].sentences[0]);
+    expect(segments).toContainEqual({ text: 'Zenless Zone Zero', category: 'copyright' });
+    expect(segments).toContainEqual({ text: 'Wise (Zenless Zone Zero)', category: 'character' });
+    expect(segments[0]).toEqual({ text: 'You mostly come here for ' });
   });
   it('waits for enough data before telling a story', () => {
     const { ready, sections } = describeTaste(analyzeTaste([view(post(), 5000, NOW)], { now: NOW }));

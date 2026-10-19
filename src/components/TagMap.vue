@@ -63,6 +63,7 @@
 <script>
 import { layoutGraph } from '../services/TasteAnalysis.js';
 import { tagLabel } from '../services/TasteNarrative.js';
+import { TAG_COLORS } from '../services/tagColors.js';
 
 export default {
   name: 'TagMap',
@@ -76,13 +77,8 @@ export default {
       width: 640,
       height: 420,
       hovered: null,
-      // Danbooru's category colours; artist follows the theme accent.
-      palette: {
-        artist: 'rgb(var(--c-accent-400, 244 114 182))',
-        copyright: '#c797ff',
-        character: '#35c64a',
-        general: '#4ea8de',
-      },
+      // Standard tag-type colours, shared with the rest of the page.
+      palette: { artist: TAG_COLORS.artist, copyright: TAG_COLORS.copyright, character: TAG_COLORS.character, general: TAG_COLORS.general },
       categoryNames: { artist: 'Artist', copyright: 'Series', character: 'Character', general: 'Theme' },
     };
   },

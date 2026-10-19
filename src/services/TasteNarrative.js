@@ -27,7 +27,29 @@ export function joinList(items) {
   return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
 }
 
-const names = entries => joinList(entries.map(tagLabel));
+// Tag names inside sentences are wrapped in invisible markers carrying their
+// category, so the page can colour them; splitSegments() takes them apart and
+// plainText() drops them.
+const OPEN = '\u0001', SEP = '\u0002', CLOSE = '\u0003';
+const MARKED = /\u0001([a-z]+)\u0002([^\u0003]*)\u0003/g;
+export const markTag = entry => `${OPEN}${entry.category || 'general'}${SEP}${tagLabel(entry)}${CLOSE}`;
+
+/** "You like ⟨Elden Ring⟩." -> [{ text: 'You like ' }, { text: 'Elden Ring', category: 'copyright' }, { text: '.' }] */
+export function splitSegments(sentence) {
+  const segments = [];
+  let last = 0;
+  for (const match of sentence.matchAll(MARKED)) {
+    if (match.index > last) segments.push({ text: sentence.slice(last, match.index) });
+    segments.push({ text: match[2], category: match[1] });
+    last = match.index + match[0].length;
+  }
+  if (last < sentence.length) segments.push({ text: sentence.slice(last) });
+  return segments;
+}
+
+export const plainText = sentence => sentence.replace(MARKED, '$2');
+
+const names = entries => joinList(entries.map(markTag));
 const plural = (entries, one, many) => (entries.length === 1 ? one : many);
 
 function partOfDay(hour) {
@@ -71,12 +93,12 @@ export function describeTaste(analysis) {
   else if (characters.length) like.push(`The characters you keep coming back to are ${names(characters)}.`);
   if (artists.length) {
     const lead = artists[0];
-    like.push(`Among artists, ${names(artists)} land most reliably: you engage with ${pct(lead.rate)} of ${tagLabel(lead)}'s posts, against ${pct(baseRate)} of posts overall.`);
+    like.push(`Among artists, ${names(artists)} land most reliably: you engage with ${pct(lead.rate)} of ${markTag(lead)}'s posts, against ${pct(baseRate)} of posts overall.`);
   }
   if (themes.length) like.push(`${series.length || characters.length ? 'Beyond specific series, you' : 'You'} gravitate toward ${names(themes)}.`);
   if (avoidedTags.length) {
     const worst = avoidedTags[0];
-    like.push(`You reliably pass on ${names(avoidedTags.slice(0, 3))}; you skipped ${pct(worst.skips / worst.impressions)} of the ${tagLabel(worst)} posts you were shown.`);
+    like.push(`You reliably pass on ${names(avoidedTags.slice(0, 3))}; you skipped ${pct(worst.skips / worst.impressions)} of the ${markTag(worst)} posts you were shown.`);
   }
   if (like.length) sections.push({ title: 'What you like', sentences: like });
 
@@ -116,8 +138,9 @@ export function describeTaste(analysis) {
   if (fading.length) change.push(`${names(fading.slice(0, 3))} ${plural(fading.slice(0, 3), 'has', 'have')} gone quiet compared with last month; the feed will still bring ${plural(fading.slice(0, 3), 'it', 'them')} back now and then.`);
   if (deepDives.length) {
     const last = deepDives[deepDives.length - 1].post;
-    const anchor = (last.tag_string_character || last.tag_string_copyright || last.tag_string_artist || '').split(/\s+/).filter(Boolean)[0];
-    change.push(`You've taken ${deepDives.length} Deep ${deepDives.length === 1 ? 'Dive' : 'Dives'}${anchor ? `, most recently around ${tagLabel({ tag: anchor, category: 'character' })}` : ''}. Dives stay mostly separate from your feed.`);
+    const category = ['character', 'copyright', 'artist'].find(name => (last[`tag_string_${name}`] || '').trim());
+    const anchor = category && last[`tag_string_${category}`].split(/\s+/).filter(Boolean)[0];
+    change.push(`You've taken ${deepDives.length} Deep ${deepDives.length === 1 ? 'Dive' : 'Dives'}${anchor ? `, most recently around ${markTag({ tag: anchor, category })}` : ''}. Dives stay mostly separate from your feed.`);
   }
   if (change.length) sections.push({ title: "What's changing", sentences: change });
 
@@ -142,7 +165,10 @@ export function describeTaste(analysis) {
   if (rhythm.length) sections.push({ title: 'When you browse', sentences: rhythm });
 
   // A sentence can open with a lower-case tag ("tree and outdoors have...").
-  for (const section of sections) section.sentences = section.sentences.map(sentence => sentence.charAt(0).toUpperCase() + sentence.slice(1));
+  const capitalise = sentence => (sentence.startsWith(OPEN)
+    ? sentence.replace(/^(\u0001[a-z]+\u0002)(.)/, (_, head, letter) => head + letter.toUpperCase())
+    : sentence.charAt(0).toUpperCase() + sentence.slice(1));
+  for (const section of sections) section.sentences = section.sentences.map(capitalise);
   return { ready: true, sections };
 }
 
