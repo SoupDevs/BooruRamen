@@ -31,6 +31,7 @@ export function joinList(items) {
 // category, so the page can colour them; splitSegments() takes them apart and
 // plainText() drops them.
 const OPEN = '\u0001', SEP = '\u0002', CLOSE = '\u0003';
+// eslint-disable-next-line no-control-regex -- the markers are control characters on purpose
 const MARKED = /\u0001([a-z]+)\u0002([^\u0003]*)\u0003/g;
 export const markTag = entry => `${OPEN}${entry.category || 'general'}${SEP}${tagLabel(entry)}${CLOSE}`;
 
@@ -166,6 +167,7 @@ export function describeTaste(analysis) {
 
   // A sentence can open with a lower-case tag ("tree and outdoors have...").
   const capitalise = sentence => (sentence.startsWith(OPEN)
+    // eslint-disable-next-line no-control-regex -- see MARKED
     ? sentence.replace(/^(\u0001[a-z]+\u0002)(.)/, (_, head, letter) => head + letter.toUpperCase())
     : sentence.charAt(0).toUpperCase() + sentence.slice(1));
   for (const section of sections) section.sentences = section.sentences.map(capitalise);
