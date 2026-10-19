@@ -31,8 +31,19 @@ describe('content filters', () => {
     const fetch = async (query) => { sent.push(query.tags); return [post(1, '1girl spider'), post(2, '1girl cat')]; };
     const feed = await recommendations.getCuratedExploreFeed(fetch, options({ blacklist: ['spider'] }));
     expect(feed.map(p => p.id)).toEqual([2]);
-    // The blacklist never takes one of the source's search-tag slots.
-    expect(sent[0]).not.toContain('spider');
+    // One positive tag leaves a slot, which carries the exclusion.
+    expect(sent[0].split(' ').slice(0, 2)).toEqual(['1girl', '-spider']);
+  });
+
+  it('sends only the exclusions that fit and filters the rest locally', async () => {
+    recommendations.resetExploreSession();
+    strategies.queries = [{ tags: 'cat', type: 'anchor' }];
+    const sent = [];
+    const fetch = async (query) => { sent.push(query.tags); return [post(10, 'cat spider'), post(11, 'cat snake'), post(12, 'cat')]; };
+    const feed = await recommendations.getCuratedExploreFeed(fetch, options({ blacklist: ['spider', 'snake'] }));
+    expect(sent[0].split(' ').slice(0, 2)).toEqual(['cat', '-spider']);
+    expect(sent[0]).not.toContain('snake');
+    expect(feed.map(p => p.id)).toEqual([12]);
   });
 
   it('keeps two positive tags in the query alongside a local blacklist', async () => {

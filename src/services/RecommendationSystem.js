@@ -312,13 +312,20 @@ class RecommendationSystem {
 
       // freeTags (rating:, filetype:, -filetype:) are meta-tags that don't count
       // toward Danbooru's search tag limit, so we can always append them.
-      // Only positive tags (base, whitelist) use the limit: the blacklist is
-      // never sent and is always applied locally (applyContentFilters).
+      // Positive tags (whitelist, then base) get the slots first. Slots left
+      // over carry blacklist exclusions so the booru drops those posts
+      // itself; the blacklist is also always applied locally
+      // (applyContentFilters), so exclusions that don't fit cost nothing but
+      // some fetched-and-discarded posts.
       const availableForSearch = tagLimit;
 
       // Prioritize whitelist tags (mandatory) then fill remaining slots with base tags
       const prioritizedTags = [...new Set([...whitelist, ...apiTags])];
       let finalApiTags = prioritizedTags.slice(0, availableForSearch);
+      const spareSlots = availableForSearch - finalApiTags.length;
+      if (spareSlots > 0) {
+        finalApiTags.push(...[...new Set(blacklist)].slice(0, spareSlots).map(tag => `-${tag}`));
+      }
 
       // Whitelist tags that didn't fit are checked client-side
       const clientSideFilterNeeded = prioritizedTags.length > availableForSearch;
