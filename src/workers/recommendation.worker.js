@@ -655,7 +655,13 @@ export class RecommendationWorkerCore {
    * @returns {{ feed: Object[], rest: Object[] }} chosen posts and leftovers
    */
   assembleFeed(posts, { maxTotal = 10, context = [] } = {}) {
-    const scored = posts.map(post => ({ post, score: this.scorePost(post) }));
+    // The score each post is shown with is kept on it (and so stored with its
+    // interactions) for progressive validation in FeedMetrics.
+    const scored = posts.map(post => {
+      const score = this.scorePost(post);
+      post._score = Math.round(score * 1e4) / 1e4;
+      return { post, score };
+    });
     if (this.deepDive.active) {
       const ordered = diversify(scored, context, { lambda: 0.1 });
       return { feed: ordered.slice(0, maxTotal).map(item => item.post), rest: ordered.slice(maxTotal).map(item => item.post) };
@@ -794,7 +800,11 @@ export class RecommendationWorkerCore {
     if (!posts || posts.length === 0) return [];
     // Exploration is chosen deliberately at feed assembly; a flat bonus per
     // strategy here would override the model on every re-rank.
-    const scoredPosts = posts.map(post => ({ post, score: this.scorePost(post) }));
+    const scoredPosts = posts.map(post => {
+      const score = this.scorePost(post);
+      post._score = Math.round(score * 1e4) / 1e4;
+      return { post, score };
+    });
     return diversify(scoredPosts, context, this.deepDive.active ? { lambda: 0.1 } : undefined).map(sp => sp.post);
   }
 

@@ -72,6 +72,36 @@
 
       <!-- Content Grid -->
       <div v-else class="grid gap-4 auto-rows-min" style="grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));">
+
+        <!-- Feed Quality: how the recommendations are landing (last 30 days) -->
+        <div v-if="feedMetrics && feedMetrics.impressions" class="bg-gray-800 rounded-lg p-4" style="grid-column: 1 / -1;">
+          <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
+            <span>📈</span> Feed Quality <span class="text-xs font-normal text-gray-500">last 30 days</span>
+          </h3>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <div><p class="text-gray-400 text-xs">Posts shown</p><p class="font-mono text-lg">{{ feedMetrics.impressions }}</p></div>
+            <div><p class="text-gray-400 text-xs">Skipped</p><p class="font-mono text-lg">{{ pct(feedMetrics.skipRate) }}</p></div>
+            <div><p class="text-gray-400 text-xs">Engaged</p><p class="font-mono text-lg">{{ pct(feedMetrics.positiveRate) }}</p></div>
+            <div><p class="text-gray-400 text-xs">Likes per 100 posts</p><p class="font-mono text-lg">{{ num(feedMetrics.likesPer100) }}</p></div>
+            <div><p class="text-gray-400 text-xs" title="Chance an engaged post had been ranked above a skipped one, using the score it was shown with">Ranking accuracy (AUC)</p><p class="font-mono text-lg">{{ num(feedMetrics.auc, 3) }}</p></div>
+            <div><p class="text-gray-400 text-xs">Sessions</p><p class="font-mono text-lg">{{ feedMetrics.sessions.count }}</p></div>
+            <div><p class="text-gray-400 text-xs">Median session</p><p class="font-mono text-lg">{{ num(feedMetrics.sessions.medianMinutes) }} min</p></div>
+            <div><p class="text-gray-400 text-xs">Posts per session</p><p class="font-mono text-lg">{{ num(feedMetrics.sessions.medianImpressions, 0) }}</p></div>
+          </div>
+          <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div>
+              <p class="text-gray-400 text-xs mb-1">Engaged: discovery vs ranked slots</p>
+              <p class="font-mono">discovery {{ pct(feedMetrics.exploration.explore.positiveRate) }} ({{ feedMetrics.exploration.explore.impressions }})
+                · ranked {{ pct(feedMetrics.exploration.exploit.positiveRate) }} ({{ feedMetrics.exploration.exploit.impressions }})</p>
+            </div>
+            <div>
+              <p class="text-gray-400 text-xs mb-1">Engaged by strategy</p>
+              <p v-for="(group, name) in feedMetrics.byStrategy" :key="name" class="font-mono">
+                {{ name }}: {{ pct(group.positiveRate) }} ({{ group.impressions }})
+              </p>
+            </div>
+          </div>
+        </div>
         
         <!-- Top Tags - Recommendation System Scores (1x1) -->
         <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
@@ -304,6 +334,7 @@
 <script>
 import StorageService from '../services/StorageService';
 import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSystem';
+import { computeFeedMetrics } from '../services/FeedMetrics.js';
 
 export default {
   name: 'ProfileAnalyticsView',
@@ -323,6 +354,7 @@ export default {
         dislikes: 25
       },
       loading: true,
+      feedMetrics: null,
       rawHistory: [],
       rawInteractions: [],
       processedData: {
@@ -449,6 +481,8 @@ export default {
     await this.calculateAnalytics();
   },
   methods: {
+    pct(value) { return value === null || value === undefined ? '–' : `${Math.round(value * 100)}%`; },
+    num(value, digits = 1) { return value === null || value === undefined ? '–' : Number(value).toFixed(digits); },
     capitalize(s) {
       return s.charAt(0).toUpperCase() + s.slice(1);
     },
@@ -503,6 +537,7 @@ export default {
       const history = await StorageService.getViewedPosts(); 
       // interactions: [ { type, postId, value, metadata } ]
       const interactions = await StorageService.getInteractions();
+      this.feedMetrics = computeFeedMetrics(interactions, { since: Date.now() - 30 * 24 * 60 * 60 * 1000 });
 
       const tagCounts = {};
       const tagPairCounts = {};
