@@ -25,6 +25,7 @@ import { getActiveProfileDbName, DEFAULT_DB_NAME, applyProfileSchema } from './P
  * and it is read back here via self.name.
  */
 const resolveDbName = () => {
+    // eslint-disable-next-line no-undef -- only defined inside workers, guarded by typeof
     if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
         return self.name && self.name.startsWith(DEFAULT_DB_NAME) ? self.name : DEFAULT_DB_NAME;
     }
