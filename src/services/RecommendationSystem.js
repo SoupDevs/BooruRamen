@@ -346,12 +346,27 @@ class RecommendationSystem {
     };
 
     try {
-      const fetchPromises = queries.map(query => {
-        const { apiQuery, clientSideFilterNeeded } = buildHybridQuery(query);
+      // Different strategies can collapse to the same API request once the
+      // query is trimmed to the tag limit. Send each request only once.
+      const seenRequests = new Set();
+      const plannedQueries = [];
+      for (const query of queries) {
+        const built = buildHybridQuery(query);
+        const currentPage = this.strategyCursors[query.tags] || 1;
+        const requestKey = `${built.apiQuery.tags}|${currentPage}`;
+        if (seenRequests.has(requestKey)) {
+          console.log(`Skipping duplicate query: "${built.apiQuery.tags}" Page: ${currentPage}`);
+          continue;
+        }
+        seenRequests.add(requestKey);
+        plannedQueries.push({ query, built, currentPage });
+      }
+
+      const fetchPromises = plannedQueries.map(({ query, built, currentPage }) => {
+        const { apiQuery, clientSideFilterNeeded } = built;
 
         const limit = clientSideFilterNeeded ? 100 : postsPerFetch;
 
-        const currentPage = this.strategyCursors[query.tags] || 1;
         apiQuery.page = currentPage;
 
         console.log(`Processing query: "${apiQuery.tags}" Page: ${currentPage} (ClientFilter: ${clientSideFilterNeeded})`);
@@ -432,8 +447,8 @@ class RecommendationSystem {
 
       let allPosts = [];
       fetchResults.forEach((posts, index) => {
-        const queryTags = queries[index].tags;
-        const queryType = (queries[index].type || 'UNKNOWN').toUpperCase();
+        const queryTags = plannedQueries[index].query.tags;
+        const queryType = (plannedQueries[index].query.type || 'UNKNOWN').toUpperCase();
 
         if (posts && posts.length) {
           console.log(`Query [${queryType}] "${queryTags}" returned ${posts.length} posts`);
