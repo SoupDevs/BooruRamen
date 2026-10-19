@@ -16,7 +16,7 @@ export const SESSION_GAP_MS = 15 * 60 * 1000;
 export const POSITIVE_LABEL = 0.6;
 
 /** Probability that a random positive impression outscored a random negative one. */
-export function auc(pairs) {
+export function auc(pairs, minEach = 1) {
   const sorted = pairs.filter(pair => Number.isFinite(pair.score)).sort((a, b) => a.score - b.score);
   let positives = 0, negatives = 0, rankSum = 0;
   for (let i = 0; i < sorted.length;) {
@@ -26,7 +26,7 @@ export function auc(pairs) {
     for (let k = i; k < j; k++) if (sorted[k].positive) { positives++; rankSum += averageRank; } else negatives++;
     i = j;
   }
-  if (!positives || !negatives) return null;
+  if (positives < minEach || negatives < minEach) return null;
   return (rankSum - positives * (positives + 1) / 2) / (positives * negatives);
 }
 
@@ -87,8 +87,9 @@ export function computeFeedMetrics(interactions, { since = 0 } = {}) {
     skipRate: rate(shown.filter(item => item.dwell !== undefined && item.dwell <= SKIP_LABEL).length, shown.length),
     positiveRate: rate(shown.filter(isPositive).length, shown.length),
     likesPer100: shown.length ? (likes / shown.length) * 100 : null,
+    // Needs a handful of each side before the number means anything.
     auc: auc(shown.filter(item => item.best >= POSITIVE_LABEL || item.best <= SKIP_LABEL)
-      .map(item => ({ score: item.score, positive: isPositive(item) }))),
+      .map(item => ({ score: item.score, positive: isPositive(item) })), 5),
     exploration: { explore: group(shown.filter(item => item.explore)), exploit: group(shown.filter(item => !item.explore)) },
     byStrategy: Object.fromEntries(Object.entries(byStrategy).map(([name, items]) => [name, group(items)])),
     sessions: {

@@ -22,7 +22,7 @@ describe('feed metrics', () => {
     expect(metrics.positiveRate).toBe(0.5);
     expect(metrics.skipRate).toBe(1); // both impressions were short; the like still counts as engaged
     expect(metrics.likesPer100).toBe(50);
-    expect(metrics.auc).toBe(1);
+    expect(metrics.auc).toBeNull(); // too few scored impressions to judge
     expect(metrics.exploration.explore).toEqual({ impressions: 1, positiveRate: 0 });
     expect(metrics.byStrategy.anchor.positiveRate).toBe(1);
   });
