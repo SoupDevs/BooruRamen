@@ -9,8 +9,19 @@ import { SessionInterest, interactionSignal, PROFILE_HALF_LIFE_HOURS } from '../
 import { DeepDiveInterest } from '../services/DeepDiveInterest.js';
 import { DwellBaseline, dwellEngagement, engagementLabel, focusPostOnTag, isVideoPost } from '../services/signals.js';
 
+import { diversify } from '../services/Diversity.js';
+
 // Impressions remembered for bandit credit (one reward per shown post).
 const IMPRESSION_MEMORY = 500;
+// Largest score cut for a fully satiated artist/character/copyright.
+const SATIATION_WEIGHT = 0.3;
+// Exploration: every Nth slot normally, every 2nd under a run of skips.
+const EXPLORE_INTERVAL = 4;
+const EXPLORE_INTERVAL_PRESSURED = 2;
+// Upper-confidence bonus per unit of uncertainty for exploration picks.
+const EXPLORE_UCB = 0.5;
+// Exploration never reaches into the bottom of the candidate list.
+const EXPLORE_SCORE_FLOOR_QUANTILE = 0.3;
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
 
@@ -586,7 +597,68 @@ export class RecommendationWorkerCore {
   }
 
   blendRankingScore(score, post) {
-    return this.deepDive.blend(this.sessionInterest.blend(score, post, this.avoidedTags), post, this.avoidedTags, tagEmbedding);
+    const blended = this.deepDive.blend(this.sessionInterest.blend(score, post, this.avoidedTags), post, this.avoidedTags, tagEmbedding);
+    // A dive asks for more of the same; normal browsing tires of repeats.
+    if (this.deepDive.active) return blended;
+    return blended * (1 - SATIATION_WEIGHT * this.sessionInterest.satiation(post, this.avoidedTags));
+  }
+
+  /**
+   * 0..1: how little the engine knows about this kind of post. Uses the
+   * ML model's neural-linear posterior when available, otherwise how much
+   * interaction evidence the post's tags have.
+   */
+  postUncertainty(post) {
+    post = learningPost(post);
+    if (this.mlInitialized && this.mlScorer.isTrained && this.mlScorer.uncertainty) {
+      const value = this.mlScorer.uncertainty(post, this.tagScores, {
+        ratingPreferences: this.ratingPreferences, mediaTypePreferences: this.mediaTypePreferences,
+      });
+      if (value !== null) return value;
+    }
+    const avoided = new Set(this.avoidedTags);
+    const tags = (post.tag_string || '').split(/\s+/).filter(tag => tag && !avoided.has(tag));
+    if (!tags.length) return 1;
+    const evidence = tags.reduce((sum, tag) => sum + (this.tagEngagement[tag] || 0), 0) / tags.length;
+    return 1 / Math.sqrt(1 + evidence);
+  }
+
+  /**
+   * Order a batch of candidates for the feed.
+   * Exploit slots: best scores, diversified against what was just shown.
+   * Explore slots: the highest upper-confidence picks (score + uncertainty)
+   * among the rest, never from the bottom of the list. Previously every 4th
+   * slot came from the lowest-scored 40%: content the model was confident the
+   * user would not like, which costs retention and teaches little.
+   * @returns {{ feed: Object[], rest: Object[] }} chosen posts and leftovers
+   */
+  assembleFeed(posts, { maxTotal = 10, context = [] } = {}) {
+    const scored = posts.map(post => ({ post, score: this.scorePost(post) }));
+    if (this.deepDive.active) {
+      const ordered = diversify(scored, context, { lambda: 0.1 });
+      return { feed: ordered.slice(0, maxTotal).map(item => item.post), rest: ordered.slice(maxTotal).map(item => item.post) };
+    }
+    const byScore = [...scored].sort((a, b) => b.score - a.score);
+    const total = Math.min(maxTotal, byScore.length);
+    const interval = this.sessionInterest.explorationPressure >= 0.75 ? EXPLORE_INTERVAL_PRESSURED : EXPLORE_INTERVAL;
+    const exploreCount = Math.floor(total / interval);
+    const exploit = byScore.slice(0, total - exploreCount);
+    const floor = byScore.length ? byScore[Math.floor((byScore.length - 1) * (1 - EXPLORE_SCORE_FLOOR_QUANTILE))].score : 0;
+    const explore = byScore.slice(exploit.length)
+      .filter(item => item.score >= floor)
+      .map(item => ({ ...item, ucb: item.score + EXPLORE_UCB * this.postUncertainty(item.post) }))
+      .sort((a, b) => b.ucb - a.ucb)
+      .slice(0, exploreCount);
+    const chosen = new Set([...exploit, ...explore].map(item => item.post));
+    const exploitOrder = diversify(exploit, context);
+    const feed = [];
+    let e = 0, x = 0;
+    for (let position = 0; feed.length < exploit.length + explore.length; position++) {
+      if ((position + 1) % interval === 0 && x < explore.length) feed.push(Object.assign(explore[x++].post, { _explore: true }));
+      else if (e < exploitOrder.length) feed.push(exploitOrder[e++].post);
+      else feed.push(Object.assign(explore[x++].post, { _explore: true }));
+    }
+    return { feed, rest: byScore.filter(item => !chosen.has(item.post)).map(item => item.post) };
   }
 
   async setDeepDive(post) {
@@ -696,13 +768,12 @@ export class RecommendationWorkerCore {
     return details;
   }
 
-  rankPosts(posts) {
+  rankPosts(posts, context = []) {
     if (!posts || posts.length === 0) return [];
     // Exploration is chosen deliberately at feed assembly; a flat bonus per
     // strategy here would override the model on every re-rank.
     const scoredPosts = posts.map(post => ({ post, score: this.scorePost(post) }));
-    scoredPosts.sort((a, b) => b.score - a.score);
-    return scoredPosts.map(sp => sp.post);
+    return diversify(scoredPosts, context, this.deepDive.active ? { lambda: 0.1 } : undefined).map(sp => sp.post);
   }
 
   summarizeTagScores(limit = 10) {
@@ -988,7 +1059,10 @@ if (typeof self !== 'undefined') self.onmessage = async (e) => {
         result = core.getPostScoreDetails(payload);
         break;
       case 'rankPosts':
-        result = core.rankPosts(payload);
+        result = Array.isArray(payload) ? core.rankPosts(payload) : core.rankPosts(payload.posts, payload.context);
+        break;
+      case 'assembleFeed':
+        result = core.assembleFeed(payload.posts, payload.options);
         break;
       case 'setDeepDive':
         await core.setDeepDive(payload);

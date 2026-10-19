@@ -38,6 +38,10 @@ export const COMMON_TAGS = [
 
 const instanceId = Math.floor(Math.random() * 10000);
 
+// Unused candidates kept between feed fetches.
+const POOL_CAP = 150;
+const POOL_SKIP_FETCH_FACTOR = 3;
+
 class RecommendationSystem {
   constructor() {
     this.instanceId = instanceId;
@@ -63,6 +67,7 @@ class RecommendationSystem {
 
     // Local session state for strategy pagination cursors
     this.strategyCursors = {};
+    this.candidatePool = [];
 
     // Set up message listener from worker
     this.worker.onmessage = (e) => {
@@ -107,11 +112,13 @@ class RecommendationSystem {
 
   async initialize() {
     this.strategyCursors = {};
+    this.candidatePool = [];
     return this.callWorker('initialize');
   }
 
   resetExploreSession() {
     this.strategyCursors = {};
+    this.candidatePool = [];
     this.callWorker('resetExploreSession');
     console.log("Explore session reset");
   }
@@ -122,6 +129,7 @@ class RecommendationSystem {
 
   async resetRecommendations() {
     this.strategyCursors = {};
+    this.candidatePool = [];
     const result = await this.callWorker('resetRecommendations');
     this.publishDeepDive(null);
     return result;
@@ -129,6 +137,7 @@ class RecommendationSystem {
 
   async factoryReset() {
     this.strategyCursors = {};
+    this.candidatePool = [];
     const result = await this.callWorker('factoryReset');
     this.publishDeepDive(null);
     return result;
@@ -146,6 +155,7 @@ class RecommendationSystem {
   publishDeepDive(post) {
     Object.assign(deepDiveState, { active: !!post, anchorKey: post ? postKey(post) : null, anchorId: post?.id ?? null, generation: deepDiveState.generation + 1 });
     this.strategyCursors = {};
+    this.candidatePool = [];
     this.modeListeners.forEach(listener => listener());
   }
   async setDeepDive(post = null) {
@@ -168,8 +178,8 @@ class RecommendationSystem {
     return this.callWorker('getPostScoreDetails', post);
   }
 
-  async rankPosts(posts) {
-    return this.callWorker('rankPosts', posts);
+  async rankPosts(posts, context = []) {
+    return this.callWorker('rankPosts', { posts, context });
   }
 
   async summarizeTagScores(limit = 10) {
@@ -241,7 +251,8 @@ class RecommendationSystem {
       selectedRatings = ['general'],
       whitelist = [],
       blacklist = [],
-      existingPostIds = new Set()
+      existingPostIds = new Set(),
+      contextPosts = []
     } = options;
 
     // Only rebuilds when interactions arrived since the last build: the feed
@@ -249,7 +260,11 @@ class RecommendationSystem {
     await this.callWorker('refreshUserProfile');
     if (modeGeneration !== deepDiveState.generation) return [];
 
-    const queries = await this.generateMultiStrategyQueries(selectedRatings, whitelist);
+    // Candidates left over from earlier batches are re-scored with the
+    // current profile and session. While the pool is deep the network is
+    // skipped entirely, so refilling the runway is near-instant.
+    const skipFetch = this.candidatePool.length >= maxTotal * POOL_SKIP_FETCH_FACTOR;
+    const queries = skipFetch ? [] : await this.generateMultiStrategyQueries(selectedRatings, whitelist);
     console.log("Explore queries:", queries);
 
     const buildHybridQuery = (baseQuery) => {
@@ -443,7 +458,7 @@ class RecommendationSystem {
         }));
       };
 
-      let uniquePosts = await prepare(allPosts);
+      let uniquePosts = await prepare([...this.candidatePool, ...allPosts]);
       const minFresh = Math.min(5, maxTotal);
       const FALLBACK_QUERIES = ['order:rank', 'order:favcount', ''];
       for (let attempt = 0; uniquePosts.length < minFresh && !deepDiveState.active && attempt < FALLBACK_QUERIES.length * 2; attempt++) {
@@ -455,46 +470,12 @@ class RecommendationSystem {
       }
       console.log(`Found ${uniquePosts.length} unique posts after deduplication`);
 
-      const DISCOVERY_INTERVAL = 4;
-
-      // Offload all mathematical scoring to the worker!
-      const scoredPosts = await this.callWorker('scorePosts', uniquePosts);
-
-      scoredPosts.sort((a, b) => b.score - a.score);
-
-      const totalPosts = scoredPosts.length;
-      const rankedCutoff = Math.floor(totalPosts * 0.6);
-
-      const rankedBucket = scoredPosts.slice(0, rankedCutoff).map(sp => sp.post);
-      const discoveryBucket = scoredPosts.slice(rankedCutoff).map(sp => sp.post);
-
-      console.log(`Feed buckets: ${rankedBucket.length} ranked (top 60%), ${discoveryBucket.length} discovery (bottom 40%)`);
-      if (scoredPosts.length > 0) {
-        console.log(`Score range: ${scoredPosts[scoredPosts.length - 1].score.toFixed(2)} - ${scoredPosts[0].score.toFixed(2)}`);
-      }
-
-      const finalFeed = [];
-      let rankedIndex = 0;
-      let discoveryIndex = 0;
-
-      for (let position = 0; finalFeed.length < Math.min(maxTotal, uniquePosts.length); position++) {
-        if ((position + 1) % DISCOVERY_INTERVAL === 0 && discoveryIndex < discoveryBucket.length) {
-          finalFeed.push(discoveryBucket[discoveryIndex++]);
-        }
-        else if (rankedIndex < rankedBucket.length) {
-          finalFeed.push(rankedBucket[rankedIndex++]);
-        }
-        else if (discoveryIndex < discoveryBucket.length) {
-          finalFeed.push(discoveryBucket[discoveryIndex++]);
-        }
-        else break;
-      }
-
-      const limitedFeed = finalFeed.slice(0, maxTotal);
-
-      console.log(`Returning ${limitedFeed.length} curated posts (from ${finalFeed.length} ranked candidates)`);
-
-      return limitedFeed;
+      // Scoring, exploration and diversity all live in the worker.
+      const { feed, rest } = await this.callWorker('assembleFeed', { posts: uniquePosts, options: { maxTotal, context: contextPosts.slice(-5) } });
+      if (modeGeneration !== deepDiveState.generation) return [];
+      this.candidatePool = rest.slice(0, POOL_CAP);
+      console.log(`Returning ${feed.length} curated posts (${feed.filter(post => post._explore).length} exploratory), ${this.candidatePool.length} kept in the pool`);
+      return feed;
     } catch (error) {
       console.error("Error fetching curated explore feed:", error);
       return [];

@@ -49,6 +49,30 @@ const REPLAY_EPOCHS = 2;         // shuffled passes over the replay buffer per f
 const TOP_TAG_FEATURES = 10;      // number of top user tag affinities to expose as features
 const REPLAY_CAP = 300;          // max training samples kept for replay epochs
 const MIN_LOSS = 0.05;           // early stopping threshold
+const POSTERIOR_PRIOR = 1.0;     // ridge prior for the neural-linear posterior
+
+/** Gauss-Jordan inverse of a small positive-definite matrix. */
+function invertSymmetric(matrix) {
+  const n = matrix.length;
+  const a = matrix.map(row => Float64Array.from(row));
+  const inv = Array.from({ length: n }, (_, i) => { const row = new Float64Array(n); row[i] = 1; return row; });
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(a[r][col]) > Math.abs(a[pivot][col])) pivot = r;
+    if (Math.abs(a[pivot][col]) < 1e-12) return null;
+    [a[col], a[pivot]] = [a[pivot], a[col]];
+    [inv[col], inv[pivot]] = [inv[pivot], inv[col]];
+    const p = a[col][col];
+    for (let j = 0; j < n; j++) { a[col][j] /= p; inv[col][j] /= p; }
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = a[r][col];
+      if (!f) continue;
+      for (let j = 0; j < n; j++) { a[r][j] -= f * a[col][j]; inv[r][j] -= f * inv[col][j]; }
+    }
+  }
+  return inv;
+}
 
 class MLScorer {
   constructor() {
@@ -77,6 +101,7 @@ class MLScorer {
     this.trainingHistory = [];  // loss history for monitoring
     this.pendingBatch = [];     // accumulate samples for mini-batch
     this.replayBuffer = [];     // recent samples re-trained on each flush
+    this.posteriorInv = null;   // neural-linear posterior over the last layer
 
     this._initializeWeights();
   }
@@ -318,6 +343,56 @@ class MLScorer {
    * @param {Float32Array} features - Input feature vector
    * @returns {number} - Predicted engagement probability [0, 1]
    */
+  /** Last hidden layer activations (the neural-linear feature space). */
+  _hidden(features) {
+    const h1 = new Float32Array(HIDDEN1);
+    for (let j = 0; j < HIDDEN1; j++) {
+      let sum = this.bias1[j];
+      for (let i = 0; i < INPUT_DIM; i++) sum += features[i] * this.weights1[i][j];
+      h1[j] = Math.max(0, sum);
+    }
+    const z = new Float64Array(HIDDEN2 + 1);
+    for (let j = 0; j < HIDDEN2; j++) {
+      let sum = this.bias2[j];
+      for (let i = 0; i < HIDDEN1; i++) sum += h1[i] * this.weights2[i][j];
+      z[j] = Math.max(0, sum);
+    }
+    z[HIDDEN2] = 1;
+    return z;
+  }
+
+  /**
+   * Neural-linear uncertainty: a Bayesian linear model over the last hidden
+   * layer, refit from the replay buffer after each training flush. Posts that
+   * land in a region of feature space the user has rarely reacted to get a
+   * high value; well-explored regions get a low one. Returns null until the
+   * posterior exists (e.g. right after a restart, before the first flush).
+   */
+  uncertainty(post, userTagScores, userProfile) {
+    if (!this.posteriorInv || !this.isTrained) return null;
+    const z = this._hidden(this.extractFeatures(post, userTagScores, userProfile));
+    let variance = 0;
+    for (let i = 0; i <= HIDDEN2; i++) {
+      let row = 0;
+      for (let j = 0; j <= HIDDEN2; j++) row += this.posteriorInv[i][j] * z[j];
+      variance += z[i] * row;
+    }
+    return Math.min(1, Math.sqrt(Math.max(0, variance)));
+  }
+
+  _refreshPosterior() {
+    if (this.replayBuffer.length < BATCH_SIZE) return;
+    const size = HIDDEN2 + 1;
+    const A = Array.from({ length: size }, (_, i) => {
+      const row = new Float64Array(size); row[i] = POSTERIOR_PRIOR; return row;
+    });
+    for (const { features, weight = 1 } of this.replayBuffer) {
+      const z = this._hidden(features);
+      for (let i = 0; i < size; i++) for (let j = 0; j < size; j++) A[i][j] += weight * z[i] * z[j];
+    }
+    this.posteriorInv = invertSymmetric(A);
+  }
+
   forward(features) {
     // Layer 1: input -> hidden1 (ReLU)
     const h1 = new Float32Array(HIDDEN1);
@@ -587,6 +662,7 @@ class MLScorer {
     for (let e = 0; e < REPLAY_EPOCHS; e++) {
       this._trainReplayEpoch();
     }
+    this._refreshPosterior();
   }
 
   _trainReplayEpoch() {
@@ -608,6 +684,7 @@ class MLScorer {
    * Reset the model to untrained state.
    */
   reset() {
+    this.posteriorInv = null;
     this._initializeWeights();
     this.interactionCount = 0;
     this.isTrained = false;

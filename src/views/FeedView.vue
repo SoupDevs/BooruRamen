@@ -360,7 +360,7 @@ export default {
         const start = Math.max(0, index + 1 + VIDEO_FRAME_RUNWAY_AHEAD);
         if (posts.length - start < 2) return;
         try {
-          const ranked = await this.recommendationSystem.rankPosts(posts.slice(start));
+          const ranked = await this.recommendationSystem.rankPosts(posts.slice(start), posts.slice(Math.max(0, start - 5), start));
           if (this.posts !== posts || this.currentPostIndex !== index) return;
           this.posts = [...posts.slice(0, start), ...ranked];
           this.analyzeUpcomingImages();
@@ -517,6 +517,8 @@ export default {
             whitelist: activeWhitelist,
             blacklist: activeBlacklist,
             existingPostIds: blockedKeys,
+            // Diversity carries across batches: what the user just saw.
+            contextPosts: [...this.posts, ...newPosts].slice(-5),
             // Fall back to the saved settings (not hardcoded true) so filters apply
             // on first load, before the user ever hits "Apply Settings" (#150)
             wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : this.mediaType.images,
