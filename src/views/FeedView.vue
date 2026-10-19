@@ -437,20 +437,25 @@ export default {
       }
 
       // Get view history to exclude seen posts
-      const viewedHistory = await StorageService.getViewedPosts();
-      this.historyContentKeys = new Set(Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)));
+      // View history only grows by the posts this feed shows (which are in
+      // this.posts), so it is read once per search instead of on every fetch:
+      // a long history made each runway refill slower.
+      if (newSearch || !this._historyKeys) {
+        const viewedHistory = await StorageService.getViewedPosts();
+        this.historyContentKeys = new Set(Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)));
+        this._historyKeys = new Set([...Object.keys(viewedHistory), ...this.historyContentKeys]);
+      }
       // Reported/blocked posts, artists, and uploaders must never enter the feed
       const blockSets = await ReportService.getBlockSets();
       // Create a set of IDs to exclude (viewed history + currently loaded posts + reported posts)
-      const blockedKeys = new Set([
-        ...Object.keys(viewedHistory),
-        ...Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)),
-        ...this.posts.map(p => this.getCompositeKey(p)),
-        ...this.posts.flatMap(contentKeys),
-        ...blockSets.postKeys
-      ]);
-      
-      console.log(`FetchPosts: Blocked ${Object.keys(viewedHistory).length} from history, ${this.posts.length} from current. Total blocked IDs: ${blockedKeys.size}`);
+      const blockedKeys = new Set(this._historyKeys);
+      for (const p of this.posts) {
+        blockedKeys.add(this.getCompositeKey(p));
+        contentKeys(p).forEach(key => blockedKeys.add(key));
+      }
+      blockSets.postKeys.forEach(key => blockedKeys.add(key));
+
+      console.log(`FetchPosts: ${this.posts.length} loaded. Total blocked IDs: ${blockedKeys.size}`);
 
       if (newSearch) {
         Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
