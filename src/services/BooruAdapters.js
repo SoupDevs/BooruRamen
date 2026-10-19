@@ -65,6 +65,9 @@ export function toDevProxiedUrl(url) {
     }
 }
 
+// How long a failed Gelbooru tag-category lookup waits before it is retried
+const TAG_LOOKUP_RETRY_MS = 10 * 60 * 1000;
+
 class BooruAdapter {
     constructor(baseUrl, type) {
         this.baseUrl = baseUrl;
@@ -520,6 +523,8 @@ export class GelbooruAdapter extends BooruAdapter {
         this.lastRequestTime = 0;
         this.minRequestInterval = 500; // Minimum 500ms between requests
         this.throttleQueue = Promise.resolve();
+        // tag -> time of its last failed category lookup (memory only)
+        this.failedTagLookups = new Map();
         // Detect if this site supports actual video files (MP4/WebM)
         this.supportsVideoFiles = this.detectVideoSupport(baseUrl);
     }
@@ -550,6 +555,12 @@ export class GelbooruAdapter extends BooruAdapter {
 
     // Convert age: query to id: query
     translateAgeToId(operator, amount, unit) {
+        // The ID table below is gelbooru.com's. Safebooru and custom
+        // Gelbooru-engine sites number posts in their own, much smaller ID
+        // space, where these bounds would match nothing, so the age term is
+        // dropped for them instead.
+        if (!this.baseUrl.toLowerCase().includes('gelbooru.com')) return '';
+
         // ID mapping for Jan 1st of each year (User provided + extrapolated)
         const YEAR_IDS = {
             2007: 1,
@@ -589,11 +600,17 @@ export class GelbooruAdapter extends BooruAdapter {
 
         // Estimation check
         if (targetYear < 2007) return operator === '>' ? 'id:<1' : 'id:>1'; // Before time
-        if (targetYear > 2025) return ''; // Future??
+
+        // Years past the table are extrapolated at the last observed yearly
+        // growth. Leaning low keeps "newer than" queries from overshooting the
+        // newest post ID and returning nothing.
+        const lastYear = 2025;
+        const yearlyGrowth = YEAR_IDS[lastYear] - YEAR_IDS[lastYear - 1];
+        const yearStartId = (year) => YEAR_IDS[year] ?? YEAR_IDS[lastYear] + (year - lastYear) * yearlyGrowth;
 
         // Get bounds
-        const startId = YEAR_IDS[targetYear] || YEAR_IDS[2024]; // Fallback
-        const nextId = YEAR_IDS[targetYear + 1] || (startId + 2000000); // Rough estimate for next year
+        const startId = yearStartId(targetYear);
+        const nextId = yearStartId(targetYear + 1);
 
         // Interpolate within the year
         // Day of year / 365
@@ -841,8 +858,12 @@ export class GelbooruAdapter extends BooruAdapter {
             return;
         }
 
-        // Filter to only tags we haven't cached yet
-        const uncachedTags = gelbooruTagCache.getUncachedTags(tags);
+        // Filter to only tags we haven't cached yet, skipping tags whose
+        // lookup failed recently so a down or unauthorized API isn't hit again
+        // on every page (failures are not cached persistently).
+        const now = Date.now();
+        const uncachedTags = gelbooruTagCache.getUncachedTags(tags)
+            .filter(tag => now - (this.failedTagLookups.get(tag) ?? 0) >= TAG_LOOKUP_RETRY_MS);
         if (uncachedTags.length === 0) return;
 
         // Batch tags in groups of 100 (API limit)
@@ -874,16 +895,16 @@ export class GelbooruAdapter extends BooruAdapter {
                     params.append('api_key', this.credentials.apiKey);
                 }
 
-                const url = `/api/gelbooru/index.php?${params.toString()}`;
+                const cleanBaseUrl = this.baseUrl.endsWith('/') ? this.baseUrl.slice(0, -1) : this.baseUrl;
+                const url = toDevProxiedUrl(`${cleanBaseUrl}/index.php?${params.toString()}`);
                 console.log(`[Gelbooru] Fetching tag categories for ${batch.length} tags`);
 
                 const response = await httpFetch(url);
                 if (!response.ok) {
+                    // Not cached as general (0): that would label these tags
+                    // general for good. They are retried after a cooldown.
                     console.warn(`[Gelbooru] Tag API returned ${response.status}`);
-                    // Mark these tags as general (0) on failure to prevent repeated requests
-                    for (const tag of batch) {
-                        gelbooruTagCache.setCategory(tag, 0);
-                    }
+                    for (const tag of batch) this.failedTagLookups.set(tag, Date.now());
                     continue;
                 }
 
@@ -912,11 +933,9 @@ export class GelbooruAdapter extends BooruAdapter {
 
                 console.log(`[Gelbooru] Cached ${tagList.length} tag categories`);
             } catch (error) {
+                // Not cached; retried after a cooldown
                 console.error('[Gelbooru] Error fetching tag categories:', error);
-                // Mark as general on error
-                for (const tag of batch) {
-                    gelbooruTagCache.setCategory(tag, 0);
-                }
+                for (const tag of batch) this.failedTagLookups.set(tag, Date.now());
             }
             // Note: With IndexedDB, saves happen incrementally via setCategory
         }
