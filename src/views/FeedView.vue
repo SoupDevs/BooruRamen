@@ -495,6 +495,11 @@ export default {
         const targetCount = 5;
         let attempts = 0;
         const maxAttempts = 15;
+        // Each attempt already walks every strategy and paged fallback, so a
+        // few empty attempts in a row mean the search is used up. Without this
+        // a narrow whitelist fired ~90 booru requests before giving up.
+        const maxEmptyAttempts = 3;
+        let emptyAttempts = 0;
 
         const fetchFunction = (queryParams, limit) => {
           return BooruService.getPosts({ 
@@ -512,7 +517,7 @@ export default {
         const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
         const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
 
-        while (newPosts.length < targetCount && attempts < maxAttempts) {
+        while (newPosts.length < targetCount && attempts < maxAttempts && emptyAttempts < maxEmptyAttempts) {
           attempts++;
           
           const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
@@ -531,6 +536,7 @@ export default {
           });
           if (this.feedDisposed || modeGeneration !== deepDiveState.generation) return;
           
+          emptyAttempts = batch.length > 0 ? 0 : emptyAttempts + 1;
           if (batch.length > 0) {
             // Drop anything blocked via Report/Block (post, artist, or uploader)
             const allowedBatch = excludeDuplicateContent(ReportService.filterPosts(batch, blockSets), blockedKeys);
