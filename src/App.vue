@@ -302,6 +302,7 @@
         v-if="sharePost"
         :post="sharePost"
         @close="sharePost = null"
+        @shared="kind => logImplicit(kind, sharePost)"
       />
     </div>
     <BottomNavBar @navigate-feed="navigateToFeed" :class="focusChromeClass" />
@@ -690,11 +691,18 @@ export default {
         // they are the clearest "not interested" signal the feed gets.
         const watched = watchTimer.stop();
         if (watched && watched.ms >= MIN_IMPRESSION_MS) {
+            // Clip length turns watch time into completion; this still
+            // points at the outgoing post's video when called on post change.
+            const duration = this.currentVideoElement?.duration;
             this.logInteraction({
                 postId: post.id,
                 type: 'timeSpent',
                 value: watched.ms,
-                metadata: { post, deepDive: !!watched.context?.deepDive }
+                metadata: {
+                    post,
+                    deepDive: !!watched.context?.deepDive,
+                    ...(Number.isFinite(duration) && duration > 0 && { mediaDuration: duration })
+                }
             });
         }
     },
@@ -746,6 +754,13 @@ export default {
     },
     togglePostDetails() {
       this.showPostDetails = !this.showPostDetails;
+      if (this.showPostDetails) this.logImplicit('details', this.currentPost);
+    },
+    // Implicit interest: actions that say "I care about this post" without
+    // a like. Each counts once per post per session (see SessionInterest).
+    logImplicit(type, post, metadata = {}) {
+      if (!post) return;
+      this.logInteraction({ postId: post.id, type, value: 1, metadata: { post, ...metadata } });
     },
 
     openReportModal() {
@@ -791,6 +806,7 @@ export default {
       useEffectsStore().triggerBurst(post, type);
     },
     onReported() {
+      this.logImplicit('report', this.reportModalPost);
       this.reportModalPost = null;
       // Refresh the feed so newly blocked content (including the reported post
       // itself, if it's already loaded) is fetched fresh and filtered out
@@ -877,6 +893,7 @@ export default {
     openComments(post) {
       if (!post) return;
       this.commentsPost = post;
+      this.logImplicit('comments', post);
     },
 
     async downloadPostFile(post, type) {
@@ -1152,6 +1169,7 @@ export default {
     },
     toggleMute() {
         this.muted = !this.muted; // Update store
+        if (!this.muted && this.currentVideoElement) this.logImplicit('unmute', this.currentPost);
         if (this.currentVideoElement) {
             this.currentVideoElement.muted = this.muted;
         }

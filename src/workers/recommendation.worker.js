@@ -7,6 +7,10 @@ import { learningPost } from '../services/imageFeatures.js';
 import { postKey } from '../services/postKey.js';
 import { SessionInterest, interactionSignal, PROFILE_HALF_LIFE_HOURS } from '../services/SessionInterest.js';
 import { DeepDiveInterest } from '../services/DeepDiveInterest.js';
+import { DwellBaseline, dwellEngagement, engagementLabel, focusPostOnTag, isVideoPost } from '../services/signals.js';
+
+// Impressions remembered for bandit credit (one reward per shown post).
+const IMPRESSION_MEMORY = 500;
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
 
@@ -49,6 +53,9 @@ export class RecommendationWorkerCore {
     this.profileRefreshedAt = 0;
     this.sessionInterest = new SessionInterest();
     this.deepDive = new DeepDiveInterest();
+    // In-memory state is authoritative once loaded; snapshots only persist it.
+    this.dwellBaseline = null;
+    this.impressions = new Map();
   }
 
   async initialize() {
@@ -58,6 +65,8 @@ export class RecommendationWorkerCore {
     this.initPromise = (async () => {
       this.strategyCursors = {};
       this.exhaustedStrategies = new Set();
+
+      this.dwellBaseline = new DwellBaseline((await StorageService.getProfileSnapshot())?.dwellBaseline);
 
       // Initialize ML components
       await this._initializeML();
@@ -196,7 +205,7 @@ export class RecommendationWorkerCore {
       const ageInHours = (now - interaction.timestamp) / (1000 * 60 * 60);
       const recencyWeight = Math.pow(0.5, ageInHours / PROFILE_HALF_LIFE_HOURS);
       const durableWeight = interaction.metadata?.profileWeight ?? 1;
-      const weight = interactionSignal(interaction.type, interaction.value) * recencyWeight * durableWeight;
+      const weight = interactionSignal(interaction.type, interaction.value, interaction.metadata?.engagement) * recencyWeight * durableWeight;
 
       if (interaction.metadata && interaction.metadata.post) {
         this.updateProfileWithPost(interaction.metadata.post, weight);
@@ -204,18 +213,6 @@ export class RecommendationWorkerCore {
         // Feed interaction to ML components
         if (this.mlInitialized) {
           this.tagEmbedding.addInteraction(interaction);
-
-          // Compute label for bandit reward (mirrors MLScorer's labels)
-          let label = 0.5;
-          if (interaction.type === 'like') label = 0.8;
-          else if (interaction.type === 'favorite') label = 1.0;
-          else if (interaction.type === 'dislike') label = 0.0;
-          else if (interaction.type === 'timeSpent') {
-            const seconds = interaction.value / 1000;
-            label = seconds < 2
-              ? 0.1
-              : Math.min(0.9, 0.3 + ((seconds - 2) / 28) * 0.6);
-          }
 
           this.mlScorer.addTrainingSample(
             interaction.metadata.post,
@@ -226,25 +223,10 @@ export class RecommendationWorkerCore {
               ratingPreferences: this.ratingPreferences,
               mediaTypePreferences: this.mediaTypePreferences,
             },
-            durableWeight
+            durableWeight,
+            interaction.metadata.engagement
           );
 
-          // Record reward for bandit ONLY when the post was fetched via a strategy
-          // This ensures the bandit learns which query strategies
-          // produce engaging content.
-          const strategy = interaction.metadata.post._strategy;
-          if (interaction.metadata.deepDive) {
-            // A dive reflects its anchor, not the normal strategy's quality.
-          } else if (strategy) {
-            this.banditExplorer.recordReward(strategy, label);
-          } else {
-            // Normal mode: record reward under the bandit's current best strategy
-            // so the bandit learns from normal-mode interactions too
-            const bestStrat = this.banditExplorer.getBestStrategy();
-            if (bestStrat && bestStrat.type && bestStrat.type !== 'fallback') {
-              this.banditExplorer.recordReward(bestStrat.type, label);
-            }
-          }
         }
       }
     });
@@ -305,7 +287,8 @@ export class RecommendationWorkerCore {
           ratingPreferences: this.ratingPreferences,
           mediaTypePreferences: this.mediaTypePreferences,
         },
-        interaction.metadata?.profileWeight ?? 1
+        interaction.metadata?.profileWeight ?? 1,
+        interaction.metadata?.engagement
       );
     }
     this.mlScorer.flushTraining();
@@ -325,6 +308,7 @@ export class RecommendationWorkerCore {
       tagCategories: this.tagCategories,
       ratingPreferences: this.rawRatingPreferences,
       mediaTypePreferences: this.rawMediaTypePreferences,
+      dwellBaseline: this.dwellBaseline?.toSnapshot(),
     };
 
     // Save ML model state
@@ -437,6 +421,8 @@ export class RecommendationWorkerCore {
     this.initializeDefaultProfile();
     this.postScoreCache.clear();
     this.resetExploreSession();
+    this.dwellBaseline = new DwellBaseline();
+    this.impressions.clear();
     if (this.mlInitialized) {
       this.mlScorer.reset();
       this.banditExplorer.reset();
@@ -479,6 +465,8 @@ export class RecommendationWorkerCore {
       tagCategories: this.tagCategories,
       ratingPreferences: this.rawRatingPreferences,
       mediaTypePreferences: this.rawMediaTypePreferences,
+      // Viewing pace is not taste: it survives a recommendation reset.
+      dwellBaseline: this.dwellBaseline?.toSnapshot(),
     });
   }
 
@@ -489,22 +477,70 @@ export class RecommendationWorkerCore {
     const evidence = this.deepDive;
     const settings = await StorageService.loadAppSettings();
     if (postData) await hydrateImageAnalysis([postData], { includeAi: !!settings?.settings?.aiTaggingEnabled });
-    const learnedPost = postData ? learningPost(postData) : null;
+    let learnedPost = postData ? learningPost(postData) : null;
+    let storedPost = postData;
+    // A tag tap is interest in that tag, not in everything else on the post.
+    if (interactionType === 'tagTap' && context?.tag && postData) {
+      storedPost = focusPostOnTag(postData, context.tag);
+      learnedPost = focusPostOnTag(learnedPost, context.tag);
+    }
+    // Normalise dwell once, at record time, with the baseline as it was then;
+    // profile rebuilds and model training read the stored label.
+    let engagement = null;
+    if (interactionType === 'timeSpent' && learnedPost) {
+      if (!this.dwellBaseline) this.dwellBaseline = new DwellBaseline();
+      const video = isVideoPost(learnedPost);
+      engagement = dwellEngagement(value, { video, durationSec: context?.mediaDuration, baseline: this.dwellBaseline });
+      if (!video) this.dwellBaseline.observe(value);
+    }
     const profileWeight = diving
-      ? evidence.profileWeight(learnedPost, interactionType, value, this.avoidedTags)
-      : this.sessionInterest.record(learnedPost, interactionType, value, this.avoidedTags);
+      ? evidence.profileWeight(learnedPost, interactionType, value, this.avoidedTags, engagement)
+      : this.sessionInterest.record(learnedPost, interactionType, value, this.avoidedTags, engagement);
     await StorageService.storeInteraction({
       postId,
       type: interactionType,
       value,
-      metadata: { post: postData, profileWeight, deepDive: diving }
+      metadata: {
+        post: storedPost, profileWeight, deepDive: diving,
+        ...(engagement !== null && { engagement }),
+        ...(context?.mediaDuration && { mediaDuration: context.mediaDuration }),
+        ...(context?.tag && { tag: context.tag }),
+      }
     });
+    if (!diving) this.creditStrategy(postData, interactionType, value, engagement);
     this.profileDirty = true;
 
     this.postScoreCache.clear();
 
     if (updateImmediately) {
       await this.updateUserProfile();
+    }
+  }
+
+  /**
+   * One bandit reward per impression of a strategy-fetched post: the best
+   * label among its events, credited when the impression ends (its watch
+   * time is logged on leaving the post). Crediting every event separately
+   * counted a liked post two or three times, and crediting strategy-less
+   * posts to the leading arm made the leader self-reinforcing.
+   */
+  creditStrategy(post, type, value, engagement) {
+    const strategy = post?._strategy;
+    if (!strategy || !this.banditExplorer) return;
+    const label = engagementLabel(type, value, engagement);
+    if (label === undefined) return;
+    const key = postKey(post);
+    let impression = this.impressions.get(key);
+    if (!impression) {
+      impression = { strategy, best: label, credited: false };
+      this.impressions.set(key, impression);
+      if (this.impressions.size > IMPRESSION_MEMORY) this.impressions.delete(this.impressions.keys().next().value);
+    }
+    if (impression.credited) return;
+    impression.best = Math.max(impression.best, label);
+    if (type === 'timeSpent') {
+      this.banditExplorer.recordReward(impression.strategy, impression.best);
+      impression.credited = true;
     }
   }
 
@@ -662,16 +698,9 @@ export class RecommendationWorkerCore {
 
   rankPosts(posts) {
     if (!posts || posts.length === 0) return [];
-    const scoredPosts = posts.map(post => {
-      let score = this.scorePost(post);
-      switch (this.deepDive.active ? null : post._strategy) {
-        case 'pivot': score += 0.3; break;
-        case 'reach': score += 0.5; break;
-        case 'wildcard': score += 0.4; break;
-        case 'duo': score += 0.5; break;
-      }
-      return { post, score };
-    });
+    // Exploration is chosen deliberately at feed assembly; a flat bonus per
+    // strategy here would override the model on every re-rank.
+    const scoredPosts = posts.map(post => ({ post, score: this.scorePost(post) }));
     scoredPosts.sort((a, b) => b.score - a.score);
     return scoredPosts.map(sp => sp.post);
   }

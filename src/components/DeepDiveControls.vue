@@ -20,10 +20,14 @@
 import { useRouter } from 'vue-router';
 import recommendations, { deepDiveState as state } from '../services/RecommendationSystem.js';
 import { postKey } from '../services/postKey.js';
+import { useInteractionsStore } from '../stores/interactions.js';
 const props = defineProps({ post: { type: Object, default: null } });
 const emit = defineEmits(['started']);
 const router = useRouter();
 async function start() {
+  // Choosing a post to dive into is strong interest in it. Logged as a
+  // normal-mode event so it reaches the long-term profile at full weight.
+  if (props.post) useInteractionsStore().logInteraction({ postId: props.post.id, type: 'deepDive', value: 1, metadata: { post: props.post, deepDive: false } });
   if (!await recommendations.setDeepDive(props.post)) return;
   if (router.currentRoute.value.name !== 'Home') await router.push({ name: 'Home' });
   emit('started');

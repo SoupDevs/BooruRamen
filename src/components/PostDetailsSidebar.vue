@@ -141,6 +141,7 @@ import { Share2 } from 'lucide-vue-next';
 import { isTauri } from '../services/DownloadService';
 import { copyToClipboard, isMobilePlatform } from '../services/ShareService';
 import { useSettingsStore } from '../stores/settings';
+import { useInteractionsStore } from '../stores/interactions';
 
 export default {
   name: 'PostDetailsSidebar',
@@ -237,6 +238,7 @@ export default {
       if (!tag) return;
       const settings = useSettingsStore();
       const alreadyWhitelisted = settings.whitelistTags.includes(tag);
+      if (this.post) useInteractionsStore().logInteraction({ postId: this.post.id, type: 'tagTap', value: 1, metadata: { post: this.post, tag } });
       settings.addWhitelistTag(tag);
       this.showTagPop(
         alreadyWhitelisted ? `${tag} is already whitelisted` : `Added ${tag} to whitelist`,

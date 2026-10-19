@@ -33,6 +33,7 @@ import StorageService from '../services/StorageService';
 import tagEmbedding from './TagEmbedding';
 import { VISUAL_FEATURE_COUNT, writeVisualFeatures, learningPost } from './imageFeatures.js';
 import { postKey } from './postKey.js';
+import { engagementLabel, SAMPLE_WEIGHTS, SKIP_LABEL } from './signals.js';
 
 const EMB_DIM = 32;              // must match TagEmbedding EMBEDDING_DIM
 const INPUT_DIM = 82 + VISUAL_FEATURE_COUNT;
@@ -48,43 +49,6 @@ const REPLAY_EPOCHS = 2;         // shuffled passes over the replay buffer per f
 const TOP_TAG_FEATURES = 10;      // number of top user tag affinities to expose as features
 const REPLAY_CAP = 300;          // max training samples kept for replay epochs
 const MIN_LOSS = 0.05;           // early stopping threshold
-
-// Interaction type to label mapping (engagement score in [0, 1])
-const INTERACTION_LABELS = {
-  like: 0.8,
-  favorite: 1.0,
-  dislike: 0.0,
-  view: 0.3,          // base for a quick view
-  timeSpent: 0.5,     // will be adjusted by duration
-};
-
-// timeSpent below this is a swipe-away: label it as a negative signal
-// instead of dropping it — skips are the main source of negative examples.
-const SKIP_THRESHOLD_MS = 2000;
-const SKIP_LABEL = 0.1;
-
-// Gradient importance per interaction type. Explicit actions are rare but
-// carry far more preference signal than ambient watch-time samples; without
-// weighting, the flood of mid-label timeSpent samples drowns them out and
-// predictions collapse toward the dataset mean.
-const SAMPLE_WEIGHTS = {
-  favorite: 3.0,
-  like: 2.5,
-  dislike: 3.0,
-  view: 1.0,
-  timeSpent: 1.0,
-  timeSpentSkip: 1.5,
-};
-
-/**
- * Map a timeSpent duration to an engagement label.
- * < 2s reads as "skipped"; 2s..30s ramps 0.3 → 0.9.
- */
-function timeSpentLabel(valueMs) {
-  const seconds = valueMs / 1000;
-  if (valueMs < SKIP_THRESHOLD_MS) return SKIP_LABEL;
-  return Math.min(0.9, 0.3 + ((seconds - 2) / 28) * 0.6);
-}
 
 class MLScorer {
   constructor() {
@@ -423,22 +387,13 @@ class MLScorer {
    * @param {Map} userTagScores
    * @param {Object} userProfile
    */
-  addTrainingSample(post, interactionType, value, userTagScores, userProfile, profileWeight = 1) {
+  addTrainingSample(post, interactionType, value, userTagScores, userProfile, profileWeight = 1, engagement = null) {
     // Undo events (un-like, un-favorite, clearing a dislike) carry no
-    // preference signal — training on them poisons the labels: e.g. liking
-    // a post also logs a dislike-clear, which would train label 0.0 on a
-    // post the user just liked.
-    if ((interactionType === 'like' || interactionType === 'favorite' || interactionType === 'dislike') && !value) {
-      return;
-    }
-
-    // Compute label
-    let label = INTERACTION_LABELS[interactionType];
+    // preference signal and get no label: training on them would teach 0.0
+    // for a post the user just liked (liking also clears a dislike).
+    const label = engagementLabel(interactionType, value, engagement);
     let weight = SAMPLE_WEIGHTS[interactionType] || 1.0;
-    if (interactionType === 'timeSpent') {
-      label = timeSpentLabel(value);
-      if (label === SKIP_LABEL) weight = SAMPLE_WEIGHTS.timeSpentSkip;
-    }
+    if (interactionType === 'timeSpent' && label <= SKIP_LABEL) weight = SAMPLE_WEIGHTS.timeSpentSkip;
     if (label === undefined || !Number.isFinite(profileWeight) || profileWeight <= 0) return;
     weight *= Math.min(1, profileWeight);
 

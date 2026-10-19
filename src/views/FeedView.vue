@@ -149,6 +149,7 @@
 import { mapState } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
+import { useInteractionsStore } from '../stores/interactions';
 import BooruService from '../services/BooruService';
 import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
@@ -172,6 +173,8 @@ import { contentKeys, excludeDuplicateContent } from '../services/contentIdentit
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
 const PAUSE_GLYPH_FADE_MS = 550;
+// How long a scrolled-back-to post must stay on screen to count as a revisit.
+const REVISIT_DWELL_MS = 2000;
 
 export default {
   name: 'FeedView',
@@ -455,6 +458,7 @@ export default {
         this.page = 1;
         this.posts = [];
         this.currentPostIndex = -1;
+        this._maxViewedIndex = -1;
         this.currentPostKey = null;
         this._hasUserScrolled = false;
         if (this.$refs.feedContainer) {
@@ -626,6 +630,17 @@ export default {
         this.primeNeighbouringVideos();
         this.analyzeUpcomingImages();
         
+        // Scrolling back up to a post and staying on it is one of the
+        // strongest implicit signals there is.
+        clearTimeout(this._revisitTimer);
+        if (currentPost && calculatedIndex < (this._maxViewedIndex ?? -1)) {
+          this._revisitTimer = setTimeout(() => {
+            if (this.currentPostKey !== currentPostKey || this.feedDisposed) return;
+            useInteractionsStore().logInteraction({ postId: currentPost.id, type: 'revisit', value: 1, metadata: { post: currentPost } });
+          }, REVISIT_DWELL_MS);
+        }
+        this._maxViewedIndex = Math.max(this._maxViewedIndex ?? -1, calculatedIndex);
+
         if (currentPost) {
           const videoEl = this.videoElements[this.getCompositeKey(currentPost)] || null;
           this.$emit('current-post-changed', currentPost, videoEl);
@@ -1110,6 +1125,7 @@ export default {
     });
   },
   beforeUnmount() {
+    clearTimeout(this._revisitTimer);
     this.feedDisposed = true;
     this.unsubscribeImageAnalysis?.();
     this.unsubscribeSession?.();

@@ -1,19 +1,12 @@
 import { postKey } from './postKey.js';
+import { interactionSignal, DELIBERATE_TYPES, isVideoPost } from './signals.js';
+
+export { interactionSignal };
 
 export const SESSION_IDLE_MS = 15 * 60 * 1000;
 export const SESSION_HALF_LIFE_MS = 5 * 60 * 1000;
 export const MAX_SESSION_WEIGHT = 0.25;
 export const PROFILE_HALF_LIFE_HOURS = 30 * 24;
-
-export function interactionSignal(type, value) {
-  if (['like', 'favorite', 'dislike'].includes(type) && !value) return 0;
-  if (type === 'like') return 1;
-  if (type === 'favorite') return 2;
-  if (type === 'dislike') return -1;
-  if (type === 'view') return 0.05;
-  if (type === 'timeSpent') return value < 2000 ? -0.2 : Math.min(1, value / 30000);
-  return 0;
-}
 
 function tagsOf(post, avoided) {
   return [...new Set([post.tag_string || '', ...['artist', 'copyright', 'character', 'general'].map(category => post[`tag_string_${category}`] || '')]
@@ -40,9 +33,9 @@ export class SessionInterest {
     }
     this.mass *= decay; this.lastDecay = now;
   }
-  record(post, type, value, avoided = []) {
+  record(post, type, value, avoided = [], engagement = null) {
     this.advance();
-    const signal = interactionSignal(type, value);
+    const signal = interactionSignal(type, value, engagement);
     if (!post || !signal) return 0;
     const key = `${postKey(post)}:${type}`;
     if (this.seen.has(key)) return 0; // Revisits/toggle churn cannot amplify a trend.
@@ -50,7 +43,7 @@ export class SessionInterest {
     const tags = tagsOf(post, new Set(avoided));
     const bump = (map, name) => { if (name) map.set(name, Math.max(-6, Math.min(6, (map.get(name) || 0) + signal))); };
     tags.forEach(tag => bump(this.tags, tag)); bump(this.ratings, post.rating);
-    bump(this.media, ['mp4', 'webm'].includes(post.file_ext) ? 'video' : 'image');
+    bump(this.media, isVideoPost(post) ? 'video' : 'image');
     const visual = post.imageAnalysis?.composition;
     if (Array.isArray(visual) && visual.length === 32 && visual.every(Number.isFinite)) {
       const name = signal > 0 ? 'positiveVisual' : 'negativeVisual';
@@ -64,7 +57,7 @@ export class SessionInterest {
     // gets a new budget, so consistent interests across sessions accumulate.
     const topics = tags.length ? tags.map(tag => `tag:${tag}`) : [`media:${post.file_ext || 'image'}`];
     const spent = Math.max(...topics.map(tag => this.durableBudget.get(tag) || 0));
-    const base = ['like', 'favorite', 'dislike'].includes(type) ? 0.35 : 0.15;
+    const base = DELIBERATE_TYPES.includes(type) ? 0.35 : 0.15;
     const durableWeight = Math.max(0, Math.min(base / Math.sqrt(1 + spent), (2 - spent) / Math.abs(signal)));
     for (const topic of topics) this.durableBudget.set(topic, (this.durableBudget.get(topic) || 0) + Math.abs(signal) * durableWeight);
     return durableWeight;
@@ -77,7 +70,7 @@ export class SessionInterest {
     const matches = tags.map(tag => this.tags.get(tag) || 0).filter(Boolean);
     let signal = matches.length ? matches.reduce((sum, value) => sum + Math.tanh(value / 2), 0) / matches.length : 0;
     signal = signal * 0.8 + Math.tanh((this.ratings.get(post.rating) || 0) / 3) * 0.1
-      + Math.tanh((this.media.get(['mp4', 'webm'].includes(post.file_ext) ? 'video' : 'image') || 0) / 3) * 0.1;
+      + Math.tanh((this.media.get(isVideoPost(post) ? 'video' : 'image') || 0) / 3) * 0.1;
     const visual = post.imageAnalysis?.composition;
     if (Array.isArray(visual) && visual.length === 32 && visual.every(Number.isFinite)) {
       const similarity = centroid => {
