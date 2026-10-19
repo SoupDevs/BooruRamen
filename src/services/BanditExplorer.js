@@ -135,7 +135,7 @@ class BanditArm {
     const d = shape - 1 / 3;
     const c = 1 / Math.sqrt(9 * d);
 
-    while (true) {
+    for (;;) {
       let x, v;
       do {
         x = this._normalSample();
