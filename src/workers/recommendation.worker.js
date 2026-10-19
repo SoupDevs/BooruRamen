@@ -7,7 +7,7 @@ import { learningPost } from '../services/imageFeatures.js';
 import { postKey } from '../services/postKey.js';
 import { SessionInterest, interactionSignal, PROFILE_HALF_LIFE_HOURS } from '../services/SessionInterest.js';
 import { DeepDiveInterest } from '../services/DeepDiveInterest.js';
-import { DwellBaseline, dwellEngagement, engagementLabel, focusPostOnTag, isVideoPost } from '../services/signals.js';
+import { DwellBaseline, dwellEngagement, engagementLabel, focusPostOnTag, isVideoPost, SKIP_LABEL, TOGGLE_TYPES } from '../services/signals.js';
 
 import { diversify } from '../services/Diversity.js';
 import { GlobalTagGraph } from '../services/GlobalTagGraph.js';
@@ -225,7 +225,22 @@ export class RecommendationWorkerCore {
       // logged together with a dislike-clear, whose -1.0 weight would cancel
       // the like's +1.0 on every tag.
       const isToggle = interaction.type === 'like' || interaction.type === 'favorite' || interaction.type === 'dislike';
-      if (isToggle && !interaction.value) return;
+      if (isToggle && !interaction.value) {
+        // ...but an undo of a toggle the profile already absorbed carries
+        // the opposite of that contribution, so un-liking un-learns.
+        // A full rebuild never sees the undone toggle (the undo row replaced
+        // it), so only the incremental path has anything to take back.
+        const undo = interaction.metadata?.undoWeight;
+        if (isIncremental && undo && interaction.metadata?.post) {
+          const age = (now - interaction.timestamp) / (1000 * 60 * 60);
+          this.updateProfileWithPost(
+            interaction.metadata.post,
+            undo * Math.pow(0.5, age / PROFILE_HALF_LIFE_HOURS),
+            (interaction.metadata.undoCoreWeight ?? undo) * Math.pow(0.5, age / CORE_HALF_LIFE_HOURS)
+          );
+        }
+        return;
+      }
 
       const ageInHours = (now - interaction.timestamp) / (1000 * 60 * 60);
       const recencyWeight = Math.pow(0.5, ageInHours / PROFILE_HALF_LIFE_HOURS);
@@ -359,6 +374,11 @@ export class RecommendationWorkerCore {
       processed.add(tag);
       if (this.rawTagScores[tag] === undefined) {
         this.rawTagScores[tag] = 0;
+        this.tagCategories[tag] = category;
+      } else if (category !== 'general' && this.tagCategories[tag] !== category) {
+        // Sources that categorise tags late (Gelbooru looks them up after
+        // the posts arrive) first report everything as general; take the
+        // specific category as soon as a post carries it.
         this.tagCategories[tag] = category;
       }
       if (this.tagEngagement[tag] === undefined) {
@@ -524,11 +544,20 @@ export class RecommendationWorkerCore {
       if (!this.dwellBaseline) this.dwellBaseline = new DwellBaseline();
       const video = isVideoPost(learnedPost);
       engagement = dwellEngagement(value, { video, durationSec: context?.mediaDuration, baseline: this.dwellBaseline });
-      if (!video) this.dwellBaseline.observe(value);
+      // Autoscroll paces the dwell, so it says nothing about the user's pace
+      if (!video && !context?.autoScroll) this.dwellBaseline.observe(value);
     }
-    const profileWeight = diving
+    // Autoscroll decides how long a post stays on screen, so a long dwell
+    // under it is not the user choosing to stay. Skips still count: moving
+    // on before autoscroll does is a choice.
+    const passiveDwell = interactionType === 'timeSpent' && context?.autoScroll
+      && (engagement ?? engagementLabel(interactionType, value)) > SKIP_LABEL + 1e-9;
+    const profileWeight = passiveDwell ? 0 : diving
       ? evidence.profileWeight(learnedPost, interactionType, value, this.avoidedTags, engagement)
       : this.sessionInterest.record(learnedPost, interactionType, value, this.avoidedTags, engagement);
+    const undo = TOGGLE_TYPES.includes(interactionType) && !value && postData
+      ? await this.undoWeights(postId, interactionType, postData)
+      : null;
     await StorageService.storeInteraction({
       postId,
       type: interactionType,
@@ -538,9 +567,11 @@ export class RecommendationWorkerCore {
         ...(engagement !== null && { engagement }),
         ...(context?.mediaDuration && { mediaDuration: context.mediaDuration }),
         ...(context?.tag && { tag: context.tag }),
+        ...(passiveDwell && { autoScroll: true }),
+        ...(undo && { undoWeight: undo.weight, undoCoreWeight: undo.coreWeight }),
       }
     });
-    if (!diving) this.creditStrategy(postData, interactionType, value, engagement);
+    if (!diving && !passiveDwell) this.creditStrategy(postData, interactionType, value, engagement);
     this.profileDirty = true;
 
     this.postScoreCache.clear();
@@ -548,6 +579,27 @@ export class RecommendationWorkerCore {
     if (updateImmediately) {
       await this.updateUserProfile();
     }
+  }
+
+  /**
+   * The profile contribution an undo must take back: the toggle being
+   * undone, if the profile has already absorbed it (it is stored before the
+   * last rebuild). A toggle not absorbed yet is simply overwritten by the
+   * undo row and never counted. Its pending training samples are dropped.
+   * @returns {{ weight: number, coreWeight: number } | null}
+   */
+  async undoWeights(postId, interactionType, postData) {
+    const source = postData?.source ?? null;
+    const rows = await StorageService.getPostInteractions(postId);
+    const prior = rows.find(row => row.type === interactionType && (row.source ?? null) === source && row.value);
+    if (this.mlInitialized) this.mlScorer.forget(postKey(postData), interactionType);
+    if (!prior || prior.timestamp > this.lastUpdateTime) return null;
+    const signal = interactionSignal(prior.type, prior.value, prior.metadata?.engagement);
+    const durable = prior.metadata?.profileWeight ?? 1;
+    const hours = (Date.now() - prior.timestamp) / (1000 * 60 * 60);
+    const weight = -signal * durable * Math.pow(0.5, hours / PROFILE_HALF_LIFE_HOURS);
+    const coreWeight = -signal * durable * Math.pow(0.5, hours / CORE_HALF_LIFE_HOURS);
+    return weight ? { weight, coreWeight } : null;
   }
 
   /**

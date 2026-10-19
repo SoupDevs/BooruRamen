@@ -500,7 +500,7 @@ class MLScorer {
     weight *= Math.min(1, profileWeight);
 
     const features = this.extractFeatures(post, userTagScores, userProfile);
-    const sample = { features, label, targets: headTargets(label), weight, postKey: postKey(post) };
+    const sample = { features, label, targets: headTargets(label), weight, postKey: postKey(post), type: interactionType };
     this.pendingBatch.push(sample);
     this.replayBuffer.push(sample);
     if (this.replayBuffer.length > REPLAY_CAP) {
@@ -517,6 +517,17 @@ class MLScorer {
     if (this.interactionCount >= TRAIN_THRESHOLD) {
       this.isTrained = true;
     }
+  }
+
+  /**
+   * Drop the not-yet-trained and replayable samples of one interaction, so
+   * an undone like stops being rehearsed. Weights already trained on it
+   * fade as newer batches train.
+   */
+  forget(key, interactionType) {
+    const keep = sample => !(sample.postKey === key && sample.type === interactionType);
+    this.pendingBatch = this.pendingBatch.filter(keep);
+    this.replayBuffer = this.replayBuffer.filter(keep);
   }
 
   refreshPostFeatures(post, userTagScores, userProfile) {

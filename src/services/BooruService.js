@@ -16,6 +16,12 @@ import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from './BooruAdapte
 import { registerRefererMediaSources } from './mediaUrl.js';
 import StorageService from './StorageService';
 
+// Archives and Flash can't be shown. Danbooru ugoira arrive as webm (see
+// DanbooruAdapter.normalizePost); any zip still left came from a source
+// without a playable rendition.
+const UNPLAYABLE_EXTENSIONS = new Set(['zip', 'swf']);
+const playable = (posts) => (posts || []).filter(post => !UNPLAYABLE_EXTENSIONS.has(post?.file_ext));
+
 class BooruService {
     constructor() {
         this.adapters = [];
@@ -137,7 +143,7 @@ class BooruService {
 
         // If only one adapter, behave simply
         if (this.adapters.length === 1) {
-            return this.adapters[0].getPosts(params);
+            return playable(await this.adapters[0].getPosts(params));
         }
 
         // Multiple adapters: Fetch from all in parallel
@@ -146,14 +152,15 @@ class BooruService {
 
         console.log(`Fetching from ${this.adapters.length} sources...`);
 
-        const promises = this.adapters.map(adapter =>
-            adapter.getPosts(params).catch(err => {
-                console.error(`Status check failed for ${adapter.baseUrl}:`, err);
-                return [];
-            })
-        );
-
-        const results = await Promise.all(promises);
+        // One failing source must not sink the others, but if every source
+        // failed the caller has to see an error: an empty result reads as
+        // "this search has no more posts".
+        const settled = await Promise.allSettled(this.adapters.map(adapter => adapter.getPosts(params)));
+        settled.forEach((result, index) => {
+            if (result.status === 'rejected') console.error(`Fetch failed for ${this.adapters[index].baseUrl}:`, result.reason);
+        });
+        if (settled.every(result => result.status === 'rejected')) throw settled[0].reason;
+        const results = settled.map(result => result.status === 'fulfilled' ? result.value : []);
 
         // Flatten results
         let allPosts = results.flat();
@@ -183,7 +190,7 @@ class BooruService {
             [mergedPosts[i], mergedPosts[j]] = [mergedPosts[j], mergedPosts[i]];
         }
 
-        return mergedPosts;
+        return playable(mergedPosts);
     }
 
     /**

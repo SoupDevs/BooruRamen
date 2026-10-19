@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const storage = vi.hoisted(() => ({
-  storeInteraction: vi.fn(async () => true), loadAppSettings: vi.fn(async () => ({})),
+  storeInteraction: vi.fn(async () => true), getPostInteractions: vi.fn(async () => []), loadAppSettings: vi.fn(async () => ({})),
   getPreferences: vi.fn(async () => ({})), getProfileSnapshot: vi.fn(async () => null),
   getInteractions: vi.fn(async () => []), storeProfileSnapshot: vi.fn(async () => {}),
 }));
