@@ -7,7 +7,7 @@ import { learningPost } from '../services/imageFeatures.js';
 import { postKey } from '../services/postKey.js';
 import { SessionInterest, interactionSignal, PROFILE_HALF_LIFE_HOURS } from '../services/SessionInterest.js';
 import { DeepDiveInterest } from '../services/DeepDiveInterest.js';
-import { DwellBaseline, dwellEngagement, engagementLabel, focusPostOnTag, isVideoPost } from '../services/signals.js';
+import { DwellBaseline, dwellEngagement, engagementLabel, focusPostOnTag, isVideoPost, SKIP_LABEL, TOGGLE_TYPES } from '../services/signals.js';
 
 import { diversify } from '../services/Diversity.js';
 import { GlobalTagGraph } from '../services/GlobalTagGraph.js';
@@ -16,6 +16,7 @@ import { GlobalTagGraph } from '../services/GlobalTagGraph.js';
 const IMPRESSION_MEMORY = 500;
 // Largest score cut for a fully satiated artist/character/copyright.
 const SATIATION_WEIGHT = 0.3;
+const SNAPSHOT_SAVE_INTERVAL_MS = 30 * 1000;
 // Exploration: every Nth slot normally, every 2nd under a run of skips.
 const EXPLORE_INTERVAL = 4;
 const EXPLORE_INTERVAL_PRESSURED = 2;
@@ -66,6 +67,12 @@ export class RecommendationWorkerCore {
     // snapshot write) when nothing changed.
     this.profileDirty = true;
     this.profileRefreshedAt = 0;
+    // After the first build the profile lives in memory and later rebuilds
+    // only add newer interactions, so the snapshot can be written lazily.
+    this.profileLoaded = false;
+    this.profileUpdate = null;
+    this.snapshotSavedAt = 0;
+    this.snapshotTimer = null;
     this.sessionInterest = new SessionInterest();
     this.deepDive = new DeepDiveInterest();
     // In-memory state is authoritative once loaded; snapshots only persist it.
@@ -157,7 +164,17 @@ export class RecommendationWorkerCore {
     if (this.profileDirty || Date.now() - this.profileRefreshedAt > maxAgeMs) await this.updateUserProfile();
   }
 
-  async updateUserProfile() {
+  /**
+   * Rebuilds are serialized: two overlapping incremental rebuilds would both
+   * apply the same new interactions.
+   */
+  updateUserProfile() {
+    const run = () => this._updateUserProfile();
+    this.profileUpdate = (this.profileUpdate || Promise.resolve()).then(run, run);
+    return this.profileUpdate;
+  }
+
+  async _updateUserProfile() {
     // Cleared before the awaits: an interaction stored mid-rebuild marks the
     // profile dirty again and is picked up by the next refresh.
     this.profileDirty = false;
@@ -174,9 +191,15 @@ export class RecommendationWorkerCore {
     let interactions = [];
     let isIncremental = false;
 
-    const snapshot = await StorageService.getProfileSnapshot();
+    const snapshot = this.profileLoaded ? null : await StorageService.getProfileSnapshot();
 
-    if (snapshot && (!resetTimestamp || snapshot.timestamp > resetTimestamp)) {
+    if (this.profileLoaded) {
+      // The in-memory profile is newer than (or equal to) the stored one.
+      const hoursSinceUpdate = (now - this.lastUpdateTime) / (1000 * 60 * 60);
+      if (hoursSinceUpdate > 0) this.applyDecay(hoursSinceUpdate);
+      interactions = await StorageService.getRecentInteractions(this.lastUpdateTime);
+      isIncremental = true;
+    } else if (snapshot && (!resetTimestamp || snapshot.timestamp > resetTimestamp)) {
       this.rawTagScores = snapshot.rawTagScores || snapshot.tagScores || {};
       // Older snapshots have no core profile: seed it from the current one.
       this.rawCoreTagScores = snapshot.coreTagScores || { ...this.rawTagScores };
@@ -201,6 +224,7 @@ export class RecommendationWorkerCore {
 
     if (interactions.length === 0 && !isIncremental) {
       this.normalizeScores();
+      this.profileLoaded = true;
       return;
     }
 
@@ -225,7 +249,22 @@ export class RecommendationWorkerCore {
       // logged together with a dislike-clear, whose -1.0 weight would cancel
       // the like's +1.0 on every tag.
       const isToggle = interaction.type === 'like' || interaction.type === 'favorite' || interaction.type === 'dislike';
-      if (isToggle && !interaction.value) return;
+      if (isToggle && !interaction.value) {
+        // ...but an undo of a toggle the profile already absorbed carries
+        // the opposite of that contribution, so un-liking un-learns.
+        // A full rebuild never sees the undone toggle (the undo row replaced
+        // it), so only the incremental path has anything to take back.
+        const undo = interaction.metadata?.undoWeight;
+        if (isIncremental && undo && interaction.metadata?.post) {
+          const age = (now - interaction.timestamp) / (1000 * 60 * 60);
+          this.updateProfileWithPost(
+            interaction.metadata.post,
+            undo * Math.pow(0.5, age / PROFILE_HALF_LIFE_HOURS),
+            (interaction.metadata.undoCoreWeight ?? undo) * Math.pow(0.5, age / CORE_HALF_LIFE_HOURS)
+          );
+        }
+        return;
+      }
 
       const ageInHours = (now - interaction.timestamp) / (1000 * 60 * 60);
       const recencyWeight = Math.pow(0.5, ageInHours / PROFILE_HALF_LIFE_HOURS);
@@ -277,8 +316,33 @@ export class RecommendationWorkerCore {
     }
 
     this.lastUpdateTime = now;
-    await this._saveProfileSnapshot();
+    this.profileLoaded = true;
+    this.normalizeScores();
+    await this._scheduleSnapshotSave();
     this.postScoreCache.clear();
+  }
+
+  /**
+   * The snapshot (tag embeddings and model included) runs to megabytes for a
+   * long history, so it is written at most every SNAPSHOT_SAVE_INTERVAL_MS
+   * instead of after every like. If the app closes before a pending write,
+   * the next start replays the interactions newer than the stored snapshot.
+   */
+  _scheduleSnapshotSave() {
+    if (this.snapshotTimer) return;
+    const wait = Math.max(0, this.snapshotSavedAt + SNAPSHOT_SAVE_INTERVAL_MS - Date.now());
+    const save = () => {
+      this.snapshotTimer = null;
+      this.snapshotSavedAt = Date.now();
+      return this._saveProfileSnapshot().catch(e => console.error('Failed to save profile snapshot:', e));
+    };
+    if (wait === 0) return save();
+    this.snapshotTimer = setTimeout(save, wait);
+  }
+
+  _cancelSnapshotSave() {
+    if (this.snapshotTimer) clearTimeout(this.snapshotTimer);
+    this.snapshotTimer = null;
   }
 
   /**
@@ -359,6 +423,11 @@ export class RecommendationWorkerCore {
       processed.add(tag);
       if (this.rawTagScores[tag] === undefined) {
         this.rawTagScores[tag] = 0;
+        this.tagCategories[tag] = category;
+      } else if (category !== 'general' && this.tagCategories[tag] !== category) {
+        // Sources that categorise tags late (Gelbooru looks them up after
+        // the posts arrive) first report everything as general; take the
+        // specific category as soon as a post carries it.
         this.tagCategories[tag] = category;
       }
       if (this.tagEngagement[tag] === undefined) {
@@ -445,6 +514,7 @@ export class RecommendationWorkerCore {
    * been freshly installed.
    */
   factoryReset() {
+    this._cancelSnapshotSave();
     this.profileDirty = true;
     this.deepDive.end();
     this.sessionInterest.reset();
@@ -462,6 +532,7 @@ export class RecommendationWorkerCore {
   }
 
   async resetRecommendations() {
+    this._cancelSnapshotSave();
     this.profileDirty = true;
     this.deepDive.end();
     this.sessionInterest.reset();
@@ -524,11 +595,20 @@ export class RecommendationWorkerCore {
       if (!this.dwellBaseline) this.dwellBaseline = new DwellBaseline();
       const video = isVideoPost(learnedPost);
       engagement = dwellEngagement(value, { video, durationSec: context?.mediaDuration, baseline: this.dwellBaseline });
-      if (!video) this.dwellBaseline.observe(value);
+      // Autoscroll paces the dwell, so it says nothing about the user's pace
+      if (!video && !context?.autoScroll) this.dwellBaseline.observe(value);
     }
-    const profileWeight = diving
+    // Autoscroll decides how long a post stays on screen, so a long dwell
+    // under it is not the user choosing to stay. Skips still count: moving
+    // on before autoscroll does is a choice.
+    const passiveDwell = interactionType === 'timeSpent' && context?.autoScroll
+      && (engagement ?? engagementLabel(interactionType, value)) > SKIP_LABEL + 1e-9;
+    const profileWeight = passiveDwell ? 0 : diving
       ? evidence.profileWeight(learnedPost, interactionType, value, this.avoidedTags, engagement)
       : this.sessionInterest.record(learnedPost, interactionType, value, this.avoidedTags, engagement);
+    const undo = TOGGLE_TYPES.includes(interactionType) && !value && postData
+      ? await this.undoWeights(postId, interactionType, postData)
+      : null;
     await StorageService.storeInteraction({
       postId,
       type: interactionType,
@@ -538,9 +618,11 @@ export class RecommendationWorkerCore {
         ...(engagement !== null && { engagement }),
         ...(context?.mediaDuration && { mediaDuration: context.mediaDuration }),
         ...(context?.tag && { tag: context.tag }),
+        ...(passiveDwell && { autoScroll: true }),
+        ...(undo && { undoWeight: undo.weight, undoCoreWeight: undo.coreWeight }),
       }
     });
-    if (!diving) this.creditStrategy(postData, interactionType, value, engagement);
+    if (!diving && !passiveDwell) this.creditStrategy(postData, interactionType, value, engagement);
     this.profileDirty = true;
 
     this.postScoreCache.clear();
@@ -548,6 +630,27 @@ export class RecommendationWorkerCore {
     if (updateImmediately) {
       await this.updateUserProfile();
     }
+  }
+
+  /**
+   * The profile contribution an undo must take back: the toggle being
+   * undone, if the profile has already absorbed it (it is stored before the
+   * last rebuild). A toggle not absorbed yet is simply overwritten by the
+   * undo row and never counted. Its pending training samples are dropped.
+   * @returns {{ weight: number, coreWeight: number } | null}
+   */
+  async undoWeights(postId, interactionType, postData) {
+    const source = postData?.source ?? null;
+    const rows = await StorageService.getPostInteractions(postId);
+    const prior = rows.find(row => row.type === interactionType && (row.source ?? null) === source && row.value);
+    if (this.mlInitialized) this.mlScorer.forget(postKey(postData), interactionType);
+    if (!prior || prior.timestamp > this.lastUpdateTime) return null;
+    const signal = interactionSignal(prior.type, prior.value, prior.metadata?.engagement);
+    const durable = prior.metadata?.profileWeight ?? 1;
+    const hours = (Date.now() - prior.timestamp) / (1000 * 60 * 60);
+    const weight = -signal * durable * Math.pow(0.5, hours / PROFILE_HALF_LIFE_HOURS);
+    const coreWeight = -signal * durable * Math.pow(0.5, hours / CORE_HALF_LIFE_HOURS);
+    return weight ? { weight, coreWeight } : null;
   }
 
   /**
