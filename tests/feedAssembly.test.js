@@ -96,3 +96,18 @@ describe('neural-linear uncertainty', () => {
     expect(novel).toBeGreaterThan(familiar);
   });
 });
+
+describe('discovery strategies', () => {
+  it('queries adjacent interests and hot posts near the user’s taste', () => {
+    const core = new RecommendationWorkerCore();
+    core.tagScores = { witch: 1 };
+    core.tagCategories = { witch: 'general' };
+    core.banditExplorer = { selectTopK: () => [{ type: 'adjacent' }, { type: 'trending' }] };
+    const witchPosts = Array.from({ length: 30 }, (_, i) => post(100 + i, { artist: `w${i}`, tags: 'witch familiar' }));
+    core.observeCandidates([...witchPosts, ...Array.from({ length: 60 }, (_, i) => post(i, { artist: `a${i}`, tags: `filler${i}` }))]);
+    const queries = core.generateMultiStrategyQueries();
+    expect(queries.find(q => q.type === 'adjacent')?.tags).toBe('familiar');
+    // No trend history yet: falls back to the core interest's hot posts.
+    expect(queries.find(q => q.type === 'trending')?.tags).toBe('witch order:rank');
+  });
+});

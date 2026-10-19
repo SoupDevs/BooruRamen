@@ -458,6 +458,9 @@ class RecommendationSystem {
         }));
       };
 
+      // Every fetched post teaches the tag graph (adjacent interests,
+      // trends, ubiquitous tags), seen or not. Fire and forget.
+      if (allPosts.length) this.callWorker('observeCandidates', allPosts).catch(() => {});
       let uniquePosts = await prepare([...this.candidatePool, ...allPosts]);
       const minFresh = Math.min(5, maxTotal);
       const FALLBACK_QUERIES = ['order:rank', 'order:favcount', ''];

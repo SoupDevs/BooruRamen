@@ -19,7 +19,9 @@
  * its alpha is periodically down-weighted to allow re-exploration.
  */
 
-const STRATEGY_TYPES = ['anchor', 'pivot', 'reach', 'wildcard', 'fallback'];
+// adjacent: tags that co-occur with the user's interests but are new to them.
+// trending: rising tags near the user's taste, or their core interests' hot posts.
+const STRATEGY_TYPES = ['anchor', 'pivot', 'reach', 'wildcard', 'adjacent', 'trending', 'fallback'];
 const PRIOR_ALPHA = 1.0;   // Beta prior
 const PRIOR_BETA = 1.0;
 const DECAY_RATE = 0.95;   // Per-session decay for alpha (engagement decay)

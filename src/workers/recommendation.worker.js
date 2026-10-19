@@ -10,6 +10,7 @@ import { DeepDiveInterest } from '../services/DeepDiveInterest.js';
 import { DwellBaseline, dwellEngagement, engagementLabel, focusPostOnTag, isVideoPost } from '../services/signals.js';
 
 import { diversify } from '../services/Diversity.js';
+import { GlobalTagGraph } from '../services/GlobalTagGraph.js';
 
 // Impressions remembered for bandit credit (one reward per shown post).
 const IMPRESSION_MEMORY = 500;
@@ -67,6 +68,7 @@ export class RecommendationWorkerCore {
     // In-memory state is authoritative once loaded; snapshots only persist it.
     this.dwellBaseline = null;
     this.impressions = new Map();
+    this.tagGraph = new GlobalTagGraph();
   }
 
   async initialize() {
@@ -77,7 +79,9 @@ export class RecommendationWorkerCore {
       this.strategyCursors = {};
       this.exhaustedStrategies = new Set();
 
-      this.dwellBaseline = new DwellBaseline((await StorageService.getProfileSnapshot())?.dwellBaseline);
+      const stored = await StorageService.getProfileSnapshot();
+      this.dwellBaseline = new DwellBaseline(stored?.dwellBaseline);
+      this.tagGraph = new GlobalTagGraph(stored?.tagGraph);
 
       // Initialize ML components
       await this._initializeML();
@@ -320,6 +324,7 @@ export class RecommendationWorkerCore {
       ratingPreferences: this.rawRatingPreferences,
       mediaTypePreferences: this.rawMediaTypePreferences,
       dwellBaseline: this.dwellBaseline?.toSnapshot(),
+      tagGraph: this.tagGraph.toSnapshot(),
     };
 
     // Save ML model state
@@ -434,6 +439,7 @@ export class RecommendationWorkerCore {
     this.resetExploreSession();
     this.dwellBaseline = new DwellBaseline();
     this.impressions.clear();
+    this.tagGraph = new GlobalTagGraph();
     if (this.mlInitialized) {
       this.mlScorer.reset();
       this.banditExplorer.reset();
@@ -476,8 +482,10 @@ export class RecommendationWorkerCore {
       tagCategories: this.tagCategories,
       ratingPreferences: this.rawRatingPreferences,
       mediaTypePreferences: this.rawMediaTypePreferences,
-      // Viewing pace is not taste: it survives a recommendation reset.
+      // Viewing pace and the booru's tag graph are not taste: they survive
+      // a recommendation reset.
       dwellBaseline: this.dwellBaseline?.toSnapshot(),
+      tagGraph: this.tagGraph.toSnapshot(),
     });
   }
 
@@ -827,7 +835,8 @@ export class RecommendationWorkerCore {
       .map(([tag, score]) => {
         const category = this.tagCategories?.[tag] || 'general';
         const weight = QUERY_CATEGORY_WEIGHTS[category] ?? 0.15;
-        return { tag, score: score * weight };
+        // Tags that are on most posts make poor queries and poor evidence.
+        return { tag, score: score * weight * (0.3 + 0.7 * this.tagGraph.idf(tag)) };
       })
       .sort((a, b) => b.score - a.score);
   }
@@ -897,6 +906,24 @@ export class RecommendationWorkerCore {
       }
     }
 
+    // Adjacent strategy: a neighbour of the user's interests they barely know
+    if (selectedStrategies.has('adjacent')) {
+      const adjacentTag = this.weightedRandomSelect(this.adjacentInterests(), usedTags);
+      if (adjacentTag && !this.exhaustedStrategies.has(adjacentTag.tag)) {
+        queries.push({ tags: adjacentTag.tag, type: 'adjacent', intent: 'Adjacent interest - likely to enjoy, not yet explored' });
+        usedTags.add(adjacentTag.tag);
+      }
+    }
+
+    // Trending strategy: what is rising near the user's taste
+    if (selectedStrategies.has('trending')) {
+      const trendQuery = this.trendingQuery(tier1Pool, usedTags);
+      if (trendQuery && !this.exhaustedStrategies.has(trendQuery.tags)) {
+        queries.push(trendQuery);
+        usedTags.add(trendQuery.tag);
+      }
+    }
+
     // Wildcard strategy
     if (selectedStrategies.has('wildcard')) {
       const wildcardOptions = ['order:rank age:<1mo', 'order:popular age:<1mo'];
@@ -918,6 +945,42 @@ export class RecommendationWorkerCore {
     }
 
     return queries.filter((query, index, self) => self.findIndex(q => q.tags === query.tags) === index);
+  }
+
+  /** Neighbours of the user's interests that the user has little history with. */
+  adjacentInterests(limit = 10) {
+    const interests = this.getQueryableTagsWithScores().slice(0, 25);
+    const exclude = new Set([...this.avoidedTags, ...interests.map(item => item.tag), 'video']);
+    for (const [tag, score] of Object.entries(this.tagScores || {})) if (score < -0.1) exclude.add(tag);
+    for (const [tag, category] of Object.entries(this.tagCategories || {})) if (category === 'meta') exclude.add(tag);
+    return this.tagGraph.adjacentTags(interests, tag => this.tagEngagement[tag] || 0, exclude, limit);
+  }
+
+  /**
+   * A trending query near the user's taste: a rising tag they like or that
+   * neighbours their interests, sorted by the booru's hot ranking. Before the
+   * graph has seen enough trending batches, a core interest's hot posts.
+   */
+  trendingQuery(corePool, exclude = new Set()) {
+    const adjacent = this.adjacentInterests(25);
+    const top = adjacent[0]?.score || 1;
+    const adjacency = new Map(adjacent.map(item => [item.tag, item.score / top]));
+    const avoid = new Set([...this.avoidedTags, ...exclude, 'video']);
+    const trends = this.tagGraph.personalTrends(tag => this.tagScores?.[tag] || 0, adjacency, avoid);
+    const pick = this.weightedRandomSelect(trends, exclude) || this.weightedRandomSelect(corePool, exclude);
+    if (!pick) return null;
+    const personal = trends.some(item => item.tag === pick.tag);
+    return { tag: pick.tag, tags: `${pick.tag} order:rank`, type: 'trending', intent: personal ? `Trending near your taste: "${pick.tag}"` : `Hot right now in "${pick.tag}"` };
+  }
+
+  /** Learn the booru's tag structure from a batch of fetched candidates. */
+  observeCandidates(posts) {
+    if (!posts?.length) return;
+    this.tagGraph.observe(posts.map(post => learningPost(post)), {
+      interests: new Set(this.getQueryableTagsWithScores().slice(0, 60).map(item => item.tag)),
+      avoided: new Set(this.avoidedTags),
+      isTrending: post => /order:(rank|popular)/.test(post._searchCriteria || ''),
+    });
   }
 
   weightedRandomSelect(candidates, exclude = new Set()) {
@@ -986,6 +1049,14 @@ export class RecommendationWorkerCore {
         }
         const pick = this.weightedRandomSelect(tier2Pool);
         return pick ? { tag: pick.tag, strategy, modifier: null } : { tag: null, strategy: 'fallback', modifier: null };
+      }
+      case 'adjacent': {
+        const pick = this.weightedRandomSelect(this.adjacentInterests()) || this.weightedRandomSelect(tier2Pool.length ? tier2Pool : tier1Pool);
+        return pick ? { tag: pick.tag, strategy, modifier: null } : { tag: null, strategy: 'fallback', modifier: null };
+      }
+      case 'trending': {
+        const query = this.trendingQuery(tier1Pool);
+        return query ? { tag: query.tag, strategy, modifier: 'order:rank' } : { tag: null, strategy: 'wildcard', modifier: 'order:rank age:<1mo' };
       }
       case 'wildcard': {
         // Wildcard returns a trending/popular query modifier, no specific tag
@@ -1060,6 +1131,10 @@ if (typeof self !== 'undefined') self.onmessage = async (e) => {
         break;
       case 'rankPosts':
         result = Array.isArray(payload) ? core.rankPosts(payload) : core.rankPosts(payload.posts, payload.context);
+        break;
+      case 'observeCandidates':
+        core.observeCandidates(payload);
+        result = true;
         break;
       case 'assembleFeed':
         result = core.assembleFeed(payload.posts, payload.options);
