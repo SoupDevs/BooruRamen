@@ -11,6 +11,7 @@
  */
 
 import StorageService from '../services/StorageService';
+import { isPositiveEngagement } from './signals.js';
 
 const EMBEDDING_DIM = 32;
 const MIN_EMBEDDING_NORM = 0.01;
@@ -152,9 +153,7 @@ class TagEmbedding {
 
       // Update co-occurrence (only for positive interactions)
       const isPositive =
-        (interaction.type === 'like' && interaction.value > 0) ||
-        (interaction.type === 'favorite' && interaction.value > 0) ||
-        (interaction.type === 'timeSpent' && interaction.value > 5000);
+        isPositiveEngagement(interaction.type, interaction.value, interaction.metadata?.engagement);
 
       if (isPositive) {
         for (let i = 0; i < tags.length; i++) {
@@ -196,9 +195,7 @@ class TagEmbedding {
     }
 
     const isPositive =
-      (interaction.type === 'like' && interaction.value > 0) ||
-      (interaction.type === 'favorite' && interaction.value > 0) ||
-      (interaction.type === 'timeSpent' && interaction.value > 5000);
+      isPositiveEngagement(interaction.type, interaction.value, interaction.metadata?.engagement);
 
     if (isPositive) {
       for (let i = 0; i < tags.length; i++) {

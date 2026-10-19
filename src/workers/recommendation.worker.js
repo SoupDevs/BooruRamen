@@ -7,8 +7,26 @@ import { learningPost } from '../services/imageFeatures.js';
 import { postKey } from '../services/postKey.js';
 import { SessionInterest, interactionSignal, PROFILE_HALF_LIFE_HOURS } from '../services/SessionInterest.js';
 import { DeepDiveInterest } from '../services/DeepDiveInterest.js';
+import { DwellBaseline, dwellEngagement, engagementLabel, focusPostOnTag, isVideoPost } from '../services/signals.js';
+
+import { diversify } from '../services/Diversity.js';
+import { GlobalTagGraph } from '../services/GlobalTagGraph.js';
+
+// Impressions remembered for bandit credit (one reward per shown post).
+const IMPRESSION_MEMORY = 500;
+// Largest score cut for a fully satiated artist/character/copyright.
+const SATIATION_WEIGHT = 0.3;
+// Exploration: every Nth slot normally, every 2nd under a run of skips.
+const EXPLORE_INTERVAL = 4;
+const EXPLORE_INTERVAL_PRESSURED = 2;
+// Upper-confidence bonus per unit of uncertainty for exploration picks.
+const EXPLORE_UCB = 0.5;
+// Exploration never reaches into the bottom of the candidate list.
+const EXPLORE_SCORE_FLOOR_QUANTILE = 0.3;
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
+// Slow "core" profile: long-standing favourites outlive a month-long phase.
+const CORE_HALF_LIFE_HOURS = 180 * 24;
 
 
 
@@ -28,6 +46,7 @@ export class RecommendationWorkerCore {
   constructor() {
     this.userEmbedding = null;
     this.rawTagScores = {};
+    this.rawCoreTagScores = {};
     this.rawRatingPreferences = { general: 0, sensitive: 0, questionable: 0, explicit: 0 };
     this.rawMediaTypePreferences = { image: 0, video: 0 };
     this.tagScores = {};
@@ -43,8 +62,16 @@ export class RecommendationWorkerCore {
 
     // ML components
     this.mlInitialized = false;
+    // Set by new interactions; refreshUserProfile skips the rebuild (and its
+    // snapshot write) when nothing changed.
+    this.profileDirty = true;
+    this.profileRefreshedAt = 0;
     this.sessionInterest = new SessionInterest();
     this.deepDive = new DeepDiveInterest();
+    // In-memory state is authoritative once loaded; snapshots only persist it.
+    this.dwellBaseline = null;
+    this.impressions = new Map();
+    this.tagGraph = new GlobalTagGraph();
   }
 
   async initialize() {
@@ -54,6 +81,10 @@ export class RecommendationWorkerCore {
     this.initPromise = (async () => {
       this.strategyCursors = {};
       this.exhaustedStrategies = new Set();
+
+      const stored = await StorageService.getProfileSnapshot();
+      this.dwellBaseline = new DwellBaseline(stored?.dwellBaseline);
+      this.tagGraph = new GlobalTagGraph(stored?.tagGraph);
 
       // Initialize ML components
       await this._initializeML();
@@ -104,6 +135,11 @@ export class RecommendationWorkerCore {
   }
 
   applyDecay(hoursPassed) {
+    const coreDecay = Math.pow(0.5, hoursPassed / CORE_HALF_LIFE_HOURS);
+    for (const tag in this.rawCoreTagScores) {
+      this.rawCoreTagScores[tag] *= coreDecay;
+      if (Math.abs(this.rawCoreTagScores[tag]) < 0.01) delete this.rawCoreTagScores[tag];
+    }
     const decayFactor = Math.pow(0.5, hoursPassed / PROFILE_HALF_LIFE_HOURS);
     for (const tag in this.rawTagScores) {
       this.rawTagScores[tag] *= decayFactor;
@@ -117,7 +153,15 @@ export class RecommendationWorkerCore {
     }
   }
 
+  async refreshUserProfile(maxAgeMs = 5 * 60 * 1000) {
+    if (this.profileDirty || Date.now() - this.profileRefreshedAt > maxAgeMs) await this.updateUserProfile();
+  }
+
   async updateUserProfile() {
+    // Cleared before the awaits: an interaction stored mid-rebuild marks the
+    // profile dirty again and is picked up by the next refresh.
+    this.profileDirty = false;
+    this.profileRefreshedAt = Date.now();
     const preferences = await StorageService.getPreferences();
     if (preferences.avoidedTags && Array.isArray(preferences.avoidedTags)) {
       this.avoidedTags = preferences.avoidedTags;
@@ -134,6 +178,8 @@ export class RecommendationWorkerCore {
 
     if (snapshot && (!resetTimestamp || snapshot.timestamp > resetTimestamp)) {
       this.rawTagScores = snapshot.rawTagScores || snapshot.tagScores || {};
+      // Older snapshots have no core profile: seed it from the current one.
+      this.rawCoreTagScores = snapshot.coreTagScores || { ...this.rawTagScores };
       this.tagEngagement = snapshot.tagEngagement || {};
       this.tagCategories = snapshot.tagCategories || {};
       this.rawRatingPreferences = snapshot.ratingPreferences || { general: 0, sensitive: 0, questionable: 0, explicit: 0 };
@@ -183,27 +229,16 @@ export class RecommendationWorkerCore {
 
       const ageInHours = (now - interaction.timestamp) / (1000 * 60 * 60);
       const recencyWeight = Math.pow(0.5, ageInHours / PROFILE_HALF_LIFE_HOURS);
+      const coreRecency = Math.pow(0.5, ageInHours / CORE_HALF_LIFE_HOURS);
       const durableWeight = interaction.metadata?.profileWeight ?? 1;
-      const weight = interactionSignal(interaction.type, interaction.value) * recencyWeight * durableWeight;
+      const weight = interactionSignal(interaction.type, interaction.value, interaction.metadata?.engagement) * recencyWeight * durableWeight;
 
       if (interaction.metadata && interaction.metadata.post) {
-        this.updateProfileWithPost(interaction.metadata.post, weight);
+        this.updateProfileWithPost(interaction.metadata.post, weight, recencyWeight ? weight * coreRecency / recencyWeight : 0);
 
         // Feed interaction to ML components
         if (this.mlInitialized) {
           this.tagEmbedding.addInteraction(interaction);
-
-          // Compute label for bandit reward (mirrors MLScorer's labels)
-          let label = 0.5;
-          if (interaction.type === 'like') label = 0.8;
-          else if (interaction.type === 'favorite') label = 1.0;
-          else if (interaction.type === 'dislike') label = 0.0;
-          else if (interaction.type === 'timeSpent') {
-            const seconds = interaction.value / 1000;
-            label = seconds < 2
-              ? 0.1
-              : Math.min(0.9, 0.3 + ((seconds - 2) / 28) * 0.6);
-          }
 
           this.mlScorer.addTrainingSample(
             interaction.metadata.post,
@@ -214,25 +249,10 @@ export class RecommendationWorkerCore {
               ratingPreferences: this.ratingPreferences,
               mediaTypePreferences: this.mediaTypePreferences,
             },
-            durableWeight
+            durableWeight,
+            interaction.metadata.engagement
           );
 
-          // Record reward for bandit ONLY when the post was fetched via a strategy
-          // This ensures the bandit learns which query strategies
-          // produce engaging content.
-          const strategy = interaction.metadata.post._strategy;
-          if (interaction.metadata.deepDive) {
-            // A dive reflects its anchor, not the normal strategy's quality.
-          } else if (strategy) {
-            this.banditExplorer.recordReward(strategy, label);
-          } else {
-            // Normal mode: record reward under the bandit's current best strategy
-            // so the bandit learns from normal-mode interactions too
-            const bestStrat = this.banditExplorer.getBestStrategy();
-            if (bestStrat && bestStrat.type && bestStrat.type !== 'fallback') {
-              this.banditExplorer.recordReward(bestStrat.type, label);
-            }
-          }
         }
       }
     });
@@ -293,7 +313,8 @@ export class RecommendationWorkerCore {
           ratingPreferences: this.ratingPreferences,
           mediaTypePreferences: this.mediaTypePreferences,
         },
-        interaction.metadata?.profileWeight ?? 1
+        interaction.metadata?.profileWeight ?? 1,
+        interaction.metadata?.engagement
       );
     }
     this.mlScorer.flushTraining();
@@ -309,10 +330,13 @@ export class RecommendationWorkerCore {
     const snapshot = {
       timestamp: this.lastUpdateTime,
       rawTagScores: this.rawTagScores,
+      coreTagScores: this.rawCoreTagScores,
       tagEngagement: this.tagEngagement,
       tagCategories: this.tagCategories,
       ratingPreferences: this.rawRatingPreferences,
       mediaTypePreferences: this.rawMediaTypePreferences,
+      dwellBaseline: this.dwellBaseline?.toSnapshot(),
+      tagGraph: this.tagGraph.toSnapshot(),
     };
 
     // Save ML model state
@@ -326,8 +350,8 @@ export class RecommendationWorkerCore {
     this.normalizeScores();
   }
 
-  updateProfileWithPost(post, weight) {
-    if (!weight) return;
+  updateProfileWithPost(post, weight, coreWeight = weight) {
+    if (!weight && !coreWeight) return;
     const avoidedSet = new Set(this.avoidedTags || []);
     const processed = new Set();
     const processTag = (tag, category) => {
@@ -341,6 +365,7 @@ export class RecommendationWorkerCore {
         this.tagEngagement[tag] = 0;
       }
       this.rawTagScores[tag] += weight;
+      this.rawCoreTagScores[tag] = (this.rawCoreTagScores[tag] || 0) + coreWeight;
       this.tagEngagement[tag] += Math.abs(weight);
     };
 
@@ -399,6 +424,7 @@ export class RecommendationWorkerCore {
 
   initializeDefaultProfile() {
     this.rawTagScores = {};
+    this.rawCoreTagScores = {};
     this.tagScores = {};
     this.tagEngagement = {};
     this.tagCategories = {};
@@ -419,11 +445,15 @@ export class RecommendationWorkerCore {
    * been freshly installed.
    */
   factoryReset() {
+    this.profileDirty = true;
     this.deepDive.end();
     this.sessionInterest.reset();
     this.initializeDefaultProfile();
     this.postScoreCache.clear();
     this.resetExploreSession();
+    this.dwellBaseline = new DwellBaseline();
+    this.impressions.clear();
+    this.tagGraph = new GlobalTagGraph();
     if (this.mlInitialized) {
       this.mlScorer.reset();
       this.banditExplorer.reset();
@@ -432,6 +462,7 @@ export class RecommendationWorkerCore {
   }
 
   async resetRecommendations() {
+    this.profileDirty = true;
     this.deepDive.end();
     this.sessionInterest.reset();
     const resetTime = Date.now();
@@ -465,6 +496,10 @@ export class RecommendationWorkerCore {
       tagCategories: this.tagCategories,
       ratingPreferences: this.rawRatingPreferences,
       mediaTypePreferences: this.rawMediaTypePreferences,
+      // Viewing pace and the booru's tag graph are not taste: they survive
+      // a recommendation reset.
+      dwellBaseline: this.dwellBaseline?.toSnapshot(),
+      tagGraph: this.tagGraph.toSnapshot(),
     });
   }
 
@@ -475,21 +510,70 @@ export class RecommendationWorkerCore {
     const evidence = this.deepDive;
     const settings = await StorageService.loadAppSettings();
     if (postData) await hydrateImageAnalysis([postData], { includeAi: !!settings?.settings?.aiTaggingEnabled });
-    const learnedPost = postData ? learningPost(postData) : null;
+    let learnedPost = postData ? learningPost(postData) : null;
+    let storedPost = postData;
+    // A tag tap is interest in that tag, not in everything else on the post.
+    if (interactionType === 'tagTap' && context?.tag && postData) {
+      storedPost = focusPostOnTag(postData, context.tag);
+      learnedPost = focusPostOnTag(learnedPost, context.tag);
+    }
+    // Normalise dwell once, at record time, with the baseline as it was then;
+    // profile rebuilds and model training read the stored label.
+    let engagement = null;
+    if (interactionType === 'timeSpent' && learnedPost) {
+      if (!this.dwellBaseline) this.dwellBaseline = new DwellBaseline();
+      const video = isVideoPost(learnedPost);
+      engagement = dwellEngagement(value, { video, durationSec: context?.mediaDuration, baseline: this.dwellBaseline });
+      if (!video) this.dwellBaseline.observe(value);
+    }
     const profileWeight = diving
-      ? evidence.profileWeight(learnedPost, interactionType, value, this.avoidedTags)
-      : this.sessionInterest.record(learnedPost, interactionType, value, this.avoidedTags);
+      ? evidence.profileWeight(learnedPost, interactionType, value, this.avoidedTags, engagement)
+      : this.sessionInterest.record(learnedPost, interactionType, value, this.avoidedTags, engagement);
     await StorageService.storeInteraction({
       postId,
       type: interactionType,
       value,
-      metadata: { post: postData, profileWeight, deepDive: diving }
+      metadata: {
+        post: storedPost, profileWeight, deepDive: diving,
+        ...(engagement !== null && { engagement }),
+        ...(context?.mediaDuration && { mediaDuration: context.mediaDuration }),
+        ...(context?.tag && { tag: context.tag }),
+      }
     });
+    if (!diving) this.creditStrategy(postData, interactionType, value, engagement);
+    this.profileDirty = true;
 
     this.postScoreCache.clear();
 
     if (updateImmediately) {
       await this.updateUserProfile();
+    }
+  }
+
+  /**
+   * One bandit reward per impression of a strategy-fetched post: the best
+   * label among its events, credited when the impression ends (its watch
+   * time is logged on leaving the post). Crediting every event separately
+   * counted a liked post two or three times, and crediting strategy-less
+   * posts to the leading arm made the leader self-reinforcing.
+   */
+  creditStrategy(post, type, value, engagement) {
+    const strategy = post?._strategy;
+    if (!strategy || !this.banditExplorer) return;
+    const label = engagementLabel(type, value, engagement);
+    if (label === undefined) return;
+    const key = postKey(post);
+    let impression = this.impressions.get(key);
+    if (!impression) {
+      impression = { strategy, best: label, credited: false };
+      this.impressions.set(key, impression);
+      if (this.impressions.size > IMPRESSION_MEMORY) this.impressions.delete(this.impressions.keys().next().value);
+    }
+    if (impression.credited) return;
+    impression.best = Math.max(impression.best, label);
+    if (type === 'timeSpent') {
+      this.banditExplorer.recordReward(impression.strategy, impression.best);
+      impression.credited = true;
     }
   }
 
@@ -535,7 +619,74 @@ export class RecommendationWorkerCore {
   }
 
   blendRankingScore(score, post) {
-    return this.deepDive.blend(this.sessionInterest.blend(score, post, this.avoidedTags), post, this.avoidedTags, tagEmbedding);
+    const blended = this.deepDive.blend(this.sessionInterest.blend(score, post, this.avoidedTags), post, this.avoidedTags, tagEmbedding);
+    // A dive asks for more of the same; normal browsing tires of repeats.
+    if (this.deepDive.active) return blended;
+    return blended * (1 - SATIATION_WEIGHT * this.sessionInterest.satiation(post, this.avoidedTags));
+  }
+
+  /**
+   * 0..1: how little the engine knows about this kind of post. Uses the
+   * ML model's neural-linear posterior when available, otherwise how much
+   * interaction evidence the post's tags have.
+   */
+  postUncertainty(post) {
+    post = learningPost(post);
+    if (this.mlInitialized && this.mlScorer.isTrained && this.mlScorer.uncertainty) {
+      const value = this.mlScorer.uncertainty(post, this.tagScores, {
+        ratingPreferences: this.ratingPreferences, mediaTypePreferences: this.mediaTypePreferences,
+      });
+      if (value !== null) return value;
+    }
+    const avoided = new Set(this.avoidedTags);
+    const tags = (post.tag_string || '').split(/\s+/).filter(tag => tag && !avoided.has(tag));
+    if (!tags.length) return 1;
+    const evidence = tags.reduce((sum, tag) => sum + (this.tagEngagement[tag] || 0), 0) / tags.length;
+    return 1 / Math.sqrt(1 + evidence);
+  }
+
+  /**
+   * Order a batch of candidates for the feed.
+   * Exploit slots: best scores, diversified against what was just shown.
+   * Explore slots: the highest upper-confidence picks (score + uncertainty)
+   * among the rest, never from the bottom of the list. Previously every 4th
+   * slot came from the lowest-scored 40%: content the model was confident the
+   * user would not like, which costs retention and teaches little.
+   * @returns {{ feed: Object[], rest: Object[] }} chosen posts and leftovers
+   */
+  assembleFeed(posts, { maxTotal = 10, context = [] } = {}) {
+    // The score each post is shown with is kept on it (and so stored with its
+    // interactions) for progressive validation in FeedMetrics.
+    const scored = posts.map(post => {
+      const score = this.scorePost(post);
+      post._score = Math.round(score * 1e4) / 1e4;
+      return { post, score };
+    });
+    if (this.deepDive.active) {
+      const ordered = diversify(scored, context, { lambda: 0.1 });
+      return { feed: ordered.slice(0, maxTotal).map(item => item.post), rest: ordered.slice(maxTotal).map(item => item.post) };
+    }
+    const byScore = [...scored].sort((a, b) => b.score - a.score);
+    const total = Math.min(maxTotal, byScore.length);
+    const interval = this.sessionInterest.explorationPressure >= 0.75 ? EXPLORE_INTERVAL_PRESSURED : EXPLORE_INTERVAL;
+    const exploreCount = Math.floor(total / interval);
+    const exploit = byScore.slice(0, total - exploreCount);
+    const floor = byScore.length ? byScore[Math.floor((byScore.length - 1) * (1 - EXPLORE_SCORE_FLOOR_QUANTILE))].score : 0;
+    const explore = byScore.slice(exploit.length)
+      .filter(item => item.score >= floor)
+      .map(item => ({ ...item, ucb: item.score + EXPLORE_UCB * this.postUncertainty(item.post) }))
+      .sort((a, b) => b.ucb - a.ucb)
+      .slice(0, exploreCount);
+    const chosen = new Set([...exploit, ...explore].map(item => item.post));
+    const exploitOrder = diversify(exploit, context);
+    const feed = [];
+    let e = 0, x = 0;
+    for (let position = 0; feed.length < exploit.length + explore.length; position++) {
+      if ((position + 1) % interval === 0 && x < explore.length) feed.push(Object.assign(explore[x++].post, { _explore: true }));
+      else if (e < exploitOrder.length) feed.push(exploitOrder[e++].post);
+      else feed.push(Object.assign(explore[x++].post, { _explore: true }));
+    }
+    return { feed, rest: byScore.filter(item => !chosen.has(item.post)).map(item => item.post) };
   }
 
   async setDeepDive(post) {
@@ -631,6 +782,8 @@ export class RecommendationWorkerCore {
       const mlScore = this.mlScorer.scorePost(post, this.tagScores, userProfile);
       if (mlScore >= 0) {
         details.mlScore = mlScore;
+        details.mlHeads = this.mlScorer.predictHeads?.(post, this.tagScores, userProfile) || null;
+        details.uncertainty = this.postUncertainty(post);
         details.mlConfidence = Math.min(1, this.mlScorer.interactionCount / 50);
 
         try {
@@ -645,20 +798,16 @@ export class RecommendationWorkerCore {
     return details;
   }
 
-  rankPosts(posts) {
+  rankPosts(posts, context = []) {
     if (!posts || posts.length === 0) return [];
+    // Exploration is chosen deliberately at feed assembly; a flat bonus per
+    // strategy here would override the model on every re-rank.
     const scoredPosts = posts.map(post => {
-      let score = this.scorePost(post);
-      switch (this.deepDive.active ? null : post._strategy) {
-        case 'pivot': score += 0.3; break;
-        case 'reach': score += 0.5; break;
-        case 'wildcard': score += 0.4; break;
-        case 'duo': score += 0.5; break;
-      }
+      const score = this.scorePost(post);
+      post._score = Math.round(score * 1e4) / 1e4;
       return { post, score };
     });
-    scoredPosts.sort((a, b) => b.score - a.score);
-    return scoredPosts.map(sp => sp.post);
+    return diversify(scoredPosts, context, this.deepDive.active ? { lambda: 0.1 } : undefined).map(sp => sp.post);
   }
 
   summarizeTagScores(limit = 10) {
@@ -712,7 +861,8 @@ export class RecommendationWorkerCore {
       .map(([tag, score]) => {
         const category = this.tagCategories?.[tag] || 'general';
         const weight = QUERY_CATEGORY_WEIGHTS[category] ?? 0.15;
-        return { tag, score: score * weight };
+        // Tags that are on most posts make poor queries and poor evidence.
+        return { tag, score: score * weight * (0.3 + 0.7 * this.tagGraph.idf(tag)) };
       })
       .sort((a, b) => b.score - a.score);
   }
@@ -773,12 +923,33 @@ export class RecommendationWorkerCore {
       }
     }
 
-    // Reach strategy
-    if (selectedStrategies.has('reach') && tier2Pool.length > 0) {
-      const reachTag = this.weightedRandomSelect(tier2Pool, usedTags);
+    // Reach strategy: secondary interests, or half the time a long-time
+    // favourite that has gone quiet lately
+    const dormant = this.dormantInterests();
+    if (selectedStrategies.has('reach') && (tier2Pool.length > 0 || dormant.length > 0)) {
+      const rediscover = dormant.length > 0 && (tier2Pool.length === 0 || Math.random() < 0.5);
+      const reachTag = this.weightedRandomSelect(rediscover ? dormant : tier2Pool, usedTags);
       if (reachTag && !this.exhaustedStrategies.has(reachTag.tag)) {
-        queries.push({ tags: reachTag.tag, type: 'reach', intent: 'Secondary interest - expanding horizons' });
+        queries.push({ tags: reachTag.tag, type: 'reach', intent: rediscover ? 'Rediscovering a long-time favourite' : 'Secondary interest - expanding horizons' });
         usedTags.add(reachTag.tag);
+      }
+    }
+
+    // Adjacent strategy: a neighbour of the user's interests they barely know
+    if (selectedStrategies.has('adjacent')) {
+      const adjacentTag = this.weightedRandomSelect(this.adjacentInterests(), usedTags);
+      if (adjacentTag && !this.exhaustedStrategies.has(adjacentTag.tag)) {
+        queries.push({ tags: adjacentTag.tag, type: 'adjacent', intent: 'Adjacent interest - likely to enjoy, not yet explored' });
+        usedTags.add(adjacentTag.tag);
+      }
+    }
+
+    // Trending strategy: what is rising near the user's taste
+    if (selectedStrategies.has('trending')) {
+      const trendQuery = this.trendingQuery(tier1Pool, usedTags);
+      if (trendQuery && !this.exhaustedStrategies.has(trendQuery.tags)) {
+        queries.push(trendQuery);
+        usedTags.add(trendQuery.tag);
       }
     }
 
@@ -803,6 +974,60 @@ export class RecommendationWorkerCore {
     }
 
     return queries.filter((query, index, self) => self.findIndex(q => q.tags === query.tags) === index);
+  }
+
+  /**
+   * Tags that are strong in the slow core profile but weak in the current
+   * one: favourites the user has drifted away from, worth resurfacing now
+   * and then rather than letting them decay away entirely.
+   */
+  dormantInterests(limit = 10) {
+    const core = Object.entries(this.rawCoreTagScores || {}).filter(([, score]) => score > 0);
+    if (!core.length) return [];
+    const maxCore = Math.max(...core.map(([, score]) => score));
+    const avoided = new Set(this.avoidedTags);
+    return core
+      .map(([tag, score]) => ({ tag, core: score / maxCore, current: Math.max(0, this.tagScores?.[tag] || 0) }))
+      .filter(item => item.core > 0.3 && item.current < item.core * 0.5 && !avoided.has(item.tag) && this.tagCategories[item.tag] !== 'meta')
+      .map(item => ({ tag: item.tag, score: item.core - item.current }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  /** Neighbours of the user's interests that the user has little history with. */
+  adjacentInterests(limit = 10) {
+    const interests = this.getQueryableTagsWithScores().slice(0, 25);
+    const exclude = new Set([...this.avoidedTags, ...interests.map(item => item.tag), 'video']);
+    for (const [tag, score] of Object.entries(this.tagScores || {})) if (score < -0.1) exclude.add(tag);
+    for (const [tag, category] of Object.entries(this.tagCategories || {})) if (category === 'meta') exclude.add(tag);
+    return this.tagGraph.adjacentTags(interests, tag => this.tagEngagement[tag] || 0, exclude, limit);
+  }
+
+  /**
+   * A trending query near the user's taste: a rising tag they like or that
+   * neighbours their interests, sorted by the booru's hot ranking. Before the
+   * graph has seen enough trending batches, a core interest's hot posts.
+   */
+  trendingQuery(corePool, exclude = new Set()) {
+    const adjacent = this.adjacentInterests(25);
+    const top = adjacent[0]?.score || 1;
+    const adjacency = new Map(adjacent.map(item => [item.tag, item.score / top]));
+    const avoid = new Set([...this.avoidedTags, ...exclude, 'video']);
+    const trends = this.tagGraph.personalTrends(tag => this.tagScores?.[tag] || 0, adjacency, avoid);
+    const pick = this.weightedRandomSelect(trends, exclude) || this.weightedRandomSelect(corePool, exclude);
+    if (!pick) return null;
+    const personal = trends.some(item => item.tag === pick.tag);
+    return { tag: pick.tag, tags: `${pick.tag} order:rank`, type: 'trending', intent: personal ? `Trending near your taste: "${pick.tag}"` : `Hot right now in "${pick.tag}"` };
+  }
+
+  /** Learn the booru's tag structure from a batch of fetched candidates. */
+  observeCandidates(posts) {
+    if (!posts?.length) return;
+    this.tagGraph.observe(posts.map(post => learningPost(post)), {
+      interests: new Set(this.getQueryableTagsWithScores().slice(0, 60).map(item => item.tag)),
+      avoided: new Set(this.avoidedTags),
+      isTrending: post => /order:(rank|popular)/.test(post._searchCriteria || ''),
+    });
   }
 
   weightedRandomSelect(candidates, exclude = new Set()) {
@@ -872,6 +1097,14 @@ export class RecommendationWorkerCore {
         const pick = this.weightedRandomSelect(tier2Pool);
         return pick ? { tag: pick.tag, strategy, modifier: null } : { tag: null, strategy: 'fallback', modifier: null };
       }
+      case 'adjacent': {
+        const pick = this.weightedRandomSelect(this.adjacentInterests()) || this.weightedRandomSelect(tier2Pool.length ? tier2Pool : tier1Pool);
+        return pick ? { tag: pick.tag, strategy, modifier: null } : { tag: null, strategy: 'fallback', modifier: null };
+      }
+      case 'trending': {
+        const query = this.trendingQuery(tier1Pool);
+        return query ? { tag: query.tag, strategy, modifier: 'order:rank' } : { tag: null, strategy: 'wildcard', modifier: 'order:rank age:<1mo' };
+      }
       case 'wildcard': {
         // Wildcard returns a trending/popular query modifier, no specific tag
         return { tag: null, strategy: 'wildcard', modifier: 'order:rank age:<1mo' };
@@ -918,6 +1151,10 @@ if (typeof self !== 'undefined') self.onmessage = async (e) => {
         await core.updateUserProfile();
         result = true;
         break;
+      case 'refreshUserProfile':
+        await core.refreshUserProfile();
+        result = true;
+        break;
       case 'resetRecommendations':
         await core.resetRecommendations();
         result = true;
@@ -940,7 +1177,14 @@ if (typeof self !== 'undefined') self.onmessage = async (e) => {
         result = core.getPostScoreDetails(payload);
         break;
       case 'rankPosts':
-        result = core.rankPosts(payload);
+        result = Array.isArray(payload) ? core.rankPosts(payload) : core.rankPosts(payload.posts, payload.context);
+        break;
+      case 'observeCandidates':
+        core.observeCandidates(payload);
+        result = true;
+        break;
+      case 'assembleFeed':
+        result = core.assembleFeed(payload.posts, payload.options);
         break;
       case 'setDeepDive':
         await core.setDeepDive(payload);

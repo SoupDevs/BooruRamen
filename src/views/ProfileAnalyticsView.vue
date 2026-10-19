@@ -8,632 +8,287 @@
   (at your option) any later version.
 -->
 <template>
-  <div class="p-4 text-white pb-20 h-full overflow-y-auto"> <!-- Added h-full and overflow-y-auto -->
-    <div class="max-w-7xl mx-auto space-y-6">
-      
-      <!-- Header & Toggles -->
-      <div class="space-y-4">
-        <h1 class="text-3xl font-bold">Profile Analytics</h1>
-        
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <!-- Include Tags -->
-          <div class="bg-gray-800 p-4 rounded-lg">
-            <h2 class="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wider">Include Tags</h2>
-            <div class="flex flex-wrap gap-2">
-              <button 
-                v-for="(active, type) in toggles" 
-                :key="type"
-                @click="toggles[type] = !active"
-                :class="[
-                  'px-4 py-2 rounded-full text-sm font-medium transition-colors',
-                  active 
-                    ? 'bg-pink-600 text-white hover:bg-pink-500' 
-                    : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-                ]"
-              >
-                {{ capitalize(type) }}
-              </button>
-            </div>
-          </div>
+  <div class="p-4 text-white pb-20 h-full overflow-y-auto">
+    <div class="max-w-6xl mx-auto space-y-5">
+      <header>
+        <h1 class="text-3xl font-bold">Your Taste</h1>
+        <p class="text-sm text-gray-400 mt-1">What you like, how you engage, and why the feed thinks so. Built from your activity on this device.</p>
+      </header>
 
-          <!-- Filters -->
-          <div class="bg-gray-800 p-4 rounded-lg">
-            <h2 class="text-sm font-semibold text-gray-400 mb-3 uppercase tracking-wider">Filters</h2>
-            <div class="flex flex-col gap-3">
-               <div class="flex items-center gap-2">
-                 <button 
-                  @click="hideCommonTags = !hideCommonTags"
-                  :class="[
-                    'px-4 py-2 rounded-full text-sm font-medium transition-colors whitespace-nowrap',
-                    hideCommonTags 
-                      ? 'bg-purple-600 text-white hover:bg-purple-500' 
-                      : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-                  ]"
-                >
-                  Hide Tags
-                </button>
-                <input 
-                  type="text" 
-                  v-model.lazy="commonTagsInput"
-                  placeholder="Tags to hide (space separated)"
-                  class="bg-gray-700 text-gray-200 text-sm rounded-lg px-3 py-2 w-full focus:ring-2 focus:ring-purple-500 focus:outline-none"
-                >
-               </div>
-               <p class="text-xs text-gray-500">Separate tags with spaces</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Loading State -->
       <div v-if="loading" class="flex justify-center py-12">
         <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-pink-500"></div>
       </div>
 
-      <!-- Content Grid -->
-      <div v-else class="grid gap-4 auto-rows-min" style="grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));">
-        
-        <!-- Top Tags - Recommendation System Scores (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-          <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
-            <span>🏆</span> Top Tags
-          </h3>
-          <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
-            <div v-for="(score, tag, index) in recommendationTagScores" :key="tag" class="flex justify-between items-center p-2 bg-gray-700 rounded hover:bg-gray-600 transition">
-              <div class="flex items-center gap-2 truncate">
-                <span class="text-gray-500 text-xs font-mono w-6">{{ index + 1 }}</span>
-                <span class="text-gray-200 truncate">{{ tag }}</span>
-              </div>
-              <span class="bg-gray-900 px-2 py-1 rounded text-xs font-mono text-emerald-400">{{ formatScore(score) }}</span>
-            </div>
-            <div v-if="Object.keys(recommendationTagScores).length === 0" class="text-center text-gray-500 mt-10">
-              No data available
-            </div>
+      <template v-else>
+        <!-- The story -->
+        <section class="bg-gray-800 rounded-lg p-5">
+          <div v-for="section in story.sections" :key="section.title" class="mb-4 last:mb-0">
+            <h2 class="text-xs font-semibold uppercase tracking-wider text-pink-400 mb-1">{{ section.title }}</h2>
+            <p class="text-gray-100 leading-relaxed">
+              <template v-for="(sentence, s) in section.sentences" :key="s">
+                <template v-for="(segment, i) in segments(sentence)" :key="i">
+                  <span v-if="segment.category" class="font-semibold" :style="{ color: categoryColor(segment.category) }">{{ segment.text }}</span>
+                  <template v-else>{{ segment.text }}</template>
+                </template>{{ s < section.sentences.length - 1 ? ' ' : '' }}
+              </template>
+            </p>
           </div>
-        </div>
+          <p class="text-xs text-gray-500 mt-4">Written from your interactions with fixed rules, not an AI model. Deep Dives are left out, and your avoided tags are ignored.</p>
+        </section>
 
-        <!-- Distribution Pie Chart (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-           <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
-            <span>🍰</span> Tag Distribution
-          </h3>
-          <div class="flex-1 flex items-center justify-center relative min-h-0">
-             <!-- SVG Pie Chart -->
-             <svg viewBox="0 0 100 100" class="h-full w-full max-h-40 filter drop-shadow-xl" v-if="pieData.length > 0">
-                <circle v-for="(slice, index) in pieSlices" :key="index"
-                  cx="50" cy="50" r="40"
-                  fill="transparent"
-                  :stroke="slice.color"
-                  :stroke-width="20"
-                  :stroke-dasharray="slice.dashArray"
-                  :stroke-dashoffset="slice.dashOffset"
-                  class="transition-all duration-1000 ease-out hover:opacity-90"
-                />
-             </svg>
-             
-             <div v-if="pieData.length === 0" class="text-gray-500">No data available</div>
-          </div>
-          <div class="mt-4 flex flex-wrap justify-center gap-3 text-xs">
-              <div v-for="slice in pieData" :key="slice.label" class="flex items-center gap-1">
-                  <span class="w-3 h-3 rounded-full" :style="{ backgroundColor: slice.color }"></span>
-                  <span class="text-gray-300">{{ slice.label }} ({{ slice.percentage }}%)</span>
-              </div>
-          </div>
-        </div>
+        <template v-if="story.ready">
+          <!-- Tag map + why -->
+          <section class="grid gap-4 lg:grid-cols-3">
+            <div class="bg-gray-800 rounded-lg p-4 lg:col-span-2">
+              <h2 class="text-lg font-bold mb-1">Your tag map</h2>
+              <p class="text-xs text-gray-400 mb-3">The tags you respond to most, linked when you enjoy them together. Tap one to see why it's here.</p>
+              <TagMap v-if="analysis.graph.nodes.length" :graph="analysis.graph" :selected-tag="selectedTag" @select="selectedTag = $event" />
+              <p v-else class="text-sm text-gray-500">Not enough engaged posts to draw a map yet.</p>
+            </div>
 
-        <!-- Most Liked Tags (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-          <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
-            <span>�</span> Most Liked Tags
-          </h3>
-          <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
-            <div v-for="(count, tag, index) in topTags" :key="tag" class="flex justify-between items-center p-2 bg-gray-700 rounded hover:bg-gray-600 transition">
-              <div class="flex items-center gap-2 truncate">
-                <span class="text-gray-500 text-xs font-mono w-6">{{ index + 1 }}</span>
-                <span class="text-gray-200 truncate">{{ tag }}</span>
-              </div>
-              <span class="bg-gray-900 px-2 py-1 rounded text-xs font-mono text-pink-400">{{ count }}</span>
-            </div>
-            <div v-if="Object.keys(topTags).length === 0" class="text-center text-gray-500 mt-10">
-              No data available
-            </div>
-          </div>
-        </div>
+            <div class="bg-gray-800 rounded-lg p-4">
+              <template v-if="selected">
+                <p class="text-xs uppercase tracking-wider text-gray-400">{{ categoryNames[selected.category] }}</p>
+                <h2 class="text-xl font-bold break-words">{{ label(selected) }}</h2>
+                <p class="text-sm text-gray-300 mt-2">{{ whySentence(selected) }}</p>
 
-        <!-- Tag Pairs (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-          <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
-            <span>🔗</span> Top Tag Pairs
-          </h3>
-          <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
-             <div v-for="(count, pair, index) in topTagPairs" :key="pair" class="flex justify-between items-center p-2 bg-gray-700 rounded hover:bg-gray-600 transition">
-              <div class="flex items-center gap-2 truncate max-w-[70%]">
-                <span class="text-gray-500 text-xs font-mono w-6">{{ index + 1 }}</span>
-                <span class="text-gray-200 text-sm truncate">{{ pair }}</span>
-              </div>
-              <span class="bg-gray-900 px-2 py-1 rounded text-xs font-mono text-blue-400">{{ count }}</span>
-            </div>
-            <div v-if="Object.keys(topTagPairs).length === 0" class="text-center text-gray-500 mt-10">
-              No data available
-            </div>
-          </div>
-        </div>
+                <div class="mt-4 space-y-1">
+                  <div class="flex justify-between text-xs text-gray-400"><span>Engaged with this</span><span>{{ pct(selected.rate) }}</span></div>
+                  <div class="h-2 bg-gray-900 rounded-full overflow-hidden"><div class="h-full bg-pink-500" :style="{ width: pct(selected.rate) }"></div></div>
+                  <div class="flex justify-between text-xs text-gray-400 pt-1"><span>Your average</span><span>{{ pct(analysis.baseRate) }}</span></div>
+                  <div class="h-2 bg-gray-900 rounded-full overflow-hidden"><div class="h-full bg-gray-500" :style="{ width: pct(analysis.baseRate) }"></div></div>
+                </div>
 
-        <!-- Highest Like Rate (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-          <div class="flex justify-between items-start mb-4">
-             <h3 class="text-lg font-bold flex items-center gap-2">
-                <span>❤️</span> Highest Like Rate
-             </h3>
-             <div class="flex flex-col items-end">
-                <span class="text-xs text-gray-400">Min views</span>
-                <input 
-                    type="number" 
-                    v-model.number="minViews.likes" 
-                    class="w-12 bg-gray-700 text-white text-xs px-1 py-0.5 rounded border border-gray-600 focus:border-pink-500 focus:outline-none text-center"
-                    min="1"
-                >
-             </div>
-          </div>
-          <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
-             <div v-for="(item, index) in likeRates" :key="item.tag" class="flex justify-between items-center p-2 bg-gray-700 rounded hover:bg-gray-600 transition">
-              <div class="flex items-center gap-2 truncate max-w-[70%]">
-                <span class="text-gray-500 text-xs font-mono w-6">{{ index + 1 }}</span>
-                <div class="flex flex-col truncate">
-                   <span class="text-gray-200 font-medium truncate">{{ item.tag }}</span>
-                   <span class="text-xs text-gray-500">{{ item.likes }}/{{ item.views }} viewed</span>
+                <p class="text-xs text-gray-400 mt-4">{{ evidence(selected) }}</p>
+
+                <div v-if="related.length" class="mt-4">
+                  <p class="text-xs uppercase tracking-wider text-gray-400 mb-1">Often enjoyed with</p>
+                  <div class="flex flex-wrap gap-1">
+                    <button v-for="tag in related" :key="tag.tag" class="text-xs px-2 py-1 rounded-full bg-gray-700 hover:bg-gray-600" @click="selectedTag = tag.tag">{{ label(tag) }}</button>
+                  </div>
+                </div>
+              </template>
+              <p v-else class="text-sm text-gray-500">Pick a tag on the map.</p>
+            </div>
+          </section>
+
+          <!-- Interests by kind -->
+          <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div v-for="category in categories" :key="category" class="bg-gray-800 rounded-lg p-4">
+              <h2 class="text-sm font-semibold uppercase tracking-wider text-gray-400 mb-3">{{ categoryTitles[category] }}</h2>
+              <p v-if="!analysis.topByCategory[category].length" class="text-sm text-gray-500">Nothing stands out yet.</p>
+              <button
+                v-for="entry in analysis.topByCategory[category]"
+                :key="entry.tag"
+                class="w-full text-left mb-2 group"
+                :title="evidence(entry)"
+                @click="selectedTag = entry.tag"
+              >
+                <div class="flex justify-between gap-2 text-sm">
+                  <span class="truncate group-hover:text-pink-300" :class="{ 'text-pink-300': selectedTag === entry.tag }">{{ label(entry) }}</span>
+                  <span class="text-xs text-gray-400 shrink-0">{{ entry.positives }} of {{ entry.impressions }}</span>
+                </div>
+                <div class="h-1.5 bg-gray-900 rounded-full overflow-hidden mt-1">
+                  <div class="h-full rounded-full" :style="{ width: barWidth(entry, category), background: categoryColor(category) }"></div>
+                </div>
+              </button>
+            </div>
+          </section>
+
+          <!-- How you engage -->
+          <section class="bg-gray-800 rounded-lg p-4">
+            <h2 class="text-lg font-bold mb-3">How you engage</h2>
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+              <div v-for="tile in tiles" :key="tile.label" class="bg-gray-900/60 rounded-lg p-3">
+                <p class="text-xs text-gray-400">{{ tile.label }}</p>
+                <p class="font-mono text-xl mt-1">{{ tile.value }}</p>
+                <p v-if="tile.note" class="text-xs text-gray-500 mt-1">{{ tile.note }}</p>
+              </div>
+            </div>
+
+            <div class="grid gap-6 md:grid-cols-2 mt-5">
+              <div>
+                <p class="text-xs uppercase tracking-wider text-gray-400 mb-2">What you do besides scrolling</p>
+                <div v-for="action in actionBars" :key="action.type" class="flex items-center gap-2 text-sm mb-1">
+                  <span class="w-28 shrink-0 text-gray-300">{{ action.label }}</span>
+                  <div class="flex-1 h-2 bg-gray-900 rounded-full overflow-hidden"><div class="h-full bg-pink-500/80" :style="{ width: action.width }"></div></div>
+                  <span class="w-10 text-right font-mono text-xs text-gray-400">{{ action.count }}</span>
+                </div>
+                <p v-if="!actionBars.length" class="text-sm text-gray-500">Only scrolling so far.</p>
+              </div>
+              <div>
+                <p class="text-xs uppercase tracking-wider text-gray-400 mb-2">When you browse</p>
+                <div class="flex items-end gap-px h-24" role="img" :aria-label="`Posts viewed per hour of day, busiest around ${peakHourLabel}`">
+                  <div v-for="(count, hour) in analysis.engagement.hours" :key="hour" class="flex-1 bg-pink-500/70 rounded-t-sm" :style="{ height: hourHeight(count) }" :title="`${hourLabel(hour)}: ${count} posts`"></div>
+                </div>
+                <div class="flex justify-between text-[10px] text-gray-500 mt-1"><span>12am</span><span>6am</span><span>12pm</span><span>6pm</span><span>11pm</span></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Changing -->
+          <section v-if="changeGroups.length" class="bg-gray-800 rounded-lg p-4">
+            <h2 class="text-lg font-bold mb-3">What's changing</h2>
+            <div class="grid gap-4 md:grid-cols-3">
+              <div v-for="group in changeGroups" :key="group.title">
+                <p class="text-xs uppercase tracking-wider text-gray-400 mb-2">{{ group.title }}</p>
+                <div class="flex flex-wrap gap-1">
+                  <button v-for="entry in group.entries" :key="entry.tag" class="text-xs px-2 py-1 rounded-full" :class="group.chip" :title="evidence(entry)" @click="selectedTag = entry.tag">{{ label(entry) }}</button>
                 </div>
               </div>
-              <span class="bg-gray-900 px-2 py-1 rounded text-xs font-mono text-red-500 font-bold">{{ item.rate }}%</span>
             </div>
-             <div v-if="likeRates.length === 0" class="text-center text-gray-500 mt-10">
-              No data available
-            </div>
-          </div>
-        </div>
+          </section>
+        </template>
 
-        <!-- Highest Favorite Rate (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-          <div class="flex justify-between items-start mb-4">
-             <h3 class="text-lg font-bold flex items-center gap-2">
-                <span>⭐</span> Highest Favorite Rate
-             </h3>
-             <div class="flex flex-col items-end">
-                <span class="text-xs text-gray-400">Min views</span>
-                <input 
-                    type="number" 
-                    v-model.number="minViews.favorites" 
-                    class="w-12 bg-gray-700 text-white text-xs px-1 py-0.5 rounded border border-gray-600 focus:border-yellow-500 focus:outline-none text-center"
-                    min="1"
-                >
-             </div>
+        <!-- Feed Quality: how the recommendations are landing (last 30 days) -->
+        <section v-if="feedMetrics && feedMetrics.impressions" class="bg-gray-800 rounded-lg p-4">
+          <h2 class="text-lg font-bold mb-1">How the feed is doing</h2>
+          <p class="text-xs text-gray-400 mb-3">Last 30 days. Ranking accuracy is the chance a post you engaged with had been ranked above one you skipped.</p>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <div><p class="text-gray-400 text-xs">Posts shown</p><p class="font-mono text-lg">{{ feedMetrics.impressions }}</p></div>
+            <div><p class="text-gray-400 text-xs">Engaged</p><p class="font-mono text-lg">{{ pct(feedMetrics.positiveRate) }}</p></div>
+            <div><p class="text-gray-400 text-xs">Ranking accuracy</p><p class="font-mono text-lg">{{ num(feedMetrics.auc, 2) }}</p></div>
+            <div><p class="text-gray-400 text-xs">Likes per 100 posts</p><p class="font-mono text-lg">{{ num(feedMetrics.likesPer100) }}</p></div>
           </div>
-          <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
-             <div v-for="(item, index) in favoriteRates" :key="item.tag" class="flex justify-between items-center p-2 bg-gray-700 rounded hover:bg-gray-600 transition">
-              <div class="flex items-center gap-2 truncate max-w-[70%]">
-                <span class="text-gray-500 text-xs font-mono w-6">{{ index + 1 }}</span>
-                <div class="flex flex-col truncate">
-                   <span class="text-gray-200 font-medium truncate">{{ item.tag }}</span>
-                   <span class="text-xs text-gray-500">{{ item.favorites }}/{{ item.views }} viewed</span>
-                </div>
-              </div>
-              <span class="bg-gray-900 px-2 py-1 rounded text-xs font-mono text-yellow-500 font-bold">{{ item.rate }}%</span>
+          <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            <div>
+              <p class="text-gray-400 text-xs mb-1">Discovery picks vs your usual</p>
+              <p class="font-mono">discovery {{ pct(feedMetrics.exploration.explore.positiveRate) }} ({{ feedMetrics.exploration.explore.impressions }})
+                · usual {{ pct(feedMetrics.exploration.exploit.positiveRate) }} ({{ feedMetrics.exploration.exploit.impressions }})</p>
             </div>
-            <div v-if="favoriteRates.length === 0" class="text-center text-gray-500 mt-10">
-              No data available
+            <div>
+              <p class="text-gray-400 text-xs mb-1">Engaged by how the post was found</p>
+              <p v-for="(group, name) in feedMetrics.byStrategy" :key="name" class="flex justify-between gap-2">
+                <span class="text-gray-300">{{ strategyNames[name] || name }}</span>
+                <span class="font-mono text-gray-400">{{ pct(group.positiveRate) }} of {{ group.impressions }}</span>
+              </p>
             </div>
           </div>
-        </div>
-
-        <!-- Highest Dislike Rate (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-          <div class="flex justify-between items-start mb-4">
-             <h3 class="text-lg font-bold flex items-center gap-2">
-                <span>💔</span> Highest Dislike Rate
-             </h3>
-             <div class="flex flex-col items-end">
-                <span class="text-xs text-gray-400">Min views</span>
-                <input 
-                    type="number" 
-                    v-model.number="minViews.dislikes" 
-                    class="w-12 bg-gray-700 text-white text-xs px-1 py-0.5 rounded border border-gray-600 focus:border-indigo-500 focus:outline-none text-center"
-                    min="1"
-                >
-             </div>
-          </div>
-          <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
-             <div v-for="(item, index) in dislikeRates" :key="item.tag" class="flex justify-between items-center p-2 bg-gray-700 rounded hover:bg-gray-600 transition">
-              <div class="flex items-center gap-2 truncate max-w-[70%]">
-                <span class="text-gray-500 text-xs font-mono w-6">{{ index + 1 }}</span>
-                <div class="flex flex-col truncate">
-                   <span class="text-gray-200 font-medium truncate">{{ item.tag }}</span>
-                   <span class="text-xs text-gray-500">{{ item.dislikes }}/{{ item.views }} viewed</span>
-                </div>
-              </div>
-              <span class="bg-gray-900 px-2 py-1 rounded text-xs font-mono text-gray-400 font-bold">{{ item.rate }}%</span>
-            </div>
-            <div v-if="dislikeRates.length === 0" class="text-center text-gray-500 mt-10">
-              No data available
-            </div>
-          </div>
-        </div>
-
-        <!-- Most Disliked Tags (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-          <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
-            <span>👎</span> Most Disliked Tags
-          </h3>
-          <div class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-2">
-             <div v-for="(count, tag, index) in topDislikedTags" :key="tag" class="flex justify-between items-center p-2 bg-gray-700 rounded hover:bg-gray-600 transition">
-              <div class="flex items-center gap-2 truncate">
-                <span class="text-gray-500 text-xs font-mono w-6">{{ index + 1 }}</span>
-                <span class="text-gray-200 truncate">{{ tag }}</span>
-              </div>
-              <span class="bg-gray-900 px-2 py-1 rounded text-xs font-mono text-gray-400">{{ count }}</span>
-            </div>
-            <div v-if="Object.keys(topDislikedTags).length === 0" class="text-center text-gray-500 mt-10">
-              No data available
-            </div>
-          </div>
-        </div>
-
-        <!-- Video Analytics (1x1) -->
-        <div class="bg-gray-800 rounded-lg p-4 h-80 flex flex-col">
-          <h3 class="text-lg font-bold mb-4 flex items-center gap-2">
-            <span>🎥</span> Video Analytics
-          </h3>
-          <div class="flex-1 flex flex-col justify-center items-center gap-6">
-             <div class="text-center">
-                 <div class="text-4xl font-bold text-white mb-2">{{ videoStats.avgWatchTime }}s</div>
-                 <div class="text-sm text-gray-400">Avg Watch Time</div>
-             </div>
-             <div class="w-full h-px bg-gray-700"></div>
-             <div class="text-center">
-                 <div class="text-2xl font-bold text-white mb-2">{{ videoStats.totalVideosWatched }}</div>
-                 <div class="text-sm text-gray-400">Videos Watched</div>
-             </div>
-             <!-- Future: Completion rate? -->
-          </div>
-        </div>
-
-      </div>
+        </section>
+      </template>
     </div>
   </div>
 </template>
 
 <script>
 import StorageService from '../services/StorageService';
-import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSystem';
+import { COMMON_TAGS } from '../services/RecommendationSystem';
+import { computeFeedMetrics } from '../services/FeedMetrics.js';
+import { analyzeTaste, CATEGORIES } from '../services/TasteAnalysis.js';
+import { describeTaste, tagLabel, tagEvidence, splitSegments } from '../services/TasteNarrative.js';
+import { tagColor } from '../services/tagColors.js';
+import TagMap from '../components/TagMap.vue';
+
+const ACTION_LABELS = {
+  like: 'Liked', favorite: 'Favourited', download: 'Saved', share: 'Shared', revisit: 'Looked again',
+  deepDive: 'Deep Dived', tagTap: 'Tapped a tag', comments: 'Read comments', details: 'Opened details',
+  unmute: 'Unmuted', dislike: 'Disliked', report: 'Reported',
+};
 
 export default {
   name: 'ProfileAnalyticsView',
+  components: { TagMap },
   data() {
     return {
-      toggles: {
-        general: true,
-        artist: true,
-        character: true,
-        copyright: true,
-        meta: false // Danbooru meta tags
-      },
-      hideCommonTags: true,
-      minViews: {
-        likes: 25,
-        favorites: 25,
-        dislikes: 25
-      },
       loading: true,
-      rawHistory: [],
-      rawInteractions: [],
-      processedData: {
-        tagCounts: {},
-        tagPairCounts: {},
-        tagViews: {},
-        tagLikes: {},
-        tagFavorites: {},
-        tagDislikes: {},
-        videoTimes: []
+      analysis: null,
+      story: { ready: false, sections: [] },
+      feedMetrics: null,
+      selectedTag: null,
+      categories: CATEGORIES,
+      categoryNames: { artist: 'Artist', copyright: 'Series', character: 'Character', general: 'Theme' },
+      categoryTitles: { artist: 'Artists', copyright: 'Series', character: 'Characters', general: 'Themes' },
+      strategyNames: {
+        anchor: 'Your top interests', pivot: 'Top interests, older or newer', reach: 'Secondary and old favourites',
+        adjacent: 'Next to your interests', trending: 'Trending near your taste', wildcard: 'Popular overall',
+        fallback: 'Broad fallback', deepDive: 'Deep Dive', unknown: 'Search and other pages',
       },
-      loadedTagScores: {},
-      commonTagsInput: COMMON_TAGS.join(' ')
     };
   },
   computed: {
-    parsedCommonTags() {
-        if (!this.commonTagsInput) return [];
-        return this.commonTagsInput.split(' ').map(t => t.trim()).filter(Boolean);
+    selected() { return this.selectedTag ? this.analysis?.tags.get(this.selectedTag) || null : null; },
+    related() {
+      const graph = this.analysis?.graph;
+      if (!graph || !this.selectedTag) return [];
+      const index = graph.nodes.findIndex(node => node.tag === this.selectedTag);
+      if (index === -1) return [];
+      return graph.edges
+        .filter(edge => edge.source === index || edge.target === index)
+        .sort((a, b) => b.weight - a.weight)
+        .map(edge => graph.nodes[edge.source === index ? edge.target : edge.source]);
     },
-
-    // Filter tags based on toggles
-    // We will re-compute the display lists from processedData + toggles
-    
-    activeCategories() {
-       return Object.keys(this.toggles).filter(k => this.toggles[k]);
+    tiles() {
+      const e = this.analysis.engagement;
+      return [
+        { label: 'Posts seen', value: e.impressions, note: `${Math.round(e.activeMinutes)} active minutes` },
+        { label: 'Held your attention', value: this.pct(e.positiveRate) },
+        { label: 'Skipped quickly', value: this.pct(e.skipRate) },
+        { label: 'Enjoyed without a like', value: this.pct(e.silentShare), note: 'learned from watch time' },
+        e.videos.completionRate !== null
+          ? { label: 'Clips watched to the end', value: this.pct(e.videos.completionRate), note: e.videos.rewatchRate ? `${this.pct(e.videos.rewatchRate)} rewatched` : '' }
+          : { label: 'Typical look at an image', value: e.images.medianSeconds !== null ? `${e.images.medianSeconds.toFixed(1)}s` : '–' },
+      ];
     },
-
-    recommendationTagScores() {
-        // Filter out hidden tags
-        const filtered = Object.entries(this.loadedTagScores)
-            .filter(([tag]) => this.isTagHidden(tag) === false)
-            .slice(0, 50);
-        return Object.fromEntries(filtered);
+    actionBars() {
+      const actions = this.analysis.engagement.actions;
+      const max = Math.max(1, ...Object.values(actions));
+      return Object.entries(actions)
+        .filter(([, count]) => count > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([type, count]) => ({ type, count, label: ACTION_LABELS[type] || type, width: `${(count / max) * 100}%` }));
     },
-
-    topTags() {
-        const sorted = Object.entries(this.processedData.tagCounts)
-            .filter(([tag]) => this.isTagHidden(tag) === false)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 50);
-        return Object.fromEntries(sorted);
+    peakHourLabel() {
+      const hours = this.analysis.engagement.hours;
+      return this.hourLabel(hours.indexOf(Math.max(...hours)));
     },
-
-    topDislikedTags() {
-        const sorted = Object.entries(this.processedData.tagDislikes)
-            .filter(([tag]) => this.isTagHidden(tag) === false)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 50);
-        return Object.fromEntries(sorted);
+    changeGroups() {
+      const a = this.analysis;
+      return [
+        { title: 'New this week', entries: a.newInterests, chip: 'bg-green-900/60 text-green-200 hover:bg-green-800' },
+        { title: 'Warming up to', entries: a.rising, chip: 'bg-pink-900/60 text-pink-200 hover:bg-pink-800' },
+        { title: 'Gone quiet', entries: a.fading, chip: 'bg-gray-700 text-gray-300 hover:bg-gray-600' },
+      ].filter(group => group.entries.length);
     },
-
-    topTagPairs() {
-         const sorted = Object.entries(this.processedData.tagPairCounts)
-            .filter(([pair]) => {
-                const parts = pair.split(' + ');
-                return parts.every(t => !this.isTagHidden(t));
-            })
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 50);
-        return Object.fromEntries(sorted);
-    },
-
-
-
-    pieData() {
-        // Use loaded tag scores for the pie chart (top 10 tags)
-        const sorted = Object.entries(this.loadedTagScores)
-             .filter(([tag]) => !this.isTagHidden(tag))
-             .filter(([, score]) => score > 0)
-            .sort((a, b) => b[1] - a[1]);
-        
-        if (sorted.length === 0) return [];
-
-        const top10 = sorted.slice(0, 10);
-        
-        const data = top10.map(([label, value], index) => ({
-            label, 
-            value, 
-            color: this.getPieColor(index)
-        }));
-
-        const total = data.reduce((sum, d) => sum + d.value, 0);
-        return data.map(d => ({ ...d, percentage: ((d.value / total) * 100).toFixed(1) }));
-    },
-
-    pieSlices() {
-        let cumulativePercent = 0;
-        return this.pieData.map(slice => {
-            const percent = parseFloat(slice.percentage);
-            const dashArray = `${percent * 2.51} 251.2`; // 2 * PI * 40 ≈ 251.2
-            const dashOffset = -cumulativePercent * 2.51;
-            cumulativePercent += percent;
-            return { ...slice, dashArray, dashOffset };
-        });
-    },
-
-    likeRates() {
-        return this.calculateRates(this.processedData.tagLikes, this.minViews.likes);
-    },
-
-    favoriteRates() {
-        return this.calculateRates(this.processedData.tagFavorites, this.minViews.favorites);
-    },
-
-    dislikeRates() {
-        return this.calculateRates(this.processedData.tagDislikes, this.minViews.dislikes);
-    },
-
-    videoStats() {
-        const count = this.processedData.videoTimes.length;
-        if (count === 0) return { avgWatchTime: 0, totalVideosWatched: 0 };
-        
-        const totalTime = this.processedData.videoTimes.reduce((a, b) => a + b, 0);
-        return {
-            avgWatchTime: (totalTime / count / 1000).toFixed(1),
-            totalVideosWatched: count
-        };
-    }
   },
   async mounted() {
-    // Ensure recommendation system is initialized (loads from IndexedDB)
-    await RecommendationSystem.initialize();
     await this.calculateAnalytics();
   },
   methods: {
-    capitalize(s) {
-      return s.charAt(0).toUpperCase() + s.slice(1);
-    },
-    formatScore(score) {
-      // Display raw recommendation score (not percentage - that was misleading)
-      return score.toFixed(2);
-    },
-    getPieColor(i) {
-        const colors = [
-            '#ec4899', '#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', // pink, violet, blue, emerald, amber
-            '#ef4444', '#06b6d4', '#84cc16', '#f97316', '#6366f1'  // red, cyan, lime, orange, indigo
-        ];
-        return colors[i % colors.length];
-    },
-    isTagHidden(tag) {
-        if (this.hideCommonTags && this.parsedCommonTags.includes(tag)) return true;
-
-        // Tag categorization logic
-        // We need to look up the tag type. 
-        // Since we aggregated counts but maybe not types in the simple map, we might need a tagTypeMap.
-        const type = this.processedData.tagTypeMap[tag] || 'general';
-        // Note: Danbooru types: 0=general, 1=artist, 3=copyright, 4=character, 5=meta
-        // We mapped them to strings in processing
-        return !this.toggles[type];
-    },
-    calculateRates(interactionMap, minViewThreshold = 3) {
-        return Object.entries(interactionMap)
-            .filter(([tag]) => !this.isTagHidden(tag))
-            .map(([tag, count]) => {
-                const views = this.processedData.tagViews[tag] || 0;
-                if (views < minViewThreshold) return null;
-                return {
-                    tag,
-                    favorites: count, // or likes
-                    likes: count, // reused structure
-                    dislikes: count, // reused structure
-                    views,
-                    rate: ((count / views) * 100).toFixed(1)
-                };
-            })
-            .filter(Boolean)
-            .sort((a, b) => parseFloat(b.rate) - parseFloat(a.rate))
-            .slice(0, 50);
-    },
     async calculateAnalytics() {
       this.loading = true;
-      
-      this.loadedTagScores = await RecommendationSystem.summarizeTagScores(50);
-      
-      // 1. Fetch Data
-      // view history: { postId: { lastViewed, data: post } }
-      const history = await StorageService.getViewedPosts(); 
-      // interactions: [ { type, postId, value, metadata } ]
-      const interactions = await StorageService.getInteractions();
-
-      const tagCounts = {};
-      const tagPairCounts = {};
-      const tagViews = {};
-      const tagTypeMap = {}; // tag -> 'general' | 'artist' | ...
-      
-      const tagLikes = {};
-      const tagFavorites = {};
-      const tagDislikes = {};
-      const videoTimes = [];
-
-      // Process View History for Tops & Pairs
-      Object.values(history).forEach(entry => {
-          const post = entry.data;
-          if (!post) return;
-
-          // Categorize and Collect Tags
-          const tags = this.extractTagsWithType(post);
-          
-          // Count Tags & Views
-          tags.forEach(({ name, type }) => {
-              tagCounts[name] = (tagCounts[name] || 0) + 1;
-              tagViews[name] = (tagViews[name] || 0) + 1;
-              tagTypeMap[name] = type;
-          });
-
-          // Tag Pairs (nCr pairs) - Only within same post
-          // Limit to avoid n^2 explosion on heavy tags? Danbooru posts can have 50+ tags.
-          // Let's only pair "Copyright+Character" or "Artist+Character" or similar valuable pairs?
-          // or just all pairs but maybe limit to top 20 tags in the post?
-          // For simplicity, let's take all tags but filter significantly in display? 
-          // Actually, let's just do pairs for now.
-          for (let i = 0; i < tags.length; i++) {
-              for (let j = i + 1; j < tags.length; j++) {
-                  // Sort to ensure A+B is same as B+A
-                  const pair = [tags[i].name, tags[j].name].sort().join(' + ');
-                  tagPairCounts[pair] = (tagPairCounts[pair] || 0) + 1;
-              }
-          }
-      });
-
-      // Process Interactions for Rates
-      const likes = interactions.filter(i => i.type === 'like' && i.value > 0);
-      likes.forEach(i => {
-          const post = i.metadata?.post;
-          if(post) {
-             const tags = this.extractTagsWithType(post);
-             tags.forEach(({ name }) => {
-                 tagLikes[name] = (tagLikes[name] || 0) + 1;
-             });
-          }
-      });
-
-      const favorites = interactions.filter(i => i.type === 'favorite' && i.value > 0);
-      favorites.forEach(i => {
-           const post = i.metadata?.post;
-          if(post) {
-             const tags = this.extractTagsWithType(post);
-             tags.forEach(({ name }) => {
-                 tagFavorites[name] = (tagFavorites[name] || 0) + 1;
-             });
-          }
-      });
-
-      const dislikes = interactions.filter(i => i.type === 'dislike' && i.value > 0);
-      dislikes.forEach(i => {
-           const post = i.metadata?.post;
-          if(post) {
-             const tags = this.extractTagsWithType(post);
-             tags.forEach(({ name }) => {
-                 tagDislikes[name] = (tagDislikes[name] || 0) + 1;
-             });
-          }
-      });
-
-      // Process Time Spent (Video)
-      const timeSpent = interactions.filter(i => i.type === 'timeSpent' && i.metadata?.post?.file_ext && ['mp4','webm'].includes(i.metadata.post.file_ext));
-      timeSpent.forEach(i => {
-          if (i.value > 0) videoTimes.push(i.value);
-      });
-
-      this.processedData = {
-          tagCounts,
-          tagPairCounts,
-          tagViews,
-          tagTypeMap,
-          tagLikes,
-          tagFavorites,
-          tagDislikes,
-          videoTimes,
-      };
-      
-      this.loading = false;
+      try {
+        const [interactions, preferences] = await Promise.all([StorageService.getInteractions(), StorageService.getPreferences()]);
+        const avoided = Array.isArray(preferences?.avoidedTags) ? preferences.avoidedTags : COMMON_TAGS;
+        this.analysis = analyzeTaste(interactions, { avoided });
+        this.story = describeTaste(this.analysis);
+        this.feedMetrics = computeFeedMetrics(interactions, { since: Date.now() - 30 * 24 * 60 * 60 * 1000 });
+        this.selectedTag = this.analysis.liked[0]?.tag || null;
+      } finally {
+        this.loading = false;
+      }
     },
-    extractTagsWithType(post) {
-        // Danbooru JSON typically has tag_string_general, tag_string_character etc.
-        const tags = [];
-        
-        const processStr = (str, type) => {
-            if (!str) return;
-            str.split(' ').forEach(t => {
-                if (t.trim()) tags.push({ name: t.trim(), type });
-            });
-        };
-
-        if (post.tag_string_general) processStr(post.tag_string_general, 'general');
-        else if (post.tag_string) processStr(post.tag_string, 'general'); // Fallback if detailed fields missing
-
-        processStr(post.tag_string_artist, 'artist');
-        processStr(post.tag_string_character, 'character');
-        processStr(post.tag_string_copyright, 'copyright');
-        processStr(post.tag_string_meta, 'meta');
-
-        return tags;
-    }
-  }
+    label(entry) { return tagLabel(entry); },
+    segments(sentence) { return splitSegments(sentence); },
+    evidence(entry) { return tagEvidence(entry); },
+    whySentence(entry) {
+      const lift = entry.lift;
+      const strength = lift >= 2 ? 'far more often than' : lift >= 1.3 ? 'more often than' : lift >= 0.9 ? 'about as often as' : 'less often than';
+      return `You engaged with ${this.pct(entry.rate)} of the ${entry.impressions} ${this.label(entry)} posts you saw, ${strength} your average of ${this.pct(this.analysis.baseRate)}.`;
+    },
+    barWidth(entry, category) {
+      const top = this.analysis.topByCategory[category][0]?.score || 1;
+      return `${Math.max(6, (entry.score / top) * 100)}%`;
+    },
+    categoryColor(category) {
+      return tagColor(category);
+    },
+    hourHeight(count) {
+      const max = Math.max(1, ...this.analysis.engagement.hours);
+      return `${Math.max(count ? 4 : 1, (count / max) * 100)}%`;
+    },
+    hourLabel(hour) { return `${hour % 12 || 12}${hour < 12 ? 'am' : 'pm'}`; },
+    pct(value) { return value === null || value === undefined ? '–' : `${Math.round(value * 100)}%`; },
+    num(value, digits = 1) { return value === null || value === undefined ? '–' : Number(value).toFixed(digits); },
+  },
 };
 </script>
-
-<style scoped>
-.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-}
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(31, 41, 55, 0.5); 
-}
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(75, 85, 99, 0.8); 
-  border-radius: 3px;
-}
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(107, 114, 128, 1); 
-}
-</style>

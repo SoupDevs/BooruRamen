@@ -12,6 +12,7 @@
  * Handles persistent storage of user data and interactions using IndexedDB via Dexie.js
  */
 
+import { isPositiveEngagement } from './signals.js';
 import { db, migrateFromLocalStorage } from './db.js';
 
 // Run migration on module load
@@ -235,11 +236,7 @@ const getMostInteractedTags = async (limit = 10) => {
     // Count positive interactions with each tag
     interactions.forEach(interaction => {
       // Only count positive interactions
-      const isPositive = (
-        (interaction.type === 'like' && interaction.value > 0) ||
-        (interaction.type === 'favorite' && interaction.value > 0) ||
-        (interaction.type === 'timeSpent' && interaction.value > 5000) // 5 seconds
-      );
+      const isPositive = isPositiveEngagement(interaction.type, interaction.value, interaction.metadata?.engagement);
 
       if (isPositive && interaction.metadata && interaction.metadata.post) {
         const post = interaction.metadata.post;

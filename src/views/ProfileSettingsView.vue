@@ -1263,6 +1263,8 @@ export default {
         .filter(t => t.length > 0);
       const uniqueTags = [...new Set(tags)];
       await StorageService.storePreferences({ avoidedTags: uniqueTags });
+      // The feed only rebuilds the profile when it changed; apply now.
+      RecommendationSystem.updateUserProfile().catch(() => {});
       this.avoidedTagsInput = uniqueTags.join(' ');
       this.saveMessage = 'Settings saved!';
       setTimeout(() => { this.saveMessage = ''; }, 3000);

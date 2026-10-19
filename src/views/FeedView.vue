@@ -149,6 +149,7 @@
 import { mapState } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
+import { useInteractionsStore } from '../stores/interactions';
 import BooruService from '../services/BooruService';
 import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
@@ -172,6 +173,8 @@ import { contentKeys, excludeDuplicateContent } from '../services/contentIdentit
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
 const PAUSE_GLYPH_FADE_MS = 550;
+// How long a scrolled-back-to post must stay on screen to count as a revisit.
+const REVISIT_DWELL_MS = 2000;
 
 export default {
   name: 'FeedView',
@@ -349,13 +352,15 @@ export default {
     scheduleSessionRanking() {
       clearTimeout(this.sessionRankTimer);
       this.sessionRankTimer = setTimeout(async () => {
-        // Keep the visible row and scroll history fixed. Discard a ranking
-        // result if navigation or a background fetch changed the queue.
+        // Keep the visible row, scroll history and the preloaded runway
+        // fixed: swapping a post whose media is already buffering would
+        // waste the download and show a spinner. Discard a ranking result if
+        // navigation or a background fetch changed the queue.
         const posts = this.posts, index = this.currentPostIndex;
-        const start = Math.max(0, index + 1);
+        const start = Math.max(0, index + 1 + VIDEO_FRAME_RUNWAY_AHEAD);
         if (posts.length - start < 2) return;
         try {
-          const ranked = await this.recommendationSystem.rankPosts(posts.slice(start));
+          const ranked = await this.recommendationSystem.rankPosts(posts.slice(start), posts.slice(Math.max(0, start - 5), start));
           if (this.posts !== posts || this.currentPostIndex !== index) return;
           this.posts = [...posts.slice(0, start), ...ranked];
           this.analyzeUpcomingImages();
@@ -432,20 +437,25 @@ export default {
       }
 
       // Get view history to exclude seen posts
-      const viewedHistory = await StorageService.getViewedPosts();
-      this.historyContentKeys = new Set(Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)));
+      // View history only grows by the posts this feed shows (which are in
+      // this.posts), so it is read once per search instead of on every fetch:
+      // a long history made each runway refill slower.
+      if (newSearch || !this._historyKeys) {
+        const viewedHistory = await StorageService.getViewedPosts();
+        this.historyContentKeys = new Set(Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)));
+        this._historyKeys = new Set([...Object.keys(viewedHistory), ...this.historyContentKeys]);
+      }
       // Reported/blocked posts, artists, and uploaders must never enter the feed
       const blockSets = await ReportService.getBlockSets();
       // Create a set of IDs to exclude (viewed history + currently loaded posts + reported posts)
-      const blockedKeys = new Set([
-        ...Object.keys(viewedHistory),
-        ...Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)),
-        ...this.posts.map(p => this.getCompositeKey(p)),
-        ...this.posts.flatMap(contentKeys),
-        ...blockSets.postKeys
-      ]);
-      
-      console.log(`FetchPosts: Blocked ${Object.keys(viewedHistory).length} from history, ${this.posts.length} from current. Total blocked IDs: ${blockedKeys.size}`);
+      const blockedKeys = new Set(this._historyKeys);
+      for (const p of this.posts) {
+        blockedKeys.add(this.getCompositeKey(p));
+        contentKeys(p).forEach(key => blockedKeys.add(key));
+      }
+      blockSets.postKeys.forEach(key => blockedKeys.add(key));
+
+      console.log(`FetchPosts: ${this.posts.length} loaded. Total blocked IDs: ${blockedKeys.size}`);
 
       if (newSearch) {
         Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
@@ -453,6 +463,7 @@ export default {
         this.page = 1;
         this.posts = [];
         this.currentPostIndex = -1;
+        this._maxViewedIndex = -1;
         this.currentPostKey = null;
         this._hasUserScrolled = false;
         if (this.$refs.feedContainer) {
@@ -484,6 +495,11 @@ export default {
         const targetCount = 5;
         let attempts = 0;
         const maxAttempts = 15;
+        // Each attempt already walks every strategy and paged fallback, so a
+        // few empty attempts in a row mean the search is used up. Without this
+        // a narrow whitelist fired ~90 booru requests before giving up.
+        const maxEmptyAttempts = 3;
+        let emptyAttempts = 0;
 
         const fetchFunction = (queryParams, limit) => {
           return BooruService.getPosts({ 
@@ -501,7 +517,7 @@ export default {
         const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
         const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
 
-        while (newPosts.length < targetCount && attempts < maxAttempts) {
+        while (newPosts.length < targetCount && attempts < maxAttempts && emptyAttempts < maxEmptyAttempts) {
           attempts++;
           
           const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
@@ -511,6 +527,8 @@ export default {
             whitelist: activeWhitelist,
             blacklist: activeBlacklist,
             existingPostIds: blockedKeys,
+            // Diversity carries across batches: what the user just saw.
+            contextPosts: [...this.posts, ...newPosts].slice(-5),
             // Fall back to the saved settings (not hardcoded true) so filters apply
             // on first load, before the user ever hits "Apply Settings" (#150)
             wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : this.mediaType.images,
@@ -518,6 +536,7 @@ export default {
           });
           if (this.feedDisposed || modeGeneration !== deepDiveState.generation) return;
           
+          emptyAttempts = batch.length > 0 ? 0 : emptyAttempts + 1;
           if (batch.length > 0) {
             // Drop anything blocked via Report/Block (post, artist, or uploader)
             const allowedBatch = excludeDuplicateContent(ReportService.filterPosts(batch, blockSets), blockedKeys);
@@ -624,6 +643,17 @@ export default {
         this.primeNeighbouringVideos();
         this.analyzeUpcomingImages();
         
+        // Scrolling back up to a post and staying on it is one of the
+        // strongest implicit signals there is.
+        clearTimeout(this._revisitTimer);
+        if (currentPost && calculatedIndex < (this._maxViewedIndex ?? -1)) {
+          this._revisitTimer = setTimeout(() => {
+            if (this.currentPostKey !== currentPostKey || this.feedDisposed) return;
+            useInteractionsStore().logInteraction({ postId: currentPost.id, type: 'revisit', value: 1, metadata: { post: currentPost } });
+          }, REVISIT_DWELL_MS);
+        }
+        this._maxViewedIndex = Math.max(this._maxViewedIndex ?? -1, calculatedIndex);
+
         if (currentPost) {
           const videoEl = this.videoElements[this.getCompositeKey(currentPost)] || null;
           this.$emit('current-post-changed', currentPost, videoEl);
@@ -1108,6 +1138,7 @@ export default {
     });
   },
   beforeUnmount() {
+    clearTimeout(this._revisitTimer);
     this.feedDisposed = true;
     this.unsubscribeImageAnalysis?.();
     this.unsubscribeSession?.();

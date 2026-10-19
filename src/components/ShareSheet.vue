@@ -170,7 +170,7 @@ export default {
       default: null
     }
   },
-  emits: ['close'],
+  emits: ['close', 'shared'],
   data() {
     return {
       closing: false,
@@ -306,6 +306,7 @@ export default {
       // Remember the networks this user actually reaches for.
       useSettingsStore().recordShareUse(target.id);
       openExternalUrl(target.url);
+      this.$emit('shared', 'share');
       this.requestClose();
     },
     snapshotOrder() {
@@ -360,6 +361,7 @@ export default {
       const saved = await downloadPost(this.post, 'shared');
       this.downloading = false;
       this.downloaded = saved;
+      if (saved) this.$emit('shared', 'download');
       this.downloadError = !saved;
       clearTimeout(this.downloadTimer);
       this.downloadTimer = setTimeout(() => {
@@ -370,6 +372,7 @@ export default {
     async copyLink() {
       const copied = await copyToClipboard(this.postUrl);
       if (!copied) return;
+      this.$emit('shared', 'share');
       this.linkCopied = true;
       clearTimeout(this.copiedTimer);
       this.copiedTimer = setTimeout(() => {
@@ -383,6 +386,7 @@ export default {
           text: getShareText(this.post),
           url: this.postUrl
         });
+        this.$emit('shared', 'share');
         this.requestClose();
       } catch {
         // Dismissed by the user, or the platform refused the payload: leave

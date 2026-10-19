@@ -20,10 +20,15 @@
 import { useRouter } from 'vue-router';
 import recommendations, { deepDiveState as state } from '../services/RecommendationSystem.js';
 import { postKey } from '../services/postKey.js';
+import { useInteractionsStore } from '../stores/interactions.js';
 const props = defineProps({ post: { type: Object, default: null } });
 const emit = defineEmits(['started']);
 const router = useRouter();
 async function start() {
+  // Choosing a post to dive into is interest in it, but a dive is kept apart
+  // from the feed: logged as dive evidence, it reaches the profile at the
+  // reduced dive weight and never enters the feed's session interests.
+  if (props.post) useInteractionsStore().logInteraction({ postId: props.post.id, type: 'deepDive', value: 1, metadata: { post: props.post, deepDive: true } });
   if (!await recommendations.setDeepDive(props.post)) return;
   if (router.currentRoute.value.name !== 'Home') await router.push({ name: 'Home' });
   emit('started');

@@ -101,6 +101,16 @@
             <p v-else>
               <span class="text-pink-400 font-bold">Score:</span> {{ debugDetails.totalScore?.toFixed(3) }}
             </p>
+            <p v-if="debugDetails.mlHeads" class="text-xs">
+              <span class="text-gray-400">Heads:</span>
+              engage {{ debugDetails.mlHeads.engagement.toFixed(2) }} ·
+              no-skip {{ debugDetails.mlHeads.notSkip.toFixed(2) }} ·
+              positive {{ debugDetails.mlHeads.positive.toFixed(2) }}
+            </p>
+            <p v-if="debugDetails.uncertainty !== undefined && debugDetails.uncertainty !== null" class="text-xs">
+              <span class="text-gray-400">Uncertainty:</span> {{ debugDetails.uncertainty.toFixed(2) }}
+              <span v-if="currentPost._explore" class="text-cyan-300">(discovery slot)</span>
+            </p>
 
             <!-- ML Feature Breakdown -->
             <div v-if="debugDetails.mlFeatures" class="mt-2 border-t border-gray-700 pt-1">
@@ -302,6 +312,7 @@
         v-if="sharePost"
         :post="sharePost"
         @close="sharePost = null"
+        @shared="kind => logImplicit(kind, sharePost)"
       />
     </div>
     <BottomNavBar @navigate-feed="navigateToFeed" :class="focusChromeClass" />
@@ -342,6 +353,10 @@ import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 import AiModelDialog from './components/AiModelDialog.vue';
 import aiTagger from './services/AiTaggerService.js';
+import { WatchTimer, MIN_IMPRESSION_MS } from './services/WatchTimer.js';
+
+// Non-reactive: updated on every pointer move.
+const watchTimer = new WatchTimer();
 
 // Focus mode: how long the chrome stays on screen after the last input on
 // classic routes, and how long a tap-revealed chrome lingers on the feed.
@@ -406,10 +421,6 @@ export default {
       sliderRect: null,
       lastVideoPropUpdate: 0,
       
-      // Time tracking
-      watchStartTime: null,
-      accumulatedWatchTime: 0,
-      watchDeepDive: false,
       deepDiveState,
       
       // Sidebar filter state
@@ -423,8 +434,6 @@ export default {
       // Split watch time at mode boundaries. A long dive must not become
       // normal-session learning just because End was clicked before swiping.
       if (this.currentPost) this.saveWatchTime(this.currentPost);
-      this.accumulatedWatchTime = 0;
-      this.watchStartTime = null;
       if (this.currentPost) this.startWatchTimeTracking();
     },
     currentPost(newPost) {
@@ -459,8 +468,7 @@ export default {
         }
         this.currentPost = null;
         this.currentVideoElement = null;
-        this.watchStartTime = null;
-        this.accumulatedWatchTime = 0;
+        watchTimer.stop();
       }
       // Collapse settings sidebar when navigating to profile pages
       const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
@@ -626,9 +634,9 @@ export default {
           this.saveWatchTime(this.currentPost);
       }
       
-      this.watchStartTime = null;
-      this.accumulatedWatchTime = 0;
       this.startWatchTimeTracking();
+      // Its play event may have fired before this post became current.
+      if (videoEl && !videoEl.paused && !videoEl.ended) watchTimer.setPlaying(true);
 
       this.currentPost = post;
       this.currentVideoElement = videoEl;
@@ -685,24 +693,34 @@ export default {
     
 
     startWatchTimeTracking() {
-        this.watchStartTime = Date.now();
-        this.watchDeepDive = deepDiveState.active;
+        watchTimer.start({ deepDive: deepDiveState.active });
     },
 
     saveWatchTime(post) {
-        let totalTime = this.accumulatedWatchTime;
-        if (this.watchStartTime) {
-            totalTime += (Date.now() - this.watchStartTime);
-        }
-        
-        if (totalTime > 1000) {
+        // Active time only (see WatchTimer). Quick skips are logged too:
+        // they are the clearest "not interested" signal the feed gets.
+        const watched = watchTimer.stop();
+        if (watched && watched.ms >= MIN_IMPRESSION_MS) {
+            // Clip length turns watch time into completion; this still
+            // points at the outgoing post's video when called on post change.
+            const duration = this.currentVideoElement?.duration;
             this.logInteraction({
                 postId: post.id,
                 type: 'timeSpent',
-                value: totalTime,
-                metadata: { post, deepDive: this.watchDeepDive }
+                value: watched.ms,
+                metadata: {
+                    post,
+                    deepDive: !!watched.context?.deepDive,
+                    ...(Number.isFinite(duration) && duration > 0 && { mediaDuration: duration })
+                }
             });
         }
+    },
+    onWatchActivity() {
+        watchTimer.activity();
+    },
+    onVisibilityChange() {
+        watchTimer.setHidden(document.hidden);
     },
     getRatingFromCode(rating) {
       const ratingMap = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
@@ -746,6 +764,13 @@ export default {
     },
     togglePostDetails() {
       this.showPostDetails = !this.showPostDetails;
+      if (this.showPostDetails) this.logImplicit('details', this.currentPost);
+    },
+    // Implicit interest: actions that say "I care about this post" without
+    // a like. Each counts once per post per session (see SessionInterest).
+    logImplicit(type, post, metadata = {}) {
+      if (!post) return;
+      this.logInteraction({ postId: post.id, type, value: 1, metadata: { post, ...metadata } });
     },
 
     openReportModal() {
@@ -791,6 +816,7 @@ export default {
       useEffectsStore().triggerBurst(post, type);
     },
     onReported() {
+      this.logImplicit('report', this.reportModalPost);
       this.reportModalPost = null;
       // Refresh the feed so newly blocked content (including the reported post
       // itself, if it's already loaded) is fetched fresh and filtered out
@@ -877,6 +903,7 @@ export default {
     openComments(post) {
       if (!post) return;
       this.commentsPost = post;
+      this.logImplicit('comments', post);
     },
 
     async downloadPostFile(post, type) {
@@ -1053,7 +1080,10 @@ export default {
     },
     handleVideoStateChange(state) {
         // Update local state from event, relying on store writable computing to update store via setters
-        if (state.isPlaying !== undefined) this.isPlaying = state.isPlaying;
+        if (state.isPlaying !== undefined) {
+            this.isPlaying = state.isPlaying;
+            watchTimer.setPlaying(state.isPlaying);
+        }
         // Progress is driven per-frame by startProgressLoop while a video
         // element is current; the coarse timeupdate value is only a fallback.
         if (state.progress !== undefined && !this._progressRafId) this.videoProgress = state.progress;
@@ -1149,6 +1179,7 @@ export default {
     },
     toggleMute() {
         this.muted = !this.muted; // Update store
+        if (!this.muted && this.currentVideoElement) this.logImplicit('unmute', this.currentPost);
         if (this.currentVideoElement) {
             this.currentVideoElement.muted = this.muted;
         }
@@ -1213,6 +1244,10 @@ export default {
       window.addEventListener('pointermove', this.handleUserActivity);
       window.addEventListener('pointerdown', this.handleUserActivity);
       window.addEventListener('wheel', this.pokeFocusUi, { passive: true });
+      for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) {
+          window.addEventListener(type, this.onWatchActivity, { passive: true });
+      }
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
 
       // Check for a new release on app open. Only in the installed app:
       // dev builds in the browser would always trail the published version.
@@ -1228,6 +1263,10 @@ export default {
       window.removeEventListener('pointermove', this.handleUserActivity);
       window.removeEventListener('pointerdown', this.handleUserActivity);
       window.removeEventListener('wheel', this.pokeFocusUi, { passive: true });
+      for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) {
+          window.removeEventListener(type, this.onWatchActivity, { passive: true });
+      }
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
       clearTimeout(this._focusTimer);
       clearTimeout(this._focusImageTimer);
       clearTimeout(this._hideControlsTimer);

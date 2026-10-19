@@ -3,7 +3,7 @@
  * Lightweight Multi-Layer Perceptron for post engagement prediction.
  *
  * Architecture:
- *   Input (179 features) → Dense(32, ReLU) → Dense(16, ReLU) → Dense(1, Sigmoid)
+ *   Input (179 features) → Dense(32, ReLU) → Dense(16, ReLU) → 3 sigmoid heads (engagement, not-skip, positive)
  *
  * Features per post:
  *   - [0..31]  User top-tag embedding, affinity-weighted, unit-normalized (32d)
@@ -33,12 +33,23 @@ import StorageService from '../services/StorageService';
 import tagEmbedding from './TagEmbedding';
 import { VISUAL_FEATURE_COUNT, writeVisualFeatures, learningPost } from './imageFeatures.js';
 import { postKey } from './postKey.js';
+import { engagementLabel, SAMPLE_WEIGHTS, SKIP_LABEL } from './signals.js';
+
+const headTargets = label => [label, label > SKIP_LABEL ? 1 : 0, label >= POSITIVE_TARGET ? 1 : 0];
 
 const EMB_DIM = 32;              // must match TagEmbedding EMBEDDING_DIM
 const INPUT_DIM = 82 + VISUAL_FEATURE_COUNT;
 const HIDDEN1 = 32;
 const HIDDEN2 = 16;
-const OUTPUT_DIM = 1;
+// Output heads, each a sigmoid trained with its own target:
+//   0: expected engagement (the soft label)
+//   1: P(not skipped)
+//   2: P(strong positive: engaged dwell, like, favourite, download, share...)
+// Separate heads let the model tell "always watches, never likes" apart from
+// "likes on sight but scrolls fast"; the ranking score blends them.
+const OUTPUT_DIM = 3;
+const HEAD_WEIGHTS = [0.5, 0.2, 0.3];
+const POSITIVE_TARGET = 0.6;
 const TRAIN_THRESHOLD = 20;      // minimum interactions before ML kicks in
 const LEARNING_RATE = 0.02;
 const MOMENTUM = 0.9;
@@ -48,42 +59,29 @@ const REPLAY_EPOCHS = 2;         // shuffled passes over the replay buffer per f
 const TOP_TAG_FEATURES = 10;      // number of top user tag affinities to expose as features
 const REPLAY_CAP = 300;          // max training samples kept for replay epochs
 const MIN_LOSS = 0.05;           // early stopping threshold
+const POSTERIOR_PRIOR = 1.0;     // ridge prior for the neural-linear posterior
 
-// Interaction type to label mapping (engagement score in [0, 1])
-const INTERACTION_LABELS = {
-  like: 0.8,
-  favorite: 1.0,
-  dislike: 0.0,
-  view: 0.3,          // base for a quick view
-  timeSpent: 0.5,     // will be adjusted by duration
-};
-
-// timeSpent below this is a swipe-away: label it as a negative signal
-// instead of dropping it — skips are the main source of negative examples.
-const SKIP_THRESHOLD_MS = 2000;
-const SKIP_LABEL = 0.1;
-
-// Gradient importance per interaction type. Explicit actions are rare but
-// carry far more preference signal than ambient watch-time samples; without
-// weighting, the flood of mid-label timeSpent samples drowns them out and
-// predictions collapse toward the dataset mean.
-const SAMPLE_WEIGHTS = {
-  favorite: 3.0,
-  like: 2.5,
-  dislike: 3.0,
-  view: 1.0,
-  timeSpent: 1.0,
-  timeSpentSkip: 1.5,
-};
-
-/**
- * Map a timeSpent duration to an engagement label.
- * < 2s reads as "skipped"; 2s..30s ramps 0.3 → 0.9.
- */
-function timeSpentLabel(valueMs) {
-  const seconds = valueMs / 1000;
-  if (valueMs < SKIP_THRESHOLD_MS) return SKIP_LABEL;
-  return Math.min(0.9, 0.3 + ((seconds - 2) / 28) * 0.6);
+/** Gauss-Jordan inverse of a small positive-definite matrix. */
+function invertSymmetric(matrix) {
+  const n = matrix.length;
+  const a = matrix.map(row => Float64Array.from(row));
+  const inv = Array.from({ length: n }, (_, i) => { const row = new Float64Array(n); row[i] = 1; return row; });
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(a[r][col]) > Math.abs(a[pivot][col])) pivot = r;
+    if (Math.abs(a[pivot][col]) < 1e-12) return null;
+    [a[col], a[pivot]] = [a[pivot], a[col]];
+    [inv[col], inv[pivot]] = [inv[pivot], inv[col]];
+    const p = a[col][col];
+    for (let j = 0; j < n; j++) { a[col][j] /= p; inv[col][j] /= p; }
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = a[r][col];
+      if (!f) continue;
+      for (let j = 0; j < n; j++) { a[r][j] -= f * a[col][j]; inv[r][j] -= f * inv[col][j]; }
+    }
+  }
+  return inv;
 }
 
 class MLScorer {
@@ -113,6 +111,7 @@ class MLScorer {
     this.trainingHistory = [];  // loss history for monitoring
     this.pendingBatch = [];     // accumulate samples for mini-batch
     this.replayBuffer = [];     // recent samples re-trained on each flush
+    this.posteriorInv = null;   // neural-linear posterior over the last layer
 
     this._initializeWeights();
   }
@@ -206,6 +205,12 @@ class MLScorer {
       const means = new Float32Array(INPUT_DIM), stds = new Float32Array(INPUT_DIM).fill(1);
       means.set(this.featureMeans || []); stds.set(this.featureStds || []);
       this.featureMeans = means; this.featureStds = stds;
+    }
+    // Single-head models: every head starts as a copy of the old one, so the
+    // blended score is unchanged until training separates them.
+    if (this.weights3 && this.weights3[0]?.length === 1) {
+      this.weights3 = this.weights3.map(row => Float32Array.from({ length: OUTPUT_DIM }, () => row[0]));
+      this.bias3 = Float32Array.from({ length: OUTPUT_DIM }, () => this.bias3?.[0] || 0);
     }
     // Other incompatible dimensions still reset through init().
   }
@@ -354,6 +359,56 @@ class MLScorer {
    * @param {Float32Array} features - Input feature vector
    * @returns {number} - Predicted engagement probability [0, 1]
    */
+  /** Last hidden layer activations (the neural-linear feature space). */
+  _hidden(features) {
+    const h1 = new Float32Array(HIDDEN1);
+    for (let j = 0; j < HIDDEN1; j++) {
+      let sum = this.bias1[j];
+      for (let i = 0; i < INPUT_DIM; i++) sum += features[i] * this.weights1[i][j];
+      h1[j] = Math.max(0, sum);
+    }
+    const z = new Float64Array(HIDDEN2 + 1);
+    for (let j = 0; j < HIDDEN2; j++) {
+      let sum = this.bias2[j];
+      for (let i = 0; i < HIDDEN1; i++) sum += h1[i] * this.weights2[i][j];
+      z[j] = Math.max(0, sum);
+    }
+    z[HIDDEN2] = 1;
+    return z;
+  }
+
+  /**
+   * Neural-linear uncertainty: a Bayesian linear model over the last hidden
+   * layer, refit from the replay buffer after each training flush. Posts that
+   * land in a region of feature space the user has rarely reacted to get a
+   * high value; well-explored regions get a low one. Returns null until the
+   * posterior exists (e.g. right after a restart, before the first flush).
+   */
+  uncertainty(post, userTagScores, userProfile) {
+    if (!this.posteriorInv || !this.isTrained) return null;
+    const z = this._hidden(this.extractFeatures(post, userTagScores, userProfile));
+    let variance = 0;
+    for (let i = 0; i <= HIDDEN2; i++) {
+      let row = 0;
+      for (let j = 0; j <= HIDDEN2; j++) row += this.posteriorInv[i][j] * z[j];
+      variance += z[i] * row;
+    }
+    return Math.min(1, Math.sqrt(Math.max(0, variance)));
+  }
+
+  _refreshPosterior() {
+    if (this.replayBuffer.length < BATCH_SIZE) return;
+    const size = HIDDEN2 + 1;
+    const A = Array.from({ length: size }, (_, i) => {
+      const row = new Float64Array(size); row[i] = POSTERIOR_PRIOR; return row;
+    });
+    for (const { features, weight = 1 } of this.replayBuffer) {
+      const z = this._hidden(features);
+      for (let i = 0; i < size; i++) for (let j = 0; j < size; j++) A[i][j] += weight * z[i] * z[j];
+    }
+    this.posteriorInv = invertSymmetric(A);
+  }
+
   forward(features) {
     // Layer 1: input -> hidden1 (ReLU)
     const h1 = new Float32Array(HIDDEN1);
@@ -375,12 +430,23 @@ class MLScorer {
       h2[j] = Math.max(0, sum);  // ReLU
     }
 
-    // Layer 3: hidden2 -> output (Sigmoid)
-    let output = this.bias3[0];
-    for (let i = 0; i < HIDDEN2; i++) {
-      output += h2[i] * this.weights3[i][0];
-    }
-    return 1 / (1 + Math.exp(-output));  // Sigmoid
+    // Layer 3: hidden2 -> one sigmoid per head, blended
+    let score = 0;
+    for (const [k, headWeight] of HEAD_WEIGHTS.entries()) score += headWeight * this._head(h2, k);
+    return score;
+  }
+
+  _head(h2, k) {
+    let output = this.bias3[k];
+    for (let i = 0; i < HIDDEN2; i++) output += h2[i] * this.weights3[i][k];
+    return 1 / (1 + Math.exp(-output));
+  }
+
+  /** Per-head predictions for diagnostics: { engagement, notSkip, positive }. */
+  predictHeads(post, userTagScores, userProfile) {
+    if (this.interactionCount < TRAIN_THRESHOLD) return null;
+    const z = this._hidden(this.extractFeatures(post, userTagScores, userProfile));
+    return { engagement: this._head(z, 0), notSkip: this._head(z, 1), positive: this._head(z, 2) };
   }
 
   /**
@@ -423,27 +489,18 @@ class MLScorer {
    * @param {Map} userTagScores
    * @param {Object} userProfile
    */
-  addTrainingSample(post, interactionType, value, userTagScores, userProfile, profileWeight = 1) {
+  addTrainingSample(post, interactionType, value, userTagScores, userProfile, profileWeight = 1, engagement = null) {
     // Undo events (un-like, un-favorite, clearing a dislike) carry no
-    // preference signal — training on them poisons the labels: e.g. liking
-    // a post also logs a dislike-clear, which would train label 0.0 on a
-    // post the user just liked.
-    if ((interactionType === 'like' || interactionType === 'favorite' || interactionType === 'dislike') && !value) {
-      return;
-    }
-
-    // Compute label
-    let label = INTERACTION_LABELS[interactionType];
+    // preference signal and get no label: training on them would teach 0.0
+    // for a post the user just liked (liking also clears a dislike).
+    const label = engagementLabel(interactionType, value, engagement);
     let weight = SAMPLE_WEIGHTS[interactionType] || 1.0;
-    if (interactionType === 'timeSpent') {
-      label = timeSpentLabel(value);
-      if (label === SKIP_LABEL) weight = SAMPLE_WEIGHTS.timeSpentSkip;
-    }
+    if (interactionType === 'timeSpent' && label <= SKIP_LABEL) weight = SAMPLE_WEIGHTS.timeSpentSkip;
     if (label === undefined || !Number.isFinite(profileWeight) || profileWeight <= 0) return;
     weight *= Math.min(1, profileWeight);
 
     const features = this.extractFeatures(post, userTagScores, userProfile);
-    const sample = { features, label, weight, postKey: postKey(post) };
+    const sample = { features, label, targets: headTargets(label), weight, postKey: postKey(post) };
     this.pendingBatch.push(sample);
     this.replayBuffer.push(sample);
     if (this.replayBuffer.length > REPLAY_CAP) {
@@ -491,7 +548,7 @@ class MLScorer {
 
     let totalLoss = 0;
 
-    for (const { features, label, weight = 1 } of batch) {
+    for (const { features, label, targets = headTargets(label), weight = 1 } of batch) {
       // Forward pass (cache activations)
       const h1 = new Float32Array(HIDDEN1);
       for (let j = 0; j < HIDDEN1; j++) {
@@ -511,31 +568,27 @@ class MLScorer {
         h2[j] = Math.max(0, sum);
       }
 
-      let output = this.bias3[0];
-      for (let i = 0; i < HIDDEN2; i++) {
-        output += h2[i] * this.weights3[i][0];
-      }
-      const prediction = 1 / (1 + Math.exp(-output));
-
-      // Binary cross-entropy loss (importance-weighted)
+      // Weighted binary cross-entropy per head; heads share the trunk.
       const eps = 1e-7;
-      const loss = -(label * Math.log(prediction + eps) + (1 - label) * Math.log(1 - prediction + eps));
-      totalLoss += loss * weight;
-
-      // Backward pass
-      const dOutput = (prediction - label) * weight;  // derivative of weighted BCE with sigmoid
+      const dOutputs = new Float32Array(OUTPUT_DIM);
+      for (let k = 0; k < OUTPUT_DIM; k++) {
+        const prediction = this._head(h2, k);
+        const target = targets[k];
+        totalLoss += -(target * Math.log(prediction + eps) + (1 - target) * Math.log(1 - prediction + eps)) * weight / OUTPUT_DIM;
+        dOutputs[k] = (prediction - target) * weight;  // derivative of weighted BCE with sigmoid
+      }
 
       // Gradients for layer 3
-      for (let i = 0; i < HIDDEN2; i++) {
-        gW3[i][0] += dOutput * h2[i];
+      for (let k = 0; k < OUTPUT_DIM; k++) {
+        for (let i = 0; i < HIDDEN2; i++) gW3[i][k] += dOutputs[k] * h2[i];
+        gB3[k] += dOutputs[k];
       }
-      gB3[0] += dOutput;
 
       // Backprop to hidden2
       const dH2 = new Float32Array(HIDDEN2);
       for (let i = 0; i < HIDDEN2; i++) {
-        dH2[i] = dOutput * this.weights3[i][0];
-        if (h2[i] <= 0) dH2[i] = 0;  // ReLU derivative
+        if (h2[i] <= 0) continue;  // ReLU derivative
+        for (let k = 0; k < OUTPUT_DIM; k++) dH2[i] += dOutputs[k] * this.weights3[i][k];
       }
 
       // Gradients for layer 2
@@ -565,9 +618,11 @@ class MLScorer {
       }
     }
 
-    // Average gradients and apply SGD with momentum
+    // Average gradients and apply SGD with momentum. The gradients below are
+    // already divided by the batch size; dividing the learning rate by it as
+    // well shrank every step 16-fold and left the model badly underfit.
     const batchSize = batch.length;
-    const lr = LEARNING_RATE / batchSize;
+    const lr = LEARNING_RATE;
 
     for (let i = 0; i < INPUT_DIM; i++) {
       for (let j = 0; j < HIDDEN1; j++) {
@@ -595,15 +650,15 @@ class MLScorer {
       this.bias2[j] += this.vB2[j];
     }
 
-    for (let i = 0; i < HIDDEN2; i++) {
-      const grad = gW3[i][0] / batchSize + L2_LAMBDA * this.weights3[i][0];
-      this.vW3[i][0] = MOMENTUM * this.vW3[i][0] - lr * grad;
-      this.weights3[i][0] += this.vW3[i][0];
-    }
-    {
-      const grad = gB3[0] / batchSize;
-      this.vB3[0] = MOMENTUM * this.vB3[0] - lr * grad;
-      this.bias3[0] += this.vB3[0];
+    for (let k = 0; k < OUTPUT_DIM; k++) {
+      for (let i = 0; i < HIDDEN2; i++) {
+        const grad = gW3[i][k] / batchSize + L2_LAMBDA * this.weights3[i][k];
+        this.vW3[i][k] = MOMENTUM * this.vW3[i][k] - lr * grad;
+        this.weights3[i][k] += this.vW3[i][k];
+      }
+      const grad = gB3[k] / batchSize;
+      this.vB3[k] = MOMENTUM * this.vB3[k] - lr * grad;
+      this.bias3[k] += this.vB3[k];
     }
 
     // Record loss
@@ -632,6 +687,7 @@ class MLScorer {
     for (let e = 0; e < REPLAY_EPOCHS; e++) {
       this._trainReplayEpoch();
     }
+    this._refreshPosterior();
   }
 
   _trainReplayEpoch() {
@@ -653,6 +709,7 @@ class MLScorer {
    * Reset the model to untrained state.
    */
   reset() {
+    this.posteriorInv = null;
     this._initializeWeights();
     this.interactionCount = 0;
     this.isTrained = false;

@@ -26,8 +26,8 @@ export class DeepDiveInterest {
   refresh(post) {
     if (this.active && postKey(post) === postKey(this.anchor)) this.anchor = JSON.parse(JSON.stringify(post));
   }
-  profileWeight(post, type, value, avoided) {
-    return this.evidence.record(post, type, value, avoided) * DEEP_DIVE_PROFILE_SCALE;
+  profileWeight(post, type, value, avoided, engagement = null) {
+    return this.evidence.record(post, type, value, avoided, engagement) * DEEP_DIVE_PROFILE_SCALE;
   }
   queries(avoided = [], embeddings) {
     if (!this.anchor) return [];
