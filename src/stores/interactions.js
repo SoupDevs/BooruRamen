@@ -31,9 +31,13 @@ export const useInteractionsStore = defineStore('interactions', {
                 await StorageService.storeInteraction({ ...interaction, metadata: { ...interaction.metadata, profileWeight: diving ? 0.015 : 0.15, deepDive: diving } })
             }
 
-            // Update local state for reactivity
+            // Update local state for reactivity. Stored rows carry the post's
+            // source (see StorageService.storeInteraction); match on it so the
+            // same ID on another booru stays a different post.
+            const source = interaction.metadata?.post?.source ?? null
+            interaction = { ...interaction, source }
             const existingIndex = this.recentInteractions.findIndex(
-                i => i.postId === interaction.postId && i.type === interaction.type && i.source === interaction.source
+                i => i.postId === interaction.postId && i.type === interaction.type && (i.source ?? null) === source
             )
 
             if (existingIndex > -1) {
@@ -60,7 +64,9 @@ export const useInteractionsStore = defineStore('interactions', {
             // Note: StorageService.getPostInteractions just filters the full list.
 
             // Optimization: If we keep recentInteractions up to date, we can filter it.
-            const interactions = this.recentInteractions.filter(i => i.postId === post.id)
+            const source = post.source ?? null
+            // Rows saved without a source (older data) still match by ID
+            const interactions = this.recentInteractions.filter(i => i.postId === post.id && (i.source == null || i.source === source))
 
             return {
                 liked: interactions.some(i => i.type === 'like' && i.value > 0),

@@ -119,11 +119,15 @@ const getRecentInteractions = async (sinceTimestamp) => {
 };
 
 /**
- * Get interactions by post ID
+ * Get interactions by post ID. Post IDs are only unique within one booru,
+ * so pass the post's source to leave out another booru's post with the
+ * same ID (rows stored without a source still match).
  */
-const getPostInteractions = async (postId) => {
+const getPostInteractions = async (postId, source = undefined) => {
   try {
-    return await db.interactions.where('postId').equals(postId).toArray();
+    const rows = await db.interactions.where('postId').equals(postId).toArray();
+    if (source === undefined) return rows;
+    return rows.filter(row => row.source == null || row.source === source);
   } catch (error) {
     console.error('Error getting post interactions:', error);
     return [];
