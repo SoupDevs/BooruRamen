@@ -2,6 +2,10 @@ import { defineStore } from 'pinia'
 import StorageService from '../services/StorageService'
 import RecommendationSystem, { deepDiveState } from '../services/RecommendationSystem'
 
+// The only interactions getPostStatus reads. Views and watch time make up
+// most of the history and each carries a full post copy.
+const STATUS_TYPES = ['like', 'favorite', 'dislike']
+
 export const useInteractionsStore = defineStore('interactions', {
     state: () => ({
         // We can keep a local cache of recent interactions if needed for reactivity
@@ -15,7 +19,7 @@ export const useInteractionsStore = defineStore('interactions', {
     actions: {
         async initialize() {
             if (this.initialized) return
-            this.recentInteractions = await StorageService.getInteractions()
+            this.recentInteractions = await StorageService.getInteractions(STATUS_TYPES)
             this.initialized = true
         },
 
@@ -24,16 +28,22 @@ export const useInteractionsStore = defineStore('interactions', {
             // Route real UI interactions through the session learner before
             // persistence; recording here separately would lose its weight.
             try {
-                await RecommendationSystem.trackInteraction(interaction.postId, interaction.type, interaction.value, interaction.metadata?.post, false, { deepDive: diving, mediaDuration: interaction.metadata?.mediaDuration, tag: interaction.metadata?.tag })
+                await RecommendationSystem.trackInteraction(interaction.postId, interaction.type, interaction.value, interaction.metadata?.post, false, { deepDive: diving, mediaDuration: interaction.metadata?.mediaDuration, tag: interaction.metadata?.tag, autoScroll: interaction.metadata?.autoScroll })
             } catch (error) {
                 console.warn('[Interactions] Session learner unavailable:', error.message)
                 // A worker failure must not lose the user's explicit actions.
                 await StorageService.storeInteraction({ ...interaction, metadata: { ...interaction.metadata, profileWeight: diving ? 0.015 : 0.15, deepDive: diving } })
             }
 
-            // Update local state for reactivity
+            if (!STATUS_TYPES.includes(interaction.type)) return
+
+            // Update local state for reactivity. Stored rows carry the post's
+            // source (see StorageService.storeInteraction); match on it so the
+            // same ID on another booru stays a different post.
+            const source = interaction.metadata?.post?.source ?? null
+            interaction = { ...interaction, source }
             const existingIndex = this.recentInteractions.findIndex(
-                i => i.postId === interaction.postId && i.type === interaction.type && i.source === interaction.source
+                i => i.postId === interaction.postId && i.type === interaction.type && (i.source ?? null) === source
             )
 
             if (existingIndex > -1) {
@@ -60,7 +70,9 @@ export const useInteractionsStore = defineStore('interactions', {
             // Note: StorageService.getPostInteractions just filters the full list.
 
             // Optimization: If we keep recentInteractions up to date, we can filter it.
-            const interactions = this.recentInteractions.filter(i => i.postId === post.id)
+            const source = post.source ?? null
+            // Rows saved without a source (older data) still match by ID
+            const interactions = this.recentInteractions.filter(i => i.postId === post.id && (i.source == null || i.source === source))
 
             return {
                 liked: interactions.some(i => i.type === 'like' && i.value > 0),
