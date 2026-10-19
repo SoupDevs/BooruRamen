@@ -1,7 +1,27 @@
 # Feed & Recommendation Roadmap
 
-Scoping document, written 2026-10-19 against `edeee93`. No code has been changed.
+Scoping document, written 2026-10-19 against `edeee93`.
 `RECOMMENDATION_ENGINE_ANALYSIS.md` predates the ML scorer, bandit, session learner and Deep Dive, so treat it as historical.
+
+## Status (PR #185)
+
+| Item | State |
+|---|---|
+| 1.1 Active-only watch time, 1.2 log fast skips | Done (`WatchTimer.js`) |
+| 1.3 Normalised dwell, 1.4 implicit actions, 1.5 one signal module | Done (`signals.js`) |
+| 1.6 Impression log | Done through stored `_score` / `_explore` / `_strategy` on each impression |
+| 2.1 Bandit credit, 2.2 strategy bonuses | Done |
+| 2.3 Multi-objective heads | Done (engagement / not-skip / positive); also fixed a 16× too-small learning rate |
+| 2.4 Uncertainty-driven exploration | Done (neural-linear posterior, tag-evidence fallback) |
+| 2.5 Diversity, 2.6 satiation and negative momentum | Done (`Diversity.js`, `SessionInterest`) |
+| 2.6 SASRec-style sequence model | Not done: satiation + negative momentum first; revisit once Feed Quality data shows a need |
+| 2.7 Two-speed profile | Done (180-day core, dormant favourites resurface via reach) |
+| 3.1 Global tag graph, 3.2 adjacent arm, 3.3 personalised trending | Done (`GlobalTagGraph.js`) |
+| 3.4 Noise tags | Partly: queries are IDF-weighted; the avoided-tags list stays as a user setting |
+| 3.5 AI tags in the graph | Done (the graph learns from `learningPost`, which merges AI tags) |
+| 4.1 Candidate pool, 4.2 profile off fetch path, 4.3 frozen runway, 4.4 no dead-end, 4.5 seen-filter | Done |
+| 4.6 Readiness-aware ordering | Not done |
+| 5 Measurement | Done: Feed Quality card on Profile Analytics (skip/engaged rates, progressive-validation AUC, sessions, per-strategy and discovery yield) |
 
 ## Where the engine stands
 
