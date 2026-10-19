@@ -363,6 +363,15 @@ export class DanbooruAdapter extends BooruAdapter {
             post.file_url = post.large_file_url;
         }
 
+        // Ugoira (Pixiv animations) are stored as a zip of frames, which
+        // nothing here can play, but Danbooru also renders them as a webm
+        // sample. Present that as the post's file; the zip stays reachable.
+        if (post.file_ext === 'zip' && /\.webm(?:$|\?)/i.test(post.large_file_url || '')) {
+            post.ugoira_zip_url = post.file_url;
+            post.file_url = post.large_file_url;
+            post.file_ext = 'webm';
+        }
+
         post.post_url = `${this.baseUrl}/posts/${post.id}`;
         // post.source from the API is the artist-reported source (e.g. a pixiv
         // link); keep it around before overwriting source with the booru URL,
