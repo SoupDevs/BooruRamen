@@ -169,6 +169,7 @@ import { postKey } from '../services/postKey';
 import tagSuggestion from '../services/TagSuggestionService';
 import imageAnalysis from '../services/ImageAnalysisService.js';
 import { contentKeys, excludeDuplicateContent } from '../services/contentIdentity.js';
+import { shortcutFor } from '../services/keyboardShortcuts.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
@@ -890,6 +891,22 @@ export default {
         this.autoScrollInterval = null;
       }
     },
+    // Up/Down (or K/J) move exactly one post, the keyboard twin of a swipe.
+    onShortcutKey(event) {
+      const action = shortcutFor(event);
+      if (action !== 'next' && action !== 'previous') return;
+      event.preventDefault();
+      this.scrollToPostIndex(this.currentPostIndex + (action === 'next' ? 1 : -1));
+    },
+    scrollToPostIndex(index) {
+      const container = this.$refs.feedContainer;
+      if (!container || container.clientHeight === 0) return;
+      if (index < 0 || index > this.lastScrollIndex) return;
+      container.scrollTo({
+        top: index * container.clientHeight,
+        behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
+      });
+    },
     _snapToNearestPost() {
       const container = this.$refs.feedContainer;
       if (!container) return;
@@ -1005,6 +1022,7 @@ export default {
     this.unsubscribeMode = recommendationSystem.subscribeMode(this.onRecommendationModeChanged);
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
     this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
+    window.addEventListener('keydown', this.onShortcutKey);
     // The autoScroll watcher runs before the container exists; a feed mounted
     // with autoscroll already on (Apply in settings, back from Profile) needs
     // its video-ended listener attached here or "wait for video" never advances.
@@ -1168,6 +1186,7 @@ export default {
     clearTimeout(this.sessionRankTimer);
     this.$refs.feedContainer.removeEventListener('scroll', this.handleScroll);
     this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
+    window.removeEventListener('keydown', this.onShortcutKey);
     if (this.observer) {
         this.observer.disconnect();
     }

@@ -342,6 +342,7 @@ import { useEffectsStore } from './stores/effects';
 import StorageService from './services/StorageService.js';
 import BooruService from './services/BooruService.js';
 import recommendationSystem, { deepDiveState } from './services/RecommendationSystem.js';
+import { isTypingTarget, shortcutFor } from './services/keyboardShortcuts.js';
 import DownloadService from './services/DownloadService.js';
 
 import BottomNavBar from './components/BottomNavBar.vue';
@@ -1187,10 +1188,27 @@ export default {
 
 
     
+    // L/F/D/I/M/Esc act on the post on screen; the feed handles up/down.
+    handlePostShortcut(e) {
+      const action = shortcutFor(e);
+      // Grids and profile pages keep the last post in currentPost; only the
+      // feed and the viewer show it.
+      const post = ['Home', 'Viewer'].includes(this.$route.name) ? this.currentPost : null;
+      if (action === 'like' && post) this.toggleLike(post);
+      else if (action === 'favorite' && post) this.toggleFavorite(post);
+      else if (action === 'dislike' && post) this.toggleDislike(post);
+      else if (action === 'details' && post) this.togglePostDetails();
+      else if (action === 'mute' && this.currentVideoElement) this.toggleMute();
+      else if (action === 'close' && this.showPostDetails) this.showPostDetails = false;
+      else return false;
+      e.preventDefault();
+      return true;
+    },
     handleKeydown(e) {
       this.pokeFocusUi();
-      if (e.target.tagName === 'INPUT') return;
+      if (isTypingTarget(e.target)) return;
       this.handleUserActivity();
+      if (this.handlePostShortcut(e)) return;
       if (e.code === 'Space') {
         e.preventDefault();
         this.togglePlayPause();
