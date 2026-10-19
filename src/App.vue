@@ -342,6 +342,10 @@ import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 import AiModelDialog from './components/AiModelDialog.vue';
 import aiTagger from './services/AiTaggerService.js';
+import { WatchTimer, MIN_IMPRESSION_MS } from './services/WatchTimer.js';
+
+// Non-reactive: updated on every pointer move.
+const watchTimer = new WatchTimer();
 
 // Focus mode: how long the chrome stays on screen after the last input on
 // classic routes, and how long a tap-revealed chrome lingers on the feed.
@@ -406,10 +410,6 @@ export default {
       sliderRect: null,
       lastVideoPropUpdate: 0,
       
-      // Time tracking
-      watchStartTime: null,
-      accumulatedWatchTime: 0,
-      watchDeepDive: false,
       deepDiveState,
       
       // Sidebar filter state
@@ -423,8 +423,6 @@ export default {
       // Split watch time at mode boundaries. A long dive must not become
       // normal-session learning just because End was clicked before swiping.
       if (this.currentPost) this.saveWatchTime(this.currentPost);
-      this.accumulatedWatchTime = 0;
-      this.watchStartTime = null;
       if (this.currentPost) this.startWatchTimeTracking();
     },
     currentPost(newPost) {
@@ -459,8 +457,7 @@ export default {
         }
         this.currentPost = null;
         this.currentVideoElement = null;
-        this.watchStartTime = null;
-        this.accumulatedWatchTime = 0;
+        watchTimer.stop();
       }
       // Collapse settings sidebar when navigating to profile pages
       const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
@@ -626,9 +623,9 @@ export default {
           this.saveWatchTime(this.currentPost);
       }
       
-      this.watchStartTime = null;
-      this.accumulatedWatchTime = 0;
       this.startWatchTimeTracking();
+      // Its play event may have fired before this post became current.
+      if (videoEl && !videoEl.paused && !videoEl.ended) watchTimer.setPlaying(true);
 
       this.currentPost = post;
       this.currentVideoElement = videoEl;
@@ -685,24 +682,27 @@ export default {
     
 
     startWatchTimeTracking() {
-        this.watchStartTime = Date.now();
-        this.watchDeepDive = deepDiveState.active;
+        watchTimer.start({ deepDive: deepDiveState.active });
     },
 
     saveWatchTime(post) {
-        let totalTime = this.accumulatedWatchTime;
-        if (this.watchStartTime) {
-            totalTime += (Date.now() - this.watchStartTime);
-        }
-        
-        if (totalTime > 1000) {
+        // Active time only (see WatchTimer). Quick skips are logged too:
+        // they are the clearest "not interested" signal the feed gets.
+        const watched = watchTimer.stop();
+        if (watched && watched.ms >= MIN_IMPRESSION_MS) {
             this.logInteraction({
                 postId: post.id,
                 type: 'timeSpent',
-                value: totalTime,
-                metadata: { post, deepDive: this.watchDeepDive }
+                value: watched.ms,
+                metadata: { post, deepDive: !!watched.context?.deepDive }
             });
         }
+    },
+    onWatchActivity() {
+        watchTimer.activity();
+    },
+    onVisibilityChange() {
+        watchTimer.setHidden(document.hidden);
     },
     getRatingFromCode(rating) {
       const ratingMap = { 'g': 'General', 's': 'Sensitive', 'q': 'Questionable', 'e': 'Explicit' };
@@ -1053,7 +1053,10 @@ export default {
     },
     handleVideoStateChange(state) {
         // Update local state from event, relying on store writable computing to update store via setters
-        if (state.isPlaying !== undefined) this.isPlaying = state.isPlaying;
+        if (state.isPlaying !== undefined) {
+            this.isPlaying = state.isPlaying;
+            watchTimer.setPlaying(state.isPlaying);
+        }
         // Progress is driven per-frame by startProgressLoop while a video
         // element is current; the coarse timeupdate value is only a fallback.
         if (state.progress !== undefined && !this._progressRafId) this.videoProgress = state.progress;
@@ -1213,6 +1216,10 @@ export default {
       window.addEventListener('pointermove', this.handleUserActivity);
       window.addEventListener('pointerdown', this.handleUserActivity);
       window.addEventListener('wheel', this.pokeFocusUi, { passive: true });
+      for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) {
+          window.addEventListener(type, this.onWatchActivity, { passive: true });
+      }
+      document.addEventListener('visibilitychange', this.onVisibilityChange);
 
       // Check for a new release on app open. Only in the installed app:
       // dev builds in the browser would always trail the published version.
@@ -1228,6 +1235,10 @@ export default {
       window.removeEventListener('pointermove', this.handleUserActivity);
       window.removeEventListener('pointerdown', this.handleUserActivity);
       window.removeEventListener('wheel', this.pokeFocusUi, { passive: true });
+      for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel', 'touchstart']) {
+          window.removeEventListener(type, this.onWatchActivity, { passive: true });
+      }
+      document.removeEventListener('visibilitychange', this.onVisibilityChange);
       clearTimeout(this._focusTimer);
       clearTimeout(this._focusImageTimer);
       clearTimeout(this._hideControlsTimer);
