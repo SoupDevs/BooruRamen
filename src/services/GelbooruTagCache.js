@@ -27,6 +27,7 @@ class GelbooruTagCache {
     async init() {
         if (this.initialized) return;
         try {
+            await this.purgeFailedLookups();
             const entries = await db.tagCache.toArray();
             for (const entry of entries) {
                 this.memoryCache.set(entry.tag, entry.category);
@@ -35,6 +36,26 @@ class GelbooruTagCache {
             this.initialized = true;
         } catch (e) {
             console.error('[TagCache] Failed to load from IndexedDB:', e);
+        }
+    }
+
+    /**
+     * Packaged builds used to fetch categories from a dev-only URL, and every
+     * failed lookup was cached as general (0) permanently. Drop the cached
+     * zeros once per profile database so those tags are fetched again; real
+     * general tags just get re-fetched once.
+     */
+    async purgeFailedLookups() {
+        if (typeof localStorage === 'undefined') return;
+        const flag = `booruRamen_tagCacheZerosPurged:${db.name}`;
+        try {
+            if (localStorage.getItem(flag)) return;
+            const removed = await db.tagCache.filter(entry => entry.category === 0).delete();
+            localStorage.setItem(flag, '1');
+            if (removed) console.log(`[TagCache] Cleared ${removed} general entries for re-fetch`);
+        } catch (e) {
+            // Not fatal: the cache still loads, and the purge retries next launch
+            console.error('[TagCache] Failed to purge failed lookups:', e);
         }
     }
 

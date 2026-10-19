@@ -175,10 +175,13 @@ class BooruService {
         // Convert back to array
         let mergedPosts = Array.from(uniquePosts.values());
 
-        // Shuffle/Interleave results to mix sources? 
-        // Basic shuffle to prevent source A from dominating top of feed
-        // Deterministic shuffle using page number would be better but let's just random shuffle for "Feed" feel
-        mergedPosts.sort(() => Math.random() - 0.5);
+        // Fisher-Yates shuffle so no source dominates the top of the feed.
+        // A random sort comparator is biased toward the original order, which
+        // is grouped by source.
+        for (let i = mergedPosts.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [mergedPosts[i], mergedPosts[j]] = [mergedPosts[j], mergedPosts[i]];
+        }
 
         return mergedPosts;
     }
