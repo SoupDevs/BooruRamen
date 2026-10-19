@@ -163,9 +163,9 @@ export default {
       currentPostIndex: 0,
       observer: null,
       videoBlobUrls: {}, // Map of original URL -> blob URL for CORS bypass
-      _visiblePostKeys: {}, // Track which posts are currently visible (reactive object: { postId: true })
-      _visibilityVersion: 0, // Counter to force re-renders on visibility change
-      _proxyFailedUrls: {}, // Track URLs that failed proxy (skip proxy path next time)
+      visiblePostKeys: {}, // Track which posts are currently visible (reactive object: { postId: true })
+      visibilityVersion: 0, // Counter to force re-renders on visibility change
+      proxyFailedUrls: {}, // Track URLs that failed proxy (skip proxy path next time)
       videoCanvases: {}, // post id -> canvas holding the decoded stand-in frame
       videoFrameStates: {}, // post id -> true once a frame has been captured
       videoActiveStates: {}, // post id -> true while the video is actually playing
@@ -206,17 +206,17 @@ export default {
             const postKey = postEl.dataset.postKey;
             const video = postEl.querySelector('video');
             if (entry.isIntersecting) {
-              this._visiblePostKeys[postKey] = true;
+              this.visiblePostKeys[postKey] = true;
               if (this.autoplayVideos && video) {
                 this._playVideo(video);
               }
             } else {
-              delete this._visiblePostKeys[postKey];
+              delete this.visiblePostKeys[postKey];
               video?.pause();
             }
           });
           // Increment version to force method-based template expressions (isPostVisible) to re-evaluate
-          this._visibilityVersion++;
+          this.visibilityVersion++;
         },
         { threshold: 0.1 }
       );
@@ -309,8 +309,8 @@ export default {
         const postKey = el.dataset.postKey;
         const video = el.querySelector('video');
         if (isVisible) {
-          if (!this._visiblePostKeys[postKey]) {
-            this._visiblePostKeys[postKey] = true;
+          if (!this.visiblePostKeys[postKey]) {
+            this.visiblePostKeys[postKey] = true;
             changed = true;
           }
           // Always try to play visible videos (handles retries after pause/failed play)
@@ -318,14 +318,14 @@ export default {
             this._playVideo(video);
           }
         } else {
-          if (this._visiblePostKeys[postKey]) {
-            delete this._visiblePostKeys[postKey];
+          if (this.visiblePostKeys[postKey]) {
+            delete this.visiblePostKeys[postKey];
             changed = true;
           }
           if (video && !video.paused) video.pause();
         }
       });
-      if (changed) this._visibilityVersion++;
+      if (changed) this.visibilityVersion++;
     },
     async determineCurrentPost() {
       const container = this.$refs.viewerContainer;
@@ -455,9 +455,9 @@ export default {
       return post.file_url;
     },
     isPostVisible(post) {
-      // Touch _visibilityVersion to register a reactive dependency — forces re-evaluate when version changes
-      const _v = this._visibilityVersion;
-      return !!this._visiblePostKeys[String(post.id)];
+      // Touch visibilityVersion to register a reactive dependency — forces re-evaluate when version changes
+      const _v = this.visibilityVersion;
+      return !!this.visiblePostKeys[String(post.id)];
     },
     setVideoRef(el, post) {
       if (el) {
@@ -594,17 +594,17 @@ export default {
         if (this.isVideo(post) && post.file_url) {
           if (this.videoBlobUrls[post.file_url]) continue;
           // Skip if already known to fail the proxy
-          if (this._proxyFailedUrls[post.file_url]) continue;
+          if (this.proxyFailedUrls[post.file_url]) continue;
           try {
             const blobUrl = await getPlayableVideoUrl(post.file_url);
             if (blobUrl !== post.file_url) {
               this.videoBlobUrls[post.file_url] = blobUrl;
             } else {
               // Proxy failed — remember so getVideoSrc skips the proxy path
-              this._proxyFailedUrls[post.file_url] = true;
+              this.proxyFailedUrls[post.file_url] = true;
             }
           } catch (e) {
-            this._proxyFailedUrls[post.file_url] = true;
+            this.proxyFailedUrls[post.file_url] = true;
           }
         }
       }
