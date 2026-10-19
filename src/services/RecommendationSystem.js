@@ -283,12 +283,14 @@ class RecommendationSystem {
         freeTags.push(`rating:${shortRatings.join(',')}`);
       }
 
-      freeTags.push('-filetype:zip,swf');
-
+      // Ugoira (zip) are kept: Danbooru serves them as webm. Sources that
+      // can't are filtered after the fetch (BooruService).
       if (options.wantsVideos && !options.wantsImages) {
-        freeTags.push('filetype:mp4,webm');
+        freeTags.push('filetype:mp4,webm,zip');
       } else if (!options.wantsVideos && options.wantsImages) {
-        freeTags.push('-filetype:mp4,webm,gif');
+        freeTags.push('-filetype:mp4,webm,gif,zip,swf');
+      } else {
+        freeTags.push('-filetype:swf');
       }
 
       const tagLimit = BooruService.getTagLimit();

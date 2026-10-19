@@ -16,6 +16,12 @@ import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from './BooruAdapte
 import { registerRefererMediaSources } from './mediaUrl.js';
 import StorageService from './StorageService';
 
+// Archives and Flash can't be shown. Danbooru ugoira arrive as webm (see
+// DanbooruAdapter.normalizePost); any zip still left came from a source
+// without a playable rendition.
+const UNPLAYABLE_EXTENSIONS = new Set(['zip', 'swf']);
+const playable = (posts) => (posts || []).filter(post => !UNPLAYABLE_EXTENSIONS.has(post?.file_ext));
+
 class BooruService {
     constructor() {
         this.adapters = [];
@@ -137,7 +143,7 @@ class BooruService {
 
         // If only one adapter, behave simply
         if (this.adapters.length === 1) {
-            return this.adapters[0].getPosts(params);
+            return playable(await this.adapters[0].getPosts(params));
         }
 
         // Multiple adapters: Fetch from all in parallel
@@ -183,7 +189,7 @@ class BooruService {
             [mergedPosts[i], mergedPosts[j]] = [mergedPosts[j], mergedPosts[i]];
         }
 
-        return mergedPosts;
+        return playable(mergedPosts);
     }
 
     /**
