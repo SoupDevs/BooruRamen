@@ -264,6 +264,11 @@ export default {
     }
   },
   computed: {
+    // Post -> position in this.posts. The template asks for every rendered
+    // post's position on each render, and indexOf made that quadratic.
+    postIndexes() {
+      return new Map(this.posts.map((post, index) => [post, index]));
+    },
     ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'aiTaggingEnabled']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
@@ -745,7 +750,7 @@ export default {
     // behind too: scrolled-past posts keep their sample but never fetch a
     // full original for a back-glance.
     imagePreloadTier(post) {
-      const distance = this.posts.indexOf(post) - this.currentPostIndex;
+      const distance = this.postIndexes.get(post) - this.currentPostIndex;
       return {
         loadSample: distance >= -2 && distance <= 4,
         loadFull: distance >= -1 && distance <= 1,
@@ -756,7 +761,7 @@ export default {
     // the runway from draining bandwidth the upcoming images need; the
     // visible post's video still buffers fully ahead of playback.
     videoPreloadAttr(post) {
-      const distance = this.posts.indexOf(post) - this.currentPostIndex;
+      const distance = this.postIndexes.get(post) - this.currentPostIndex;
       const near = distance >= -VIDEO_FRAME_RUNWAY_BEHIND && distance <= VIDEO_FRAME_RUNWAY_AHEAD;
       return near ? 'auto' : 'metadata';
     },

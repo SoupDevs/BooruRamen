@@ -2,12 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // In-memory storage that upserts on (postId, type, source) like StorageService.
 const storage = vi.hoisted(() => {
-  const state = { rows: [], snapshot: null, clock: Date.now() - 60000 };
+  // Timestamps are real time, strictly after any earlier Date.now() and
+  // strictly before any later one: the worker compares them to its own
+  // Date.now() stamps, and a same-millisecond tie would flip which side wins.
+  const state = { rows: [], snapshot: null };
+  const nextMs = () => { const t = Date.now(); while (Date.now() === t) { /* spin */ } return Date.now(); };
+  const tick = () => { const stamp = nextMs(); nextMs(); return stamp; };
   return {
     state,
     storeInteraction: vi.fn(async (interaction) => {
       const source = interaction.metadata?.post?.source ?? null;
-      const row = { ...JSON.parse(JSON.stringify(interaction)), source, timestamp: (state.clock += 10) };
+      const row = { ...JSON.parse(JSON.stringify(interaction)), source, timestamp: tick() };
       const existing = state.rows.find(r => r.postId === row.postId && r.type === row.type && r.source === source);
       if (existing) Object.assign(existing, row); else state.rows.push(row);
       return true;
@@ -15,7 +20,7 @@ const storage = vi.hoisted(() => {
     getPostInteractions: vi.fn(async (postId) => state.rows.filter(r => r.postId === postId)),
     loadAppSettings: vi.fn(async () => ({})), getPreferences: vi.fn(async () => ({})),
     getProfileSnapshot: vi.fn(async () => state.snapshot && JSON.parse(JSON.stringify(state.snapshot))),
-    storeProfileSnapshot: vi.fn(async (snapshot) => { state.snapshot = { ...snapshot, timestamp: state.clock += 10 }; }),
+    storeProfileSnapshot: vi.fn(async (snapshot) => { state.snapshot = { ...snapshot, timestamp: tick() }; }),
     getInteractions: vi.fn(async () => state.rows.slice()),
     getRecentInteractions: vi.fn(async (since) => state.rows.filter(r => r.timestamp > since)),
   };

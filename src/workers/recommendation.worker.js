@@ -16,6 +16,7 @@ import { GlobalTagGraph } from '../services/GlobalTagGraph.js';
 const IMPRESSION_MEMORY = 500;
 // Largest score cut for a fully satiated artist/character/copyright.
 const SATIATION_WEIGHT = 0.3;
+const SNAPSHOT_SAVE_INTERVAL_MS = 30 * 1000;
 // Exploration: every Nth slot normally, every 2nd under a run of skips.
 const EXPLORE_INTERVAL = 4;
 const EXPLORE_INTERVAL_PRESSURED = 2;
@@ -66,6 +67,12 @@ export class RecommendationWorkerCore {
     // snapshot write) when nothing changed.
     this.profileDirty = true;
     this.profileRefreshedAt = 0;
+    // After the first build the profile lives in memory and later rebuilds
+    // only add newer interactions, so the snapshot can be written lazily.
+    this.profileLoaded = false;
+    this.profileUpdate = null;
+    this.snapshotSavedAt = 0;
+    this.snapshotTimer = null;
     this.sessionInterest = new SessionInterest();
     this.deepDive = new DeepDiveInterest();
     // In-memory state is authoritative once loaded; snapshots only persist it.
@@ -157,7 +164,17 @@ export class RecommendationWorkerCore {
     if (this.profileDirty || Date.now() - this.profileRefreshedAt > maxAgeMs) await this.updateUserProfile();
   }
 
-  async updateUserProfile() {
+  /**
+   * Rebuilds are serialized: two overlapping incremental rebuilds would both
+   * apply the same new interactions.
+   */
+  updateUserProfile() {
+    const run = () => this._updateUserProfile();
+    this.profileUpdate = (this.profileUpdate || Promise.resolve()).then(run, run);
+    return this.profileUpdate;
+  }
+
+  async _updateUserProfile() {
     // Cleared before the awaits: an interaction stored mid-rebuild marks the
     // profile dirty again and is picked up by the next refresh.
     this.profileDirty = false;
@@ -174,9 +191,15 @@ export class RecommendationWorkerCore {
     let interactions = [];
     let isIncremental = false;
 
-    const snapshot = await StorageService.getProfileSnapshot();
+    const snapshot = this.profileLoaded ? null : await StorageService.getProfileSnapshot();
 
-    if (snapshot && (!resetTimestamp || snapshot.timestamp > resetTimestamp)) {
+    if (this.profileLoaded) {
+      // The in-memory profile is newer than (or equal to) the stored one.
+      const hoursSinceUpdate = (now - this.lastUpdateTime) / (1000 * 60 * 60);
+      if (hoursSinceUpdate > 0) this.applyDecay(hoursSinceUpdate);
+      interactions = await StorageService.getRecentInteractions(this.lastUpdateTime);
+      isIncremental = true;
+    } else if (snapshot && (!resetTimestamp || snapshot.timestamp > resetTimestamp)) {
       this.rawTagScores = snapshot.rawTagScores || snapshot.tagScores || {};
       // Older snapshots have no core profile: seed it from the current one.
       this.rawCoreTagScores = snapshot.coreTagScores || { ...this.rawTagScores };
@@ -201,6 +224,7 @@ export class RecommendationWorkerCore {
 
     if (interactions.length === 0 && !isIncremental) {
       this.normalizeScores();
+      this.profileLoaded = true;
       return;
     }
 
@@ -292,8 +316,33 @@ export class RecommendationWorkerCore {
     }
 
     this.lastUpdateTime = now;
-    await this._saveProfileSnapshot();
+    this.profileLoaded = true;
+    this.normalizeScores();
+    await this._scheduleSnapshotSave();
     this.postScoreCache.clear();
+  }
+
+  /**
+   * The snapshot (tag embeddings and model included) runs to megabytes for a
+   * long history, so it is written at most every SNAPSHOT_SAVE_INTERVAL_MS
+   * instead of after every like. If the app closes before a pending write,
+   * the next start replays the interactions newer than the stored snapshot.
+   */
+  _scheduleSnapshotSave() {
+    if (this.snapshotTimer) return;
+    const wait = Math.max(0, this.snapshotSavedAt + SNAPSHOT_SAVE_INTERVAL_MS - Date.now());
+    const save = () => {
+      this.snapshotTimer = null;
+      this.snapshotSavedAt = Date.now();
+      return this._saveProfileSnapshot().catch(e => console.error('Failed to save profile snapshot:', e));
+    };
+    if (wait === 0) return save();
+    this.snapshotTimer = setTimeout(save, wait);
+  }
+
+  _cancelSnapshotSave() {
+    if (this.snapshotTimer) clearTimeout(this.snapshotTimer);
+    this.snapshotTimer = null;
   }
 
   /**
@@ -465,6 +514,7 @@ export class RecommendationWorkerCore {
    * been freshly installed.
    */
   factoryReset() {
+    this._cancelSnapshotSave();
     this.profileDirty = true;
     this.deepDive.end();
     this.sessionInterest.reset();
@@ -482,6 +532,7 @@ export class RecommendationWorkerCore {
   }
 
   async resetRecommendations() {
+    this._cancelSnapshotSave();
     this.profileDirty = true;
     this.deepDive.end();
     this.sessionInterest.reset();
