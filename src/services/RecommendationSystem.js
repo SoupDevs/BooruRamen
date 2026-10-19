@@ -459,8 +459,10 @@ class RecommendationSystem {
       };
 
       // Every fetched post teaches the tag graph (adjacent interests,
-      // trends, ubiquitous tags), seen or not. Fire and forget.
-      if (allPosts.length) this.callWorker('observeCandidates', allPosts).catch(() => {});
+      // trends, ubiquitous tags), seen or not. Fire and forget. Dive batches
+      // are all about one post, so they would skew the feed's view of the
+      // booru toward the dive's topic and are left out.
+      if (allPosts.length && !deepDiveState.active) this.callWorker('observeCandidates', allPosts).catch(() => {});
       let uniquePosts = await prepare([...this.candidatePool, ...allPosts]);
       const minFresh = Math.min(5, maxTotal);
       const FALLBACK_QUERIES = ['order:rank', 'order:favcount', ''];
