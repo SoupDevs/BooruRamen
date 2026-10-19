@@ -693,7 +693,8 @@ export default {
     
 
     startWatchTimeTracking() {
-        watchTimer.start({ deepDive: deepDiveState.active });
+        // Only the feed autoscrolls
+        watchTimer.start({ deepDive: deepDiveState.active, autoScroll: this.autoScroll && this.$route.name === 'Home' });
     },
 
     saveWatchTime(post) {
@@ -711,6 +712,8 @@ export default {
                 metadata: {
                     post,
                     deepDive: !!watched.context?.deepDive,
+                    // Autoscroll set how long this post stayed on screen
+                    autoScroll: !!watched.context?.autoScroll,
                     ...(Number.isFinite(duration) && duration > 0 && { mediaDuration: duration })
                 }
             });
