@@ -226,6 +226,10 @@ export default {
       unsubscribeMode: null,
       deepDiveState,
       feedDisposed: false,
+      // A new search requested while a fetch was running; it runs once that
+      // fetch returns. The generation retires the running fetch's results.
+      pendingNewSearch: false,
+      searchGeneration: 0,
       sessionRankTimer: null,
       historyContentKeys: new Set(),
     }
@@ -425,71 +429,81 @@ export default {
       }
     },
     async fetchPosts(newSearch = false) {
-      if (this.isFetching || this.feedDisposed) return;
+      if (this.feedDisposed) return;
+      if (this.isFetching) {
+        // A new search (whitelist tag tapped, post reported, filters changed)
+        // must not be lost to a background prefetch: retire the running
+        // fetch and start the search as soon as it returns.
+        // A repeat of the search already running (mount and the route
+        // watcher both start the first one) is not a new search.
+        if (newSearch && this.runningSearchQuery !== JSON.stringify(this.$route.query)) {
+          this.pendingNewSearch = true;
+          this.searchGeneration++;
+        }
+        return;
+      }
+      this.runningSearchQuery = newSearch ? JSON.stringify(this.$route.query) : null;
       const modeGeneration = deepDiveState.generation;
+      const searchGeneration = this.searchGeneration;
+      const superseded = () => this.feedDisposed || modeGeneration !== deepDiveState.generation || searchGeneration !== this.searchGeneration;
       this.isFetching = true;
-
-      // Settings load asynchronously at app startup; the first fetch must wait for
-      // them or it runs against defaults and ignores the saved media filter (#150)
-      await useSettingsStore().initialize();
-      if (newSearch || this.posts.length === 0) {
-        this.loading = true;
-      }
-
-      // Get view history to exclude seen posts
-      // View history only grows by the posts this feed shows (which are in
-      // this.posts), so it is read once per search instead of on every fetch:
-      // a long history made each runway refill slower.
-      if (newSearch || !this._historyKeys) {
-        const viewedHistory = await StorageService.getViewedPosts();
-        this.historyContentKeys = new Set(Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)));
-        this._historyKeys = new Set([...Object.keys(viewedHistory), ...this.historyContentKeys]);
-      }
-      // Reported/blocked posts, artists, and uploaders must never enter the feed
-      const blockSets = await ReportService.getBlockSets();
-      // Create a set of IDs to exclude (viewed history + currently loaded posts + reported posts)
-      const blockedKeys = new Set(this._historyKeys);
-      for (const p of this.posts) {
-        blockedKeys.add(this.getCompositeKey(p));
-        contentKeys(p).forEach(key => blockedKeys.add(key));
-      }
-      blockSets.postKeys.forEach(key => blockedKeys.add(key));
-
-      console.log(`FetchPosts: ${this.posts.length} loaded. Total blocked IDs: ${blockedKeys.size}`);
-
-      if (newSearch) {
-        Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
-        this.videoBlobUrls = {};
-        this.page = 1;
-        this.posts = [];
-        this.currentPostIndex = -1;
-        this._maxViewedIndex = -1;
-        this.currentPostKey = null;
-        this._hasUserScrolled = false;
-        if (this.$refs.feedContainer) {
-          this.$refs.feedContainer.scrollTop = 0;
-        }
-        this.hasMorePosts = true;
-        // Reset recommendation system session (cursors, exhausted list)
-        if (this.recommendationSystem) {
-          this.recommendationSystem.resetExploreSession();
-        }
-      }
-      
-      if (!this.hasMorePosts) {
-          this.isFetching = false;
-          this.loading = false;
-          return;
-      }
-
       try {
+        // Settings load asynchronously at app startup; the first fetch must wait for
+        // them or it runs against defaults and ignores the saved media filter (#150)
+        await useSettingsStore().initialize();
+        if (newSearch || this.posts.length === 0) {
+          this.loading = true;
+        }
+
+        // Get view history to exclude seen posts
+        // View history only grows by the posts this feed shows (which are in
+        // this.posts), so it is read once per search instead of on every fetch:
+        // a long history made each runway refill slower.
+        if (newSearch || !this._historyKeys) {
+          const viewedHistory = await StorageService.getViewedPosts();
+          this.historyContentKeys = new Set(Object.values(viewedHistory).flatMap(entry => contentKeys(entry.data)));
+          this._historyKeys = new Set([...Object.keys(viewedHistory), ...this.historyContentKeys]);
+        }
+        // Reported/blocked posts, artists, and uploaders must never enter the feed
+        const blockSets = await ReportService.getBlockSets();
+        // A newer search was requested during the awaits above
+        if (superseded()) return;
+        // Create a set of IDs to exclude (viewed history + currently loaded posts + reported posts)
+        const blockedKeys = new Set(this._historyKeys);
+        for (const p of this.posts) {
+          blockedKeys.add(this.getCompositeKey(p));
+          contentKeys(p).forEach(key => blockedKeys.add(key));
+        }
+        blockSets.postKeys.forEach(key => blockedKeys.add(key));
+
+        console.log(`FetchPosts: ${this.posts.length} loaded. Total blocked IDs: ${blockedKeys.size}`);
+
+        if (newSearch) {
+          Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
+          this.videoBlobUrls = {};
+          this.page = 1;
+          this.posts = [];
+          this.currentPostIndex = -1;
+          this._maxViewedIndex = -1;
+          this.currentPostKey = null;
+          this._hasUserScrolled = false;
+          if (this.$refs.feedContainer) {
+            this.$refs.feedContainer.scrollTop = 0;
+          }
+          this.hasMorePosts = true;
+          // Reset recommendation system session (cursors, exhausted list)
+          if (this.recommendationSystem) {
+            this.recommendationSystem.resetExploreSession();
+          }
+        }
+      
+        if (!this.hasMorePosts) return;
+
         let newPosts = [];
 
         // Guard: if recommendationSystem not yet initialized (watcher fires before created), skip
         if (!this.recommendationSystem) {
           console.log('Skipping fetch - recommendationSystem not yet initialized');
-          this.isFetching = false;
-          this.loading = false;
           return;
         }
         const targetCount = 5;
@@ -534,7 +548,7 @@ export default {
             wantsImages: 'images' in this.$route.query ? this.$route.query.images === '1' : this.mediaType.images,
             wantsVideos: 'videos' in this.$route.query ? this.$route.query.videos === '1' : this.mediaType.videos,
           });
-          if (this.feedDisposed || modeGeneration !== deepDiveState.generation) return;
+          if (superseded()) return;
           
           emptyAttempts = batch.length > 0 ? 0 : emptyAttempts + 1;
           if (batch.length > 0) {
@@ -566,8 +580,12 @@ export default {
         console.error('Failed to fetch posts:', error);
       } finally {
         this.isFetching = false;
+        this.runningSearchQuery = null;
         this.loading = false;
-        if (!this.feedDisposed && modeGeneration !== deepDiveState.generation) this.onRecommendationModeChanged();
+        if (!this.feedDisposed && this.pendingNewSearch) {
+          this.pendingNewSearch = false;
+          this.fetchPosts(true);
+        } else if (!this.feedDisposed && modeGeneration !== deepDiveState.generation) this.onRecommendationModeChanged();
         
         this.$nextTick(() => {
           if (this.feedDisposed) return;
@@ -709,10 +727,12 @@ export default {
     },
     
     getFileExtension(post) {
-      if (post && post.file_url) {
-        return post.file_url.split('.').pop();
-      }
-      return '';
+      if (!post) return '';
+      // Adapters normalise file_ext; the URL is only a fallback, and may
+      // carry a query string (".jpg?123") or an uppercase extension.
+      if (post.file_ext) return String(post.file_ext).toLowerCase();
+      if (!post.file_url) return '';
+      return post.file_url.split(/[?#]/)[0].split('.').pop().toLowerCase();
     },
     isVideoPost(post) {
       const videoExtensions = ['mp4', 'webm'];
@@ -987,6 +1007,10 @@ export default {
     this.unsubscribeMode = recommendationSystem.subscribeMode(this.onRecommendationModeChanged);
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
     this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
+    // The autoScroll watcher runs before the container exists; a feed mounted
+    // with autoscroll already on (Apply in settings, back from Profile) needs
+    // its video-ended listener attached here or "wait for video" never advances.
+    if (this.autoScroll) this._setupVideoEndedListener();
 
     // Browsers may block autoplay until user interacts with the page.
     // Add a one-time listener to unlock playback on first user gesture.
@@ -1183,6 +1207,11 @@ export default {
       immediate: true
     },
     autoScrollWaitForVideo() {
+      if (this.autoScroll) {
+        this.startAutoScroll();
+      }
+    },
+    autoScrollSeconds() {
       if (this.autoScroll) {
         this.startAutoScroll();
       }
