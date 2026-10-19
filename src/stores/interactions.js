@@ -2,6 +2,10 @@ import { defineStore } from 'pinia'
 import StorageService from '../services/StorageService'
 import RecommendationSystem, { deepDiveState } from '../services/RecommendationSystem'
 
+// The only interactions getPostStatus reads. Views and watch time make up
+// most of the history and each carries a full post copy.
+const STATUS_TYPES = ['like', 'favorite', 'dislike']
+
 export const useInteractionsStore = defineStore('interactions', {
     state: () => ({
         // We can keep a local cache of recent interactions if needed for reactivity
@@ -15,7 +19,7 @@ export const useInteractionsStore = defineStore('interactions', {
     actions: {
         async initialize() {
             if (this.initialized) return
-            this.recentInteractions = await StorageService.getInteractions()
+            this.recentInteractions = await StorageService.getInteractions(STATUS_TYPES)
             this.initialized = true
         },
 
@@ -30,6 +34,8 @@ export const useInteractionsStore = defineStore('interactions', {
                 // A worker failure must not lose the user's explicit actions.
                 await StorageService.storeInteraction({ ...interaction, metadata: { ...interaction.metadata, profileWeight: diving ? 0.015 : 0.15, deepDive: diving } })
             }
+
+            if (!STATUS_TYPES.includes(interaction.type)) return
 
             // Update local state for reactivity
             const existingIndex = this.recentInteractions.findIndex(

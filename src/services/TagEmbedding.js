@@ -15,6 +15,10 @@ import { isPositiveEngagement } from './signals.js';
 
 const EMBEDDING_DIM = 32;
 const MIN_EMBEDDING_NORM = 0.01;
+// New interactions only re-embed their own tags. Every other tag drifts a
+// little as global frequencies change, so the whole table is rebuilt every
+// FULL_REBUILD_INTERVAL interactions instead of on every new tag.
+const FULL_REBUILD_INTERVAL = 100;
 
 /**
  * Simple seeded PRNG (mulberry32) for reproducible embeddings.
@@ -51,6 +55,9 @@ class TagEmbedding {
     this.isBuilt = false;
     this.pendingInteractions = [];    // interactions queued before build
     this.buildThreshold = 5;          // minimum interactions to start building
+    this.totalCoocWeight = 0;         // sum of every co-occurrence count
+    this.projections = new Map();     // tag -> unscaled random projection
+    this.sinceRebuild = 0;            // interactions since the last full build
   }
 
   /**
@@ -79,6 +86,10 @@ class TagEmbedding {
       this.tagCooccurrence.set(tag, new Map(Object.entries(coocs)));
     }
     this.totalPosts = data.totalPosts || 0;
+    this.totalCoocWeight = 0;
+    for (const coocs of this.tagCooccurrence.values()) {
+      for (const count of coocs.values()) this.totalCoocWeight += count;
+    }
     // If snapshot has more frequency entries than embeddings, mark the diff as pending
     if (this.tagFrequency.size > this.embeddings.size) {
       for (const tag of this.tagFrequency.keys()) {
@@ -101,6 +112,8 @@ class TagEmbedding {
     this.tagFrequency = new Map();
     this.totalPosts = 0;
     this.pendingInteractions = [];
+    this.totalCoocWeight = 0;
+    this.sinceRebuild = 0;
   }
 
   /**
@@ -186,11 +199,7 @@ class TagEmbedding {
 
     this.totalPosts += weight;
 
-    const newTags = new Set();
     for (const tag of tags) {
-      if (!this.tagFrequency.has(tag)) {
-        newTags.add(tag);
-      }
       this.tagFrequency.set(tag, (this.tagFrequency.get(tag) || 0) + weight);
     }
 
@@ -206,30 +215,17 @@ class TagEmbedding {
       }
     }
 
-    // Mark new tags as pending PMI rebuild
-    for (const tag of newTags) {
-      this.pendingTags.add(tag);
-    }
+    // Only this post's tags gained co-occurrence counts, so only their rows
+    // need re-embedding now (new tags included). Re-embedding every tag
+    // they co-occur with is a full rebuild once a common tag is involved.
+    this._updateEmbeddingsForTags(new Set(tags));
+    this.sinceRebuild++;
 
-    // Incrementally update embeddings for affected tags only
-    const affectedTags = new Set(tags);
-    for (const tag of tags) {
-      const coocs = this.tagCooccurrence.get(tag);
-      if (coocs) {
-        for (const coocTag of coocs.keys()) {
-          affectedTags.add(coocTag);
-        }
-      }
-    }
-    this._updateEmbeddingsForTags(affectedTags);
-
-    // Trigger full rebuild once we have enough data
-    if (this.totalPosts >= this.buildThreshold && this.embeddings.size === 0) {
-      this._buildEmbeddings();
-    }
-
-    // Rebuild PMI embeddings when there are pending tags (new tags or restored from snapshot)
-    if (this.pendingTags.size > 0 && this.tagFrequency.size >= this.buildThreshold) {
+    // Full rebuild: first build, tags restored from a snapshot without
+    // embeddings, or periodic refresh of the tags not touched above.
+    const firstBuild = this.totalPosts >= this.buildThreshold && this.embeddings.size === 0;
+    const restoredPending = this.pendingTags.size > 0 && this.tagFrequency.size >= this.buildThreshold;
+    if (firstBuild || restoredPending || this.sinceRebuild >= FULL_REBUILD_INTERVAL) {
       this._buildEmbeddings();
     }
   }
@@ -240,6 +236,7 @@ class TagEmbedding {
     }
     const coocs = this.tagCooccurrence.get(tagA);
     coocs.set(tagB, (coocs.get(tagB) || 0) + weight);
+    this.totalCoocWeight += weight;
   }
 
   /**
@@ -258,6 +255,7 @@ class TagEmbedding {
 
     // Clear pending set before rebuild so we don't re-trigger on every interaction
     this.pendingTags.clear();
+    this.sinceRebuild = 0;
 
     // If very few tags, just use small deterministic random embeddings
     if (n < 10) {
@@ -271,20 +269,7 @@ class TagEmbedding {
     // Compute PMI-based embeddings using random projection
     // For each tag t, embedding = Σ_cooc PMI(t, cooc) * random_proj(cooc)
 
-    // Pre-generate random projection vectors for each tag
-    const randomProjections = new Map();
-    for (const tag of tags) {
-      randomProjections.set(tag, this._randomProjection(tag));
-    }
-
-    // Compute total co-occurrence weight for normalization
-    let totalCoocWeight = 0;
-    for (const [, coocs] of this.tagCooccurrence) {
-      for (const count of coocs.values()) {
-        totalCoocWeight += count;
-      }
-    }
-    if (totalCoocWeight === 0) totalCoocWeight = 1;
+    const totalCoocWeight = this.totalCoocWeight || 1;
 
     // Build PMI embeddings
     for (const tag of tags) {
@@ -308,7 +293,7 @@ class TagEmbedding {
         let pmi = Math.log((pJoint + 1e-10) / (pTag * pCooc + 1e-10));
         if (pmi < 0) pmi = 0;  // Use positive PMI only
 
-        const proj = randomProjections.get(coocTag);
+        const proj = this.tagFrequency.has(coocTag) ? this._projection(coocTag) : null;
         if (proj) {
           for (let i = 0; i < this.dim; i++) {
             vec[i] += pmi * proj[i];
@@ -324,11 +309,9 @@ class TagEmbedding {
         }
       } else {
         // Fallback to self random projection
-        const selfProj = randomProjections.get(tag);
-        if (selfProj) {
-          for (let i = 0; i < this.dim; i++) {
-            vec[i] = selfProj[i] * 0.1;
-          }
+        const selfProj = this._projection(tag);
+        for (let i = 0; i < this.dim; i++) {
+          vec[i] = selfProj[i] * 0.1;
         }
       }
 
@@ -346,13 +329,7 @@ class TagEmbedding {
   _updateEmbeddingsForTags(tagSet) {
     if (tagSet.size === 0) return;
 
-    let totalCoocWeight = 0;
-    for (const [, coocs] of this.tagCooccurrence) {
-      for (const count of coocs.values()) {
-        totalCoocWeight += count;
-      }
-    }
-    if (totalCoocWeight === 0) totalCoocWeight = 1;
+    const totalCoocWeight = this.totalCoocWeight || 1;
 
     for (const tag of tagSet) {
       if (!this.tagFrequency.has(tag)) continue;
@@ -377,7 +354,7 @@ class TagEmbedding {
         if (pmi < 0) pmi = 0;
 
         if (pmi > 0) {
-          const proj = this._randomProjection(coocTag);
+          const proj = this._projection(coocTag);
           for (let i = 0; i < this.dim; i++) {
             vec[i] += pmi * proj[i];
           }
@@ -394,6 +371,16 @@ class TagEmbedding {
         this.embeddings.set(tag, this._randomProjection(tag, 0.1));
       }
     }
+  }
+
+  /** Unscaled projection for a tag, cached: it never changes. */
+  _projection(tag) {
+    let proj = this.projections.get(tag);
+    if (!proj) {
+      proj = this._randomProjection(tag);
+      this.projections.set(tag, proj);
+    }
+    return proj;
   }
 
   /**

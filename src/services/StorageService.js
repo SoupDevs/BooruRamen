@@ -85,6 +85,7 @@ const storeInteraction = async (interaction) => {
 const getInteractions = async (type = null) => {
   try {
     if (type) {
+      if (Array.isArray(type)) return await db.interactions.where('type').anyOf(type).toArray();
       return await db.interactions.where('type').equals(type).toArray();
     }
     return await db.interactions.toArray();
