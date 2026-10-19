@@ -649,9 +649,9 @@ export default {
         if (post.favorited === undefined) post.favorited = false;
 
         // Async fetch - will update reactivity when done
-        StorageService.getPostInteractions(post.id).then(interactions => {
+        StorageService.getPostInteractions(post.id, post.source ?? null).then(interactions => {
              // Verify we are still looking at the same post to avoid race conditions
-             if (this.currentPost && this.currentPost.id === post.id) {
+             if (this.currentPost && this.currentPost.id === post.id && this.currentPost.source === post.source) {
                  this.currentPost.liked = interactions.some(i => i.type === 'like' && i.value > 0);
                  this.currentPost.disliked = interactions.some(i => i.type === 'dislike' && i.value > 0);
                  this.currentPost.favorited = interactions.some(i => i.type === 'favorite' && i.value > 0);
