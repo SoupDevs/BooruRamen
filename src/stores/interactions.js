@@ -28,7 +28,7 @@ export const useInteractionsStore = defineStore('interactions', {
             // Route real UI interactions through the session learner before
             // persistence; recording here separately would lose its weight.
             try {
-                await RecommendationSystem.trackInteraction(interaction.postId, interaction.type, interaction.value, interaction.metadata?.post, false, { deepDive: diving, mediaDuration: interaction.metadata?.mediaDuration, tag: interaction.metadata?.tag })
+                await RecommendationSystem.trackInteraction(interaction.postId, interaction.type, interaction.value, interaction.metadata?.post, false, { deepDive: diving, mediaDuration: interaction.metadata?.mediaDuration, tag: interaction.metadata?.tag, autoScroll: interaction.metadata?.autoScroll })
             } catch (error) {
                 console.warn('[Interactions] Session learner unavailable:', error.message)
                 // A worker failure must not lose the user's explicit actions.
