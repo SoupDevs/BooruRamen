@@ -38,6 +38,8 @@ export const COMMON_TAGS = [
 
 const instanceId = Math.floor(Math.random() * 10000);
 
+const RATING_CODES = { general: 'g', sensitive: 's', questionable: 'q', explicit: 'e' };
+
 // Unused candidates kept between feed fetches.
 const POOL_CAP = 150;
 const POOL_SKIP_FETCH_FACTOR = 3;
@@ -230,17 +232,33 @@ class RecommendationSystem {
     if (!posts || posts.length === 0) return [];
 
     return posts.filter(post => {
-      const tagString = ' ' + (post.tag_string || '') + ' ';
+      const tagString = ' ' + (post.tag_string || '').toLowerCase() + ' ';
 
-      if (blacklist.some(tag => tagString.includes(' ' + tag + ' '))) return false;
+      if (blacklist.some(tag => tagString.includes(' ' + String(tag).toLowerCase() + ' '))) return false;
 
       if (whitelist.length > 0) {
-        if (!whitelist.every(tag => tagString.includes(' ' + tag + ' '))) {
+        if (!whitelist.every(tag => tagString.includes(' ' + String(tag).toLowerCase() + ' '))) {
           return false;
         }
       }
       return true;
     });
+  }
+
+  /**
+   * Final content gate every candidate passes before it can be shown: no
+   * blacklisted tag, and a rating the feed asked for. The blacklist is
+   * applied here rather than in the booru query so it never costs one of
+   * the source's search-tag slots (Danbooru's free tier has two), and the
+   * rating check keeps a source that ignores the rating metatag from
+   * leaking other content. Posts without a rating are kept: every built-in
+   * adapter fills one in.
+   */
+  applyContentFilters(posts, { blacklist = [], selectedRatings = [] } = {}) {
+    const ratingCodes = new Set(selectedRatings.map(rating => RATING_CODES[rating] || rating));
+    const allowed = this.applyClientSideFilters(posts, { blacklist });
+    if (ratingCodes.size === 0) return allowed;
+    return allowed.filter(post => !post.rating || ratingCodes.has(RATING_CODES[post.rating] || post.rating));
   }
 
   async getCuratedExploreFeed(fetchFunction, options = {}) {
@@ -278,8 +296,7 @@ class RecommendationSystem {
       const freeTags = [];
 
       if (selectedRatings && selectedRatings.length > 0) {
-        const ratingMap = { 'general': 'g', 'sensitive': 's', 'questionable': 'q', 'explicit': 'e' };
-        const shortRatings = selectedRatings.map(r => ratingMap[r] || r);
+        const shortRatings = selectedRatings.map(r => RATING_CODES[r] || r);
         freeTags.push(`rating:${shortRatings.join(',')}`);
       }
 
@@ -295,19 +312,19 @@ class RecommendationSystem {
 
       // freeTags (rating:, filetype:, -filetype:) are meta-tags that don't count
       // toward Danbooru's search tag limit, so we can always append them.
-      // Only user tags (base, whitelist, blacklist) count toward the limit.
+      // Only positive tags (base, whitelist) use the limit: the blacklist is
+      // never sent and is always applied locally (applyContentFilters).
       const availableForSearch = tagLimit;
 
       // Prioritize whitelist tags (mandatory) then fill remaining slots with base tags
       const prioritizedTags = [...new Set([...whitelist, ...apiTags])];
       let finalApiTags = prioritizedTags.slice(0, availableForSearch);
 
-      // Determine if we need client-side filtering for tags that didn't fit
-      const totalSearchTags = new Set([...whitelist, ...apiTags, ...blacklist.map(t => `-${t}`)]).size;
-      const clientSideFilterNeeded = totalSearchTags > availableForSearch;
+      // Whitelist tags that didn't fit are checked client-side
+      const clientSideFilterNeeded = prioritizedTags.length > availableForSearch;
 
       if (clientSideFilterNeeded) {
-        console.log(`Query "${baseQuery.tags}" + filters exceeds API limit (${totalSearchTags} > ${availableForSearch}). Using Client-Side Filtering.`);
+        console.log(`Query "${baseQuery.tags}" + filters exceeds API limit (${prioritizedTags.length} > ${availableForSearch}). Using Client-Side Filtering.`);
       }
 
       finalApiTags.push(...freeTags);
@@ -353,12 +370,10 @@ class RecommendationSystem {
             return processedPosts.map(post => {
               const apiTagsSent = apiQuery.tags;
               let clientFilterString = 'None';
-              if (clientSideFilterNeeded) {
-                const appliedFilters = [];
-                if (whitelist.length > 0) appliedFilters.push(...whitelist.map(t => `+${t}`));
-                if (blacklist.length > 0) appliedFilters.push(...blacklist.map(t => `-${t}`));
-                if (appliedFilters.length > 0) clientFilterString = appliedFilters.join(' ');
-              }
+              const appliedFilters = [];
+              if (clientSideFilterNeeded && whitelist.length > 0) appliedFilters.push(...whitelist.map(t => `+${t}`));
+              if (blacklist.length > 0) appliedFilters.push(...blacklist.map(t => `-${t}`));
+              if (appliedFilters.length > 0) clientFilterString = appliedFilters.join(' ');
 
               let sortOrder = 'dflt/random';
               if (apiTagsSent.includes('order:')) {
@@ -425,7 +440,7 @@ class RecommendationSystem {
           const key = post.source ? `${post.source}|${post.id}` : String(post.id);
           if (!uniqueMap.has(key)) uniqueMap.set(key, post);
         });
-        let unique = Array.from(uniqueMap.values());
+        let unique = this.applyContentFilters(Array.from(uniqueMap.values()), { blacklist, selectedRatings });
         await hydrateImageAnalysis(unique, { includeAi: useSettingsStore().aiTaggingEnabled });
         unique = excludeDuplicateContent(unique, existingPostIds);
         if (existingPostIds.size > 0) {
