@@ -215,12 +215,12 @@ export default {
       pauseOverlayState: {}, // Map of composite key -> 'paused' | 'resuming' | null (playback glyph over the video)
       videoErrorStates: {}, // Map of composite key -> error boolean (CDN blocked)
       videoLoadingTimeouts: {}, // Non-reactive timers for debouncing spinner
-      _isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
-      _hasUserScrolled: false, // Flag to detect if user has scrolled (for autoplay logic)
-      _accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
-      _wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
-      _clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
-      _initializedVideos: new Set(), // Track videos that have already started playback to prevent restart
+      isAutoScrolling: false, // Flag to distinguish auto-scroll from manual scroll
+      hasUserScrolled: false, // Flag to detect if user has scrolled (for autoplay logic)
+      accumulatedWheelDelta: 0, // Track wheel scroll for snap-on-scroll
+      wheelSnapThreshold: 100, // Pixels of scroll before snapping to next post
+      clearWheelDeltaTimeout: null, // Debounce timer for resetting wheel delta
+      initializedVideos: new Set(), // Track videos that have already started playback to prevent restart
       unsubscribeImageAnalysis: null,
       unsubscribeSession: null,
       unsubscribeMode: null,
@@ -470,7 +470,7 @@ export default {
         this.currentPostIndex = -1;
         this._maxViewedIndex = -1;
         this.currentPostKey = null;
-        this._hasUserScrolled = false;
+        this.hasUserScrolled = false;
         if (this.$refs.feedContainer) {
           this.$refs.feedContainer.scrollTop = 0;
         }
@@ -583,7 +583,7 @@ export default {
     },
     handleScroll() {
       if (this.isResizing) return;
-      this._hasUserScrolled = true;
+      this.hasUserScrolled = true;
       this.determineCurrentPost();
       const container = this.$refs.feedContainer;
       // Fetch the next page while the user still has posts in front of them
@@ -594,24 +594,22 @@ export default {
         this.fetchPosts();
       }
     },
-    _accumulatedWheelDelta: 0,
-    _wheelSnapThreshold: 100,
     _onWheel(event) {
       if (!this.disableScrollAnimation) return;
       const container = this.$refs.feedContainer;
       if (!container) return;
       const itemHeight = container.clientHeight;
       if (itemHeight === 0) return;
-      this._accumulatedWheelDelta += event.deltaY;
-      if (this._clearWheelDeltaTimeout) {
-        clearTimeout(this._clearWheelDeltaTimeout);
+      this.accumulatedWheelDelta += event.deltaY;
+      if (this.clearWheelDeltaTimeout) {
+        clearTimeout(this.clearWheelDeltaTimeout);
       }
-      this._clearWheelDeltaTimeout = setTimeout(() => {
-        this._accumulatedWheelDelta = 0;
+      this.clearWheelDeltaTimeout = setTimeout(() => {
+        this.accumulatedWheelDelta = 0;
       }, 200);
-      if (Math.abs(this._accumulatedWheelDelta) >= this._wheelSnapThreshold) {
-        const direction = this._accumulatedWheelDelta > 0 ? 1 : -1;
-        this._accumulatedWheelDelta = 0;
+      if (Math.abs(this.accumulatedWheelDelta) >= this.wheelSnapThreshold) {
+        const direction = this.accumulatedWheelDelta > 0 ? 1 : -1;
+        this.accumulatedWheelDelta = 0;
         const nextIndex = this.currentPostIndex + direction;
         if (nextIndex >= 0 && nextIndex <= this.lastScrollIndex) {
           event.preventDefault();
@@ -793,14 +791,14 @@ export default {
       }
 
       // Mark as initialized so re-intersections don't reset playback
-      this._initializedVideos.add(video);
+      this.initializedVideos.add(video);
 
       this.$emit('video-state-change', { isPlaying: true });
     },
     onVideoPause(event, post) {
       // Only a video that actually started playing earns the pause glyph —
       // a fresh element's initial pause (before autoplay) must not flash it.
-      if (this._initializedVideos.has(event.target)) {
+      if (this.initializedVideos.has(event.target)) {
         this._showPauseGlyph(this.getCompositeKey(post));
       }
       if (this.posts[this.currentPostIndex] && this.getCompositeKey(this.posts[this.currentPostIndex]) !== this.getCompositeKey(post)) return;
@@ -896,7 +894,7 @@ export default {
       });
     },
     _doAutoScroll() {
-      this._isAutoScrolling = true;
+      this.isAutoScrolling = true;
       const container = this.$refs.feedContainer;
       if (container) {
         const nextScrollTop = container.scrollTop + container.clientHeight;
@@ -905,7 +903,7 @@ export default {
           behavior: this.disableScrollAnimation ? 'auto' : 'smooth'
         });
       }
-      setTimeout(() => { this._isAutoScrolling = false; }, 100);
+      setTimeout(() => { this.isAutoScrolling = false; }, 100);
     },
     _setupVideoEndedListener() {
       if (!this.$refs.feedContainer) return;
@@ -1039,7 +1037,7 @@ export default {
               if (!video._hasPlayingListener) {
                 video._hasPlayingListener = true;
                 const onPlaying = () => {
-                  this._initializedVideos.add(video);
+                  this.initializedVideos.add(video);
                   applyMutePreference();
                 };
                 video.addEventListener('playing', onPlaying);
@@ -1050,7 +1048,7 @@ export default {
 
               // Reset progress and mute only on FIRST visibility — videos never
               // play offscreen (no autoplay attribute), so they always start at 0
-              if (!this._initializedVideos.has(video)) {
+              if (!this.initializedVideos.has(video)) {
                 video.currentTime = 0;
                 video.muted = true;
               }
@@ -1066,12 +1064,12 @@ export default {
                   // apply the mute preference here or the video stays muted despite
                   // the user unmuting.
                   if (!video.paused && !video.ended) {
-                    this._initializedVideos.add(video);
+                    this.initializedVideos.add(video);
                     applyMutePreference();
                     return;
                   }
                   video.play().then(() => {
-                    this._initializedVideos.add(video);
+                    this.initializedVideos.add(video);
                     applyMutePreference();
                   }).catch(() => {
                     // Retry once after a short delay
@@ -1115,7 +1113,7 @@ export default {
             if (video) {
               video.pause();
               // Remove from initialized set so next time it enters view, it resets to start
-              this._initializedVideos.delete(video);
+              this.initializedVideos.delete(video);
               // Back behind the first-frame canvas: the paused element must never be
               // visible or the webview draws its overlay play glyph (#148)
               if (video._compositeKey) {
