@@ -12,16 +12,6 @@ BooruRamen turns your favorite booru sites into one endless, personalized feed.
 Scroll, like, skip and favorite, and the feed quietly reshapes itself around
 your taste. Everything it learns stays on your device.
 
-<!--
-Screenshots: add current captures to docs/screenshots/ and uncomment.
-<div align="center">
-  <img src="./docs/screenshots/feed.png" alt="Feed" width="24%" />
-  <img src="./docs/screenshots/details.png" alt="Post details and Deep Dive" width="24%" />
-  <img src="./docs/screenshots/analytics.png" alt="Profile analytics" width="24%" />
-  <img src="./docs/screenshots/settings.png" alt="Settings" width="24%" />
-</div>
--->
-
 ## Why BooruRamen
 
 - **A feed that adapts as you scroll.** Likes, skips, favorites and watch time
