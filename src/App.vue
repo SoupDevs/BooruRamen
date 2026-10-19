@@ -332,7 +332,7 @@
 </template>
 
 <script>
-import { X, Settings, Heart, ThumbsDown, Star, MessageCircle } from 'lucide-vue-next';
+import { Settings, Heart, ThumbsDown, Star, MessageCircle } from 'lucide-vue-next';
 import { mapState, mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from './stores/settings';
 import { usePlayerStore } from './stores/player';
@@ -367,7 +367,6 @@ const FOCUS_IDLE_MS = 1000;
 export default {
   name: 'App',
   components: {
-    X,
     Settings,
     Heart,
     ThumbsDown,
