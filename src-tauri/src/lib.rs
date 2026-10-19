@@ -303,7 +303,12 @@ fn notification_id(path: &str) -> i32 {
 /// Download a file natively so the bytes never cross the WebView IPC bridge.
 /// Streaming large videos through JS froze the UI on Android and could OOM.
 #[tauri::command]
-async fn download_file(app: tauri::AppHandle, url: String, path: String) -> Result<(), String> {
+async fn download_file(
+  app: tauri::AppHandle,
+  url: String,
+  path: String,
+  referer: Option<String>,
+) -> Result<(), String> {
   let filename = std::path::Path::new(&path)
     .file_name()
     .map(|n| n.to_string_lossy().into_owned())
@@ -311,7 +316,7 @@ async fn download_file(app: tauri::AppHandle, url: String, path: String) -> Resu
   let id = notification_id(&path);
 
   notify_download(&app, id, &format!("Downloading {filename}…"));
-  match perform_download(&url, &path).await {
+  match perform_download(&url, &path, referer.as_deref()).await {
     Ok(()) => {
       notify_download(&app, id, &format!("Saved {filename}"));
       Ok(())
@@ -350,7 +355,7 @@ async fn clear_downloads(path: String) -> Result<(), String> {
   Ok(())
 }
 
-async fn perform_download(url: &str, path: &str) -> Result<(), String> {
+async fn perform_download(url: &str, path: &str, referer: Option<&str>) -> Result<(), String> {
   use std::io::Write;
 
   let parent = std::path::Path::new(path)
@@ -359,9 +364,12 @@ async fn perform_download(url: &str, path: &str) -> Result<(), String> {
   std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
 
   let client = tauri_plugin_http::reqwest::Client::new();
-  let mut response = client
-    .get(url)
-    .header("User-Agent", "BooruRamen")
+  let mut request = client.get(url).header("User-Agent", "BooruRamen");
+  // Hotlink-protected boorus (Gelbooru family) refuse files without one.
+  if let Some(referer) = referer.filter(|r| !r.is_empty()) {
+    request = request.header("Referer", referer);
+  }
+  let mut response = request
     .send()
     .await
     .map_err(|e| e.to_string())?;
