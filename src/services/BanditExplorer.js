@@ -314,8 +314,10 @@ class BanditExplorer {
     return {
       sessionCount: this.sessionCount,
       totalRewards: this.totalRewards,
+      // totalRewards is lifetime while rewardHistory is trimmed, so average
+      // over the history itself.
       avgReward: this.rewardHistory.length > 0
-        ? this.totalRewards / this.rewardHistory.length
+        ? this.rewardHistory.reduce((sum, r) => sum + r.reward, 0) / this.rewardHistory.length
         : 0,
       arms,
       bestStrategy: this.getBestStrategy(),

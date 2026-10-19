@@ -65,6 +65,18 @@ export function toDevProxiedUrl(url) {
     }
 }
 
+// Danbooru order: values -> Gelbooru sort: terms
+const GELBOORU_SORTS = {
+    score: 'sort:score:desc',
+    rank: 'sort:score:desc',
+    popular: 'sort:score:desc',
+    favcount: 'sort:score:desc',
+    random: 'sort:random',
+};
+
+// Moebooru order: values for Danbooru ones it doesn't know
+const MOEBOORU_ORDERS = { rank: 'score', popular: 'score', favcount: 'score' };
+
 // How long a failed Gelbooru tag-category lookup waits before it is retried
 const TAG_LOOKUP_RETRY_MS = 10 * 60 * 1000;
 
@@ -267,7 +279,7 @@ export class DanbooruAdapter extends BooruAdapter {
         }
     }
 
-    async getPosts({ tags, page, limit, sort, sortOrder, skipSort, _isTest }) {
+    async getPosts({ tags, page, limit, sort, sortOrder, skipSort }) {
         const hasOrder = tags.includes('order:');
 
         // Danbooru supports comma syntax for filetypes natively (e.g., filetype:mp4,webm)
@@ -338,8 +350,9 @@ export class DanbooruAdapter extends BooruAdapter {
             return normalizedPosts;
         } catch (error) {
             console.error('Error fetching posts from Danbooru:', error);
-            if (_isTest) throw error; // Re-throw for testConnection to catch
-            return [];
+            // Rethrown so callers can tell a failed request from a search
+            // that has run out of posts (which would retire the strategy).
+            throw error;
         }
     }
 
@@ -941,7 +954,7 @@ export class GelbooruAdapter extends BooruAdapter {
         }
     }
 
-    async getPosts({ tags, page, limit, sort, sortOrder, _isTest }) {
+    async getPosts({ tags, page, limit, sort, skipSort }) {
         // Gelbooru 0.2 syntax: index.php?page=dapi&s=post&q=index&json=1...
         // Safebooru matches this.
 
@@ -986,11 +999,12 @@ export class GelbooruAdapter extends BooruAdapter {
             // Single short code
             cleanTags = cleanTags.replace(/rating:([gsqe])(?![a-z0-9])/g, (match, c) => `rating:${RATING_NAMES[c]}`);
 
-            // 2. Handle Filetypes
-            // Remove unsupported date/order tags
+            // 2. Translate Danbooru order: metatags to Gelbooru's sort: and drop
+            // date: (unsupported). Hot/rank/favourite orders have no Gelbooru
+            // equivalent; score is the closest.
             cleanTags = cleanTags
                 .replace(/date:\S+/g, '')
-                .replace(/order:\S+/g, '');
+                .replace(/order:(\S+)/g, (match, order) => GELBOORU_SORTS[order] || '');
 
             // Handle -filetype:mp4,webm,gif
             cleanTags = cleanTags.replace(/-filetype:([a-z0-9,]+)/g, (match, types) => {
@@ -1031,9 +1045,10 @@ export class GelbooruAdapter extends BooruAdapter {
             // Cleanup and ensure sort order
             cleanTags = cleanTags.replace(/\s+/g, ' ').trim();
 
-            // Apply sort if requested and not present in tags
-            // Note: Gelbooru uses 'sort:score:desc'
-            if (!cleanTags.includes('sort:') && (sort === 'score' || tags.includes('order:score') || tags.includes('order:rank'))) {
+            // Apply the requested sort unless the query chose its own. The feed
+            // passes skipSort so each strategy keeps the order it asked for,
+            // as on Danbooru, instead of every query becoming top-scored.
+            if (!cleanTags.includes('sort:') && !skipSort && sort === 'score') {
                 cleanTags = `${cleanTags} sort:score:desc`;
             }
 
@@ -1071,16 +1086,14 @@ export class GelbooruAdapter extends BooruAdapter {
             } catch (e) {
                 // If text is not JSON (e.g. XML or HTML), return empty
                 console.warn(`[Gelbooru] Failed to parse JSON from ${url}:`, e);
-                if (_isTest) throw new Error(`Failed to parse JSON response: ${e.message}`); // Re-throw for testConnection
-                return [];
+                throw new Error(`Failed to parse JSON response: ${e.message}`);
             }
 
             // A bare JSON string is a notice from the site (e.g. a refused
             // request), not a post list - say so instead of showing nothing.
             if (typeof data === 'string') {
                 console.warn(`[Gelbooru] ${this.baseUrl} refused the request: ${data}`);
-                if (_isTest) throw new Error(data);
-                return [];
+                throw new Error(data);
             }
 
             // Format check - Gelbooru API varies slightly by version/site
@@ -1129,8 +1142,9 @@ export class GelbooruAdapter extends BooruAdapter {
             return normalizedPosts;
         } catch (error) {
             console.error(`Error fetching from ${this.baseUrl}:`, error);
-            if (_isTest) throw error; // Re-throw for testConnection to catch
-            return [];
+            // Rethrown so callers can tell a failed request from a search
+            // that has run out of posts (which would retire the strategy).
+            throw error;
         }
     }
 
@@ -1345,6 +1359,18 @@ export class GelbooruAdapter extends BooruAdapter {
     }
 }
 
+/** The calendar date `amount` units ago, as YYYY-MM-DD, or '' for an unknown unit. */
+export function moebooruAgeDate(amount, unit, now = new Date()) {
+    const value = parseInt(amount, 10);
+    const date = new Date(now);
+    if (unit.startsWith('y')) date.setFullYear(date.getFullYear() - value);
+    else if (unit.startsWith('mo')) date.setMonth(date.getMonth() - value);
+    else if (unit.startsWith('w')) date.setDate(date.getDate() - value * 7);
+    else if (unit.startsWith('d')) date.setDate(date.getDate() - value);
+    else return '';
+    return date.toISOString().slice(0, 10);
+}
+
 export class MoebooruAdapter extends BooruAdapter {
     constructor(baseUrl, credentials = {}) {
         super(baseUrl, 'moebooru');
@@ -1390,13 +1416,22 @@ export class MoebooruAdapter extends BooruAdapter {
             .slice(0, limit);
     }
 
-    async getPosts({ tags, page, limit, _isTest }) {
+    async getPosts({ tags, page, limit }) {
         // Map Danbooru rating tags (g,s,q,e) to verbose tags
         const queryTags = tags
             .replace(/rating:g\b/g, 'rating:safe')
             .replace(/rating:s\b/g, 'rating:questionable')
             .replace(/rating:q\b/g, 'rating:questionable')
-            .replace(/rating:e\b/g, 'rating:explicit');
+            .replace(/rating:e\b/g, 'rating:explicit')
+            // Moebooru has no age: or Danbooru's hot orders; unknown terms
+            // are searched as tags and match nothing.
+            .replace(/(^|\s)age:([<>])(\d+)([a-z]+)/g, (match, lead, operator, amount, unit) => {
+                const date = moebooruAgeDate(amount, unit);
+                return date ? `${lead}date:${operator === '<' ? '>=' : '<='}${date}` : lead;
+            })
+            .replace(/order:(rank|popular|favcount)\b/g, (match, order) => `order:${MOEBOORU_ORDERS[order]}`)
+            .replace(/\s+/g, ' ')
+            .trim();
 
         const params = new URLSearchParams({
                     tags: queryTags,
@@ -1421,8 +1456,9 @@ export class MoebooruAdapter extends BooruAdapter {
             return data.filter(p => p.file_url).map(p => this.normalizePost(p));
         } catch (error) {
             console.error(`Error fetching from ${this.baseUrl}:`, error);
-            if (_isTest) throw error; // Re-throw for testConnection to catch
-            return [];
+            // Rethrown so callers can tell a failed request from a search
+            // that has run out of posts (which would retire the strategy).
+            throw error;
         }
     }
 
