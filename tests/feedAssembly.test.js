@@ -129,3 +129,37 @@ describe('two-speed profile', () => {
     expect(core.rawCoreTagScores.witch).toBeGreaterThan(0.75);
   });
 });
+
+describe('multi-objective scorer', () => {
+  const profile = { ratingPreferences: { g: 1 }, mediaTypePreferences: { image: 1, video: 0 } };
+  it('keeps a single-head model’s score when upgrading its snapshot', () => {
+    vi.restoreAllMocks();
+    const old = new MLScorer();
+    old.interactionCount = 30; old.isTrained = true;
+    const snapshot = old.toSnapshot();
+    snapshot.weights3 = snapshot.weights3.map(row => [row[0]]);
+    snapshot.bias3 = [0.4];
+    const upgraded = new MLScorer();
+    upgraded.loadFromSnapshot(snapshot);
+    upgraded.isTrained = true;
+    const sample = post(1);
+    const heads = upgraded.predictHeads(sample, {}, profile);
+    expect(heads.engagement).toBeCloseTo(heads.notSkip, 6);
+    expect(heads.engagement).toBeCloseTo(heads.positive, 6);
+    expect(upgraded.scorePost(sample, {}, profile)).toBeCloseTo(heads.engagement, 6);
+  });
+  it('learns "watched but never liked" apart from "liked"', () => {
+    vi.restoreAllMocks();
+    const scorer = new MLScorer();
+    const watched = post(1, { tags: 'scenery', file_ext: 'jpg' });
+    const liked = post(2, { tags: 'portrait', file_ext: 'mp4' });
+    for (let round = 0; round < 30; round++) {
+      scorer.addTrainingSample(watched, 'timeSpent', 8000, {}, profile, 1, 0.5);
+      scorer.addTrainingSample(liked, 'favorite', 1, {}, profile);
+    }
+    for (let i = 0; i < 20; i++) scorer.flushTraining();
+    const a = scorer.predictHeads(watched, {}, profile), b = scorer.predictHeads(liked, {}, profile);
+    expect(a.notSkip).toBeGreaterThan(0.7);
+    expect(b.positive).toBeGreaterThan(a.positive + 0.3);
+  });
+});

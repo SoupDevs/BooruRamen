@@ -782,6 +782,8 @@ export class RecommendationWorkerCore {
       const mlScore = this.mlScorer.scorePost(post, this.tagScores, userProfile);
       if (mlScore >= 0) {
         details.mlScore = mlScore;
+        details.mlHeads = this.mlScorer.predictHeads?.(post, this.tagScores, userProfile) || null;
+        details.uncertainty = this.postUncertainty(post);
         details.mlConfidence = Math.min(1, this.mlScorer.interactionCount / 50);
 
         try {

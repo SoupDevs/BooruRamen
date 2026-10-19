@@ -101,6 +101,16 @@
             <p v-else>
               <span class="text-pink-400 font-bold">Score:</span> {{ debugDetails.totalScore?.toFixed(3) }}
             </p>
+            <p v-if="debugDetails.mlHeads" class="text-xs">
+              <span class="text-gray-400">Heads:</span>
+              engage {{ debugDetails.mlHeads.engagement.toFixed(2) }} ·
+              no-skip {{ debugDetails.mlHeads.notSkip.toFixed(2) }} ·
+              positive {{ debugDetails.mlHeads.positive.toFixed(2) }}
+            </p>
+            <p v-if="debugDetails.uncertainty !== undefined && debugDetails.uncertainty !== null" class="text-xs">
+              <span class="text-gray-400">Uncertainty:</span> {{ debugDetails.uncertainty.toFixed(2) }}
+              <span v-if="currentPost._explore" class="text-cyan-300">(discovery slot)</span>
+            </p>
 
             <!-- ML Feature Breakdown -->
             <div v-if="debugDetails.mlFeatures" class="mt-2 border-t border-gray-700 pt-1">
