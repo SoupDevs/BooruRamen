@@ -17,6 +17,7 @@
 
 import { useSettingsStore } from '../stores/settings';
 import httpFetch from './httpClient';
+import { getDisplayableMediaUrl, refererForMediaUrl } from './mediaUrl.js';
 
 // Legacy default that older settings may still have persisted.
 // Treated as "use the platform default" rather than a literal path.
@@ -179,7 +180,7 @@ export async function downloadPost(post, interactionType = 'liked') {
     const filePath = await resolvePostPath(post, interactionType);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('download_file', { url: post.file_url, path: filePath });
+      await invoke('download_file', { url: post.file_url, path: filePath, referer: refererForMediaUrl(post.file_url) });
       console.log(`DownloadService: Saved ${filePath}`);
       return true;
     } catch (error) {
@@ -190,7 +191,9 @@ export async function downloadPost(post, interactionType = 'liked') {
 
   try {
     // Browser fallback: anchor-click download handled by the browser.
-    const response = await httpFetch(post.file_url);
+    // Hotlink-protected files go through the dev server, which adds the Referer.
+    const fetchUrl = refererForMediaUrl(post.file_url) ? await getDisplayableMediaUrl(post.file_url) : post.file_url;
+    const response = await httpFetch(fetchUrl);
     if (!response.ok) {
       console.error(`DownloadService: Failed to fetch ${post.file_url} - ${response.status}`);
       return false;

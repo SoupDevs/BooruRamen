@@ -147,6 +147,11 @@ export function needsRefererProxy(url) {
     return Boolean(refererSourceFor(url));
 }
 
+/** The Referer this media URL must be requested with, or null if none. */
+export function refererForMediaUrl(url) {
+    return refererSourceFor(url)?.referer || null;
+}
+
 /** @deprecated kept for callers that only know about the built-in booru. */
 export function isGelbooruMediaUrl(url) {
     return needsRefererProxy(url);
