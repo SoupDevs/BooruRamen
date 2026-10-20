@@ -274,13 +274,9 @@ const getMostInteractedTags = async (limit = 10) => {
  */
 const clearAllData = async () => {
   try {
-    await db.interactions.clear();
-    await db.preferences.clear();
-    await db.viewHistory.clear();
-    await db.appSettings.clear();
-    await db.tagCache.clear();
-    await db.profileSnapshot.clear();
-    await db.reports.clear();
+    // Every table, so stores added by later schema versions (image analysis,
+    // tag catalog) are wiped too and the app really is a fresh install.
+    await Promise.all(db.tables.map(table => table.clear()));
     return true;
   } catch (error) {
     console.error('Error clearing all data:', error);
