@@ -432,6 +432,8 @@ class RecommendationSystem {
 
               post._strategy = query.type || 'unknown';
               post._searchCriteria = apiTagsSent;
+              // What the "why this post" chip names (adjacent, trending).
+              if (query.reason) post._reason = query.reason;
 
               return post;
             });

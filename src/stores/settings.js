@@ -25,6 +25,8 @@ export const useSettingsStore = defineStore('settings', {
         // Focus mode: chrome fades out when the user stops interacting and
         // snaps back on the next touch (see App.vue).
         focusMode: false,
+        // "Why this post" chip on discovery picks
+        showWhyChips: true,
         // Feed gestures: each one is armed by its own switch — no master
         // mode. The swipe/hold detectors run whenever their switch is on.
         swipeRightToFavorite: true,
@@ -181,6 +183,7 @@ export const useSettingsStore = defineStore('settings', {
                     showDislikeButton: this.showDislikeButton,
                     showFavoriteButton: this.showFavoriteButton,
                     focusMode: this.focusMode,
+                    showWhyChips: this.showWhyChips,
                     swipeRightToFavorite: this.swipeRightToFavorite,
                     swipeLeftToDislike: this.swipeLeftToDislike,
                     holdToSeek: this.holdToSeek,
