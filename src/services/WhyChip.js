@@ -11,20 +11,22 @@
 /**
  * WhyChip.js
  * The short "why this post" note shown on discovery picks: posts from the
- * adjacent and trending arms, the global wildcard arm, and exploration
- * slots. A labelled detour gets more patience than an unexplained one.
- * Posts the feed picked because they match known interests get no chip.
+ * adjacent, trending and wildcard arms, and exploration slots. A labelled
+ * detour gets more patience than an unexplained one, so the note names
+ * something the user knows: the liked tag that explains the pick
+ * ("Because you liked Genshin Impact"), or failing that what the post is
+ * ("New for you: Blue Archive"). Posts nothing can explain get no chip, and
+ * posts the feed picked because they match known interests get none either.
  */
 import { tagLabel } from './TasteNarrative.js';
 
 export const WHY_CHIP_MS = 3500;
-export const SOMETHING_DIFFERENT = 'Something different';
 
-function categoryOf(post, tag) {
-  for (const category of ['copyright', 'character', 'artist']) {
-    if ((post[`tag_string_${category}`] || '').split(/\s+/).includes(tag)) return category;
-  }
-  return 'general';
+const IDENTITY_CATEGORIES = ['copyright', 'character', 'artist'];
+
+function categoryOf(post, tag, known) {
+  if (known) return known;
+  return IDENTITY_CATEGORIES.find(category => (post[`tag_string_${category}`] || '').split(/\s+/).includes(tag)) || 'general';
 }
 
 /** A tag the chip may name: not a metatag, meta tag, blacklisted or avoided. */
@@ -42,18 +44,27 @@ function nameable(post, tag, hidden) {
  */
 export function whyChipText(post, { blacklist = [], avoided = [] } = {}) {
   if (!post) return null;
+  const discovery = post._explore || ['adjacent', 'trending', 'wildcard'].includes(post._strategy);
+  if (!discovery) return null;
   const hidden = new Set([...blacklist, ...avoided].map(tag => String(tag).toLowerCase()));
-  const label = tag => tagLabel({ tag, category: categoryOf(post, tag) });
+  const label = (tag, category) => tagLabel({ tag, category: categoryOf(post, tag, category) });
   const reason = post._reason || {};
-  if (post._strategy === 'adjacent') {
-    if (nameable(post, reason.via, hidden)) return `New for you: close to ${label(reason.via)}`;
-    if (nameable(post, reason.tag, hidden)) return `New for you: ${label(reason.tag)}`;
-    return SOMETHING_DIFFERENT;
-  }
+  // The liked tag on the post that best explains it (set at feed assembly).
+  const liked = nameable(post, reason.liked?.tag, hidden) ? label(reason.liked.tag, reason.liked.category) : null;
+  // A series, character or artist the post is about, for posts nothing liked explains.
+  const subject = IDENTITY_CATEGORIES
+    .flatMap(category => (post[`tag_string_${category}`] || '').split(/\s+/))
+    .find(tag => nameable(post, tag, hidden));
+
   if (post._strategy === 'trending') {
-    if (nameable(post, reason.tag, hidden)) return reason.personal ? `Trending near ${label(reason.tag)}` : `Hot right now in ${label(reason.tag)}`;
-    return SOMETHING_DIFFERENT;
+    if (liked) return `Trending, because you liked ${liked}`;
+    if (nameable(post, reason.tag, hidden)) return `Trending in ${label(reason.tag)}`;
+    return 'Trending now';
   }
-  if (post._strategy === 'wildcard' || post._explore) return SOMETHING_DIFFERENT;
+  // Adjacent picks neighbour one of the user's interests: name it.
+  if (post._strategy === 'adjacent' && nameable(post, reason.via, hidden)) return `Because you liked ${label(reason.via, reason.viaCategory)}`;
+  if (liked) return `Because you liked ${liked}`;
+  if (post._strategy === 'adjacent' && nameable(post, reason.tag, hidden)) return `New for you: ${label(reason.tag)}`;
+  if (subject) return `New for you: ${label(subject)}`;
   return null;
 }

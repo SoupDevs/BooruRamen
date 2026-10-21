@@ -32,6 +32,11 @@ const EXPLORE_SCORE_FLOOR_QUANTILE = 0.3;
 export const OPENER_SLOTS = 3;
 export const RESERVE_SIZE = 2;
 export const RECOVERY_SKIP_STREAK = 3;
+// "Why this post": discovery picks name the liked tag that best explains
+// them, if any of the post's tags has at least this much affinity.
+const DISCOVERY_STRATEGIES = new Set(['adjacent', 'trending', 'wildcard']);
+const LIKED_REASON_MIN = 0.15;
+const IDENTITY_CATEGORIES = new Set(['artist', 'copyright', 'character']);
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
 // Slow "core" profile: long-standing favourites outlive a month-long phase.
@@ -780,6 +785,28 @@ export class RecommendationWorkerCore {
     return Math.max(0, OPENER_SLOTS - this.slotsServed);
   }
 
+  /**
+   * The tag on this post the user has shown the most liking for, preferring
+   * a series, character or artist when it is about as strong. Never an
+   * avoided, meta or metatag tag.
+   * @returns {{ tag: string, category: string }|null}
+   */
+  likedReasonTag(post) {
+    const avoided = new Set([...this.avoidedTags, 'video']);
+    const categoryOf = tag => this.tagCategories?.[tag]
+      || [...IDENTITY_CATEGORIES].find(category => (post[`tag_string_${category}`] || '').split(/\s+/).includes(tag))
+      || 'general';
+    let best = null, bestScore = LIKED_REASON_MIN;
+    for (const tag of new Set((post.tag_string || '').split(/\s+/))) {
+      if (!tag || tag.includes(':') || avoided.has(tag)) continue;
+      const category = categoryOf(tag);
+      if (category === 'meta') continue;
+      const score = (this.tagScores?.[tag] || 0) * (IDENTITY_CATEGORIES.has(category) ? 1.25 : 1);
+      if (score > bestScore) { best = { tag, category }; bestScore = score; }
+    }
+    return best;
+  }
+
   /** Lower confidence bound: a high score the model is sure about. */
   confidentScore(item) {
     return item.score - EXPLORE_UCB * this.postUncertainty(item.post);
@@ -867,6 +894,11 @@ export class RecommendationWorkerCore {
       else feed.push(Object.assign(explore[x++].post, { _explore: true }));
     }
     this.slotsServed += feed.length;
+    for (const post of feed) {
+      if (!post._explore && !DISCOVERY_STRATEGIES.has(post._strategy)) continue;
+      const liked = this.likedReasonTag(post);
+      if (liked) post._reason = { ...post._reason, liked };
+    }
     return { feed, rest: byScore.filter(item => !chosen.has(item.post)).map(item => item.post) };
   }
 
@@ -1136,7 +1168,7 @@ export class RecommendationWorkerCore {
     if (selectedStrategies.has('adjacent')) {
       const adjacentTag = this.weightedRandomSelect(this.adjacentInterests(), usedTags);
       if (adjacentTag && !this.exhaustedStrategies.has(adjacentTag.tag)) {
-        queries.push({ tags: adjacentTag.tag, type: 'adjacent', intent: 'Adjacent interest - likely to enjoy, not yet explored', reason: { tag: adjacentTag.tag, via: adjacentTag.via || null } });
+        queries.push({ tags: adjacentTag.tag, type: 'adjacent', intent: 'Adjacent interest - likely to enjoy, not yet explored', reason: { tag: adjacentTag.tag, via: adjacentTag.via || null, viaCategory: this.tagCategories?.[adjacentTag.via] || null } });
         usedTags.add(adjacentTag.tag);
       }
     }

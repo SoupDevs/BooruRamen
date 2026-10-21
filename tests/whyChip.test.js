@@ -17,7 +17,7 @@ vi.mock('../src/stores/settings', () => ({ useSettingsStore: () => ({}) }));
 vi.mock('../src/stores/player', () => ({ usePlayerStore: () => ({}) }));
 vi.mock('../src/stores/interactions', () => ({ useInteractionsStore: () => ({}) }));
 
-import { whyChipText, SOMETHING_DIFFERENT } from '../src/services/WhyChip.js';
+import { whyChipText } from '../src/services/WhyChip.js';
 import { RecommendationWorkerCore } from '../src/workers/recommendation.worker.js';
 const { default: FeedView } = await import('../src/views/FeedView.vue');
 
@@ -27,32 +27,67 @@ beforeEach(() => { vi.spyOn(Math, 'random').mockReturnValue(0); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe('why-this-post text', () => {
-  it('names the interest an adjacent pick is close to', () => {
-    expect(whyChipText(post(1, { _strategy: 'adjacent', _reason: { tag: 'familiar', via: 'witch_hat' } }))).toBe('New for you: close to witch hat');
+  const liked = (tag, category = 'general') => ({ liked: { tag, category } });
+
+  it('names the liked tag behind an exploration or wildcard pick', () => {
+    expect(whyChipText(post(1, { _strategy: 'wildcard', _reason: liked('genshin_impact', 'copyright') }))).toBe('Because you liked Genshin Impact');
+    expect(whyChipText(post(1, { _strategy: 'anchor', _explore: true, _reason: liked('witch_hat') }))).toBe('Because you liked witch hat');
+  });
+
+  it('names the interest an adjacent pick neighbours', () => {
+    expect(whyChipText(post(1, { _strategy: 'adjacent', _reason: { tag: 'familiar', via: 'blue_archive', viaCategory: 'copyright' } }))).toBe('Because you liked Blue Archive');
+    expect(whyChipText(post(1, { _strategy: 'adjacent', _reason: { tag: 'familiar', ...liked('witch') } }))).toBe('Because you liked witch');
     expect(whyChipText(post(1, { _strategy: 'adjacent', _reason: { tag: 'familiar' } }))).toBe('New for you: familiar');
   });
 
-  it('describes trending picks, with series names capitalised', () => {
+  it('describes trending picks', () => {
     const trending = post(1, { _strategy: 'trending', _reason: { tag: 'genshin_impact', personal: true }, tag_string_copyright: 'genshin_impact' });
-    expect(whyChipText(trending)).toBe('Trending near Genshin Impact');
-    expect(whyChipText({ ...trending, _reason: { tag: 'genshin_impact', personal: false } })).toBe('Hot right now in Genshin Impact');
+    expect(whyChipText({ ...trending, _reason: { ...trending._reason, ...liked('genshin_impact', 'copyright') } })).toBe('Trending, because you liked Genshin Impact');
+    expect(whyChipText(trending)).toBe('Trending in Genshin Impact');
   });
 
-  it('calls wildcard and exploration picks something different', () => {
-    expect(whyChipText(post(1, { _strategy: 'wildcard' }))).toBe(SOMETHING_DIFFERENT);
-    expect(whyChipText(post(1, { _strategy: 'anchor', _explore: true }))).toBe(SOMETHING_DIFFERENT);
+  it('falls back to what the post is about, or nothing', () => {
+    expect(whyChipText(post(1, { _strategy: 'wildcard', tag_string_copyright: 'blue_archive' }))).toBe('New for you: Blue Archive');
+    expect(whyChipText(post(1, { _strategy: 'wildcard' }))).toBeNull();
+    expect(whyChipText(post(1, { _explore: true }))).toBeNull();
   });
 
   it('gives exploit picks no chip', () => {
-    for (const strategy of ['anchor', 'pivot', 'reach', 'fallback', 'deepDive']) expect(whyChipText(post(1, { _strategy: strategy }))).toBeNull();
+    for (const strategy of ['anchor', 'pivot', 'reach', 'fallback', 'deepDive']) expect(whyChipText(post(1, { _strategy: strategy, _reason: liked('witch') }))).toBeNull();
   });
 
   it('never names a blacklisted, avoided, meta or metatag tag', () => {
     const adjacent = reason => post(1, { _strategy: 'adjacent', _reason: reason, tag_string_meta: 'highres' });
     expect(whyChipText(adjacent({ tag: 'familiar', via: 'spider' }), { blacklist: ['spider'] })).toBe('New for you: familiar');
-    expect(whyChipText(adjacent({ tag: 'spider', via: 'web' }), { blacklist: ['spider'], avoided: ['web'] })).toBe(SOMETHING_DIFFERENT);
-    expect(whyChipText(adjacent({ tag: 'highres' }))).toBe(SOMETHING_DIFFERENT);
-    expect(whyChipText(post(1, { _strategy: 'trending', _reason: { tag: 'order:rank' } }))).toBe(SOMETHING_DIFFERENT);
+    expect(whyChipText(adjacent({ tag: 'spider', via: 'web' }), { blacklist: ['spider'], avoided: ['web'] })).toBeNull();
+    expect(whyChipText(adjacent({ tag: 'highres', ...liked('highres') }))).toBeNull();
+    expect(whyChipText(post(1, { _strategy: 'trending', _reason: { tag: 'order:rank' } }))).toBe('Trending now');
+  });
+});
+
+describe('liked reason at feed assembly', () => {
+  it('picks the most-liked nameable tag, preferring series and characters', () => {
+    const core = new RecommendationWorkerCore();
+    core.avoidedTags = ['1girl'];
+    core.tagCategories = { genshin_impact: 'copyright', highres: 'meta' };
+    core.tagScores = { '1girl': 1, highres: 1, witch: 0.5, genshin_impact: 0.45, cat: 0.1 };
+    const subject = { id: 1, tag_string: '1girl highres witch genshin_impact cat' };
+    expect(core.likedReasonTag(subject)).toEqual({ tag: 'genshin_impact', category: 'copyright' });
+    expect(core.likedReasonTag({ id: 2, tag_string: '1girl cat' })).toBeNull();
+  });
+
+  it('only explains discovery picks', () => {
+    const core = new RecommendationWorkerCore();
+    core.tagScores = { witch: 1 };
+    core.tagCategories = {};
+    core.scorePost = candidate => 1 - candidate.id * 0.01;
+    core.postUncertainty = () => 0.5;
+    const candidates = Array.from({ length: 20 }, (_, i) => ({ id: i + 1, source: 's', tag_string: 'witch', _strategy: i === 1 ? 'wildcard' : 'anchor' }));
+    const { feed } = core.assembleFeed(candidates, { maxTotal: 8 });
+    for (const item of feed) {
+      const discovery = item._explore || item._strategy === 'wildcard';
+      expect(item._reason?.liked?.tag ?? null).toBe(discovery ? 'witch' : null);
+    }
   });
 });
 
@@ -68,7 +103,7 @@ describe('discovery queries carry their reason', () => {
       ...Array.from({ length: 60 }, (_, i) => make(i, `a${i}`, `filler${i}`)),
     ]);
     const queries = core.generateMultiStrategyQueries();
-    expect(queries.find(q => q.type === 'adjacent').reason).toEqual({ tag: 'familiar', via: 'witch' });
+    expect(queries.find(q => q.type === 'adjacent').reason).toEqual({ tag: 'familiar', via: 'witch', viaCategory: 'general' });
     expect(queries.find(q => q.type === 'trending').reason).toEqual({ tag: 'witch', personal: false });
   });
 });
@@ -79,13 +114,13 @@ describe('feed chip', () => {
     for (const [name, fn] of Object.entries(FeedView.methods)) if (typeof fn === 'function') vm[name] = fn.bind(vm);
     return vm;
   }
-  const discovery = post(1, { _strategy: 'wildcard' });
+  const discovery = post(1, { _strategy: 'wildcard', _reason: { liked: { tag: 'witch', category: 'general' } } });
 
   it('shows once per post and fades on its own', () => {
     vi.useFakeTimers();
     const vm = feed();
     vm.showWhyChip(discovery);
-    expect(vm.whyChip).toEqual({ key: 's|1', text: SOMETHING_DIFFERENT });
+    expect(vm.whyChip).toEqual({ key: 's|1', text: 'Because you liked witch' });
     vi.advanceTimersByTime(5000);
     expect(vm.whyChip).toBeNull();
     vm.showWhyChip(discovery);

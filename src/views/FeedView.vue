@@ -39,6 +39,17 @@
         @dragstart.prevent="blockRowDrag"
         v-observe-visibility
       >
+        <!-- Why a discovery pick is here: a quiet pill centred at the top, level
+             with the sidebar tabs and clear of them. Fades on its own and
+             never takes a tap. -->
+        <transition name="why-chip">
+          <div
+            v-if="whyChip && whyChip.key === getCompositeKey(post)"
+            class="why-chip absolute left-1/2 -translate-x-1/2 z-10 truncate pointer-events-none rounded-full bg-black/35 text-white/90 text-[11px] font-medium leading-5 px-3 backdrop-blur-sm ring-1 ring-white/10"
+            role="status"
+            data-why-chip
+          >{{ whyChip.text }}</div>
+        </transition>
         <!-- Post media -->
         <div class="relative h-full max-w-full flex items-center justify-center">
           <!-- Feedback for the interaction that was just logged -->
@@ -47,15 +58,6 @@
             :key="mediaBurst(post).id"
             :type="mediaBurst(post).type"
           />
-          <!-- Why a discovery pick is here; fades on its own, never takes a tap -->
-          <transition name="why-chip">
-            <div
-              v-if="whyChip && whyChip.key === getCompositeKey(post)"
-              class="absolute top-3 left-3 z-10 max-w-[80%] truncate pointer-events-none rounded-full bg-black/60 text-white text-xs px-3 py-1 backdrop-blur-sm"
-              role="status"
-              data-why-chip
-            >{{ whyChip.text }}</div>
-          </transition>
           <ProgressiveImage
             v-if="['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(getFileExtension(post))"
             :src="post.file_url"
@@ -1428,7 +1430,13 @@ export default {
       </script>
 
       <style scoped>
-      /* "Why this post" chip: fades in, lingers, fades out. */
+      /* "Why this post" chip: fades in, lingers, fades out. Its top lines its
+         centre up with the sidebar tabs (1rem down, ~44px tall); the width
+         cap keeps it clear of them on narrow screens. */
+      .why-chip {
+        top: calc(1rem + 12px + env(safe-area-inset-top, 0px));
+        max-width: calc(100% - 7rem);
+      }
       .why-chip-enter-active, .why-chip-leave-active { transition: opacity 0.4s ease; }
       .why-chip-enter-from, .why-chip-leave-to { opacity: 0; }
       @media (prefers-reduced-motion: reduce) {
