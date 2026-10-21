@@ -170,6 +170,7 @@ import tagSuggestion from '../services/TagSuggestionService';
 import imageAnalysis from '../services/ImageAnalysisService.js';
 import { contentKeys, excludeDuplicateContent } from '../services/contentIdentity.js';
 import { shortcutFor } from '../services/keyboardShortcuts.js';
+import RunwayCache from '../services/RunwayCache.js';
 import { SESSION_IDLE_MS } from '../services/SessionInterest.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
@@ -346,6 +347,9 @@ export default {
     this.videoElements = {}; // Non-reactive to prevent infinite render loops
     this.videoCanvases = {}; // Non-reactive: first-frame canvas elements by composite key
     this.recommendationSystem = recommendationSystem;
+    // The first search after mounting may start from the runway saved by the
+    // previous launch (or the last visit to the feed).
+    this.runwayRestoreTried = false;
     // Initialize recommendation system (async)
     await this.recommendationSystem.initialize();
   },
@@ -583,6 +587,26 @@ export default {
         const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
         const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
 
+        // Show the saved runway right away; the fetch below queues fresh
+        // posts behind it.
+        if (newSearch && !this.runwayRestoreTried && !deepDiveState.active) {
+          this.runwayRestoreTried = true;
+          const restored = await this.restoreRunway({ blockedKeys, blockSets, whitelist: activeWhitelist, blacklist: activeBlacklist });
+          if (superseded()) return;
+          if (restored.length) {
+            console.log(`Restored ${restored.length} saved posts`);
+            this.posts = restored;
+            this.loading = false;
+            this.analyzeUpcomingImages();
+            this.processVideoUrls(restored);
+            this.$nextTick(() => {
+              if (this.feedDisposed) return;
+              this.observePosts();
+              this.determineCurrentPost();
+            });
+          }
+        }
+
         while (newPosts.length < targetCount && attempts < maxAttempts && emptyAttempts < maxEmptyAttempts) {
           attempts++;
           
@@ -624,6 +648,8 @@ export default {
           console.log(`Added ${newPosts.length} new posts. Total: ${this.posts.length}`);
           // Pre-fetch video URLs as blobs for Tauri production (non-blocking)
           this.processVideoUrls(newPosts);
+          // Kept current in case the app is killed without being hidden first.
+          this.saveRunway();
         } else if (newPosts.length === 0) {
             console.log("No new posts found in batch.");
             this.hasMorePosts = false;
@@ -645,6 +671,46 @@ export default {
           this.determineCurrentPost();
         });
       }
+    },
+    /** Identifies the feed a saved runway belongs to. */
+    runwayContext() {
+      const query = this.$route.query;
+      const settings = useSettingsStore();
+      return JSON.stringify({
+        whitelist: query.whitelist ? query.whitelist.split(',') : (this.whitelistTags || []),
+        images: 'images' in query ? query.images === '1' : !!this.mediaType.images,
+        videos: 'videos' in query ? query.videos === '1' : !!this.mediaType.videos,
+        sources: [settings.activeSource, ...(settings.customSources || [])].filter(Boolean).map(source => [source.type, source.url, source.enabled !== false]),
+      });
+    },
+    /** Save the unseen posts ahead of the current one for the next launch. */
+    saveRunway() {
+      if (deepDiveState.active || !this.recommendationSystem || !this.posts.length) return;
+      RunwayCache.saveRunway(this.runwayContext(), this.posts.slice(Math.max(0, this.currentPostIndex + 1)), this.recommendationSystem.candidatePool);
+    },
+    onPageHidden(event) {
+      if (event.type === 'pagehide' || document.hidden) this.saveRunway();
+    },
+    /**
+     * Take the saved runway and keep only what may still be shown: the same
+     * content gate, reports and seen-filtering as a fresh fetch. Its leftover
+     * candidates go back into the recommendation pool.
+     */
+    async restoreRunway({ blockedKeys, blockSets, whitelist, blacklist }) {
+      const saved = await RunwayCache.takeRunway(this.runwayContext());
+      if (!saved) return [];
+      const rs = this.recommendationSystem;
+      const allowed = posts => excludeDuplicateContent(
+        ReportService.filterPosts(rs.applyClientSideFilters(rs.applyContentFilters(posts, { blacklist, selectedRatings: ['general'] }), { whitelist }), blockSets),
+        blockedKeys
+      );
+      const runway = allowed(saved.runway);
+      for (const post of runway) {
+        blockedKeys.add(this.getCompositeKey(post));
+        contentKeys(post).forEach(key => blockedKeys.add(key));
+      }
+      rs.restorePool(allowed(saved.pool));
+      return runway;
     },
     handleScroll() {
       if (this.isResizing) return;
@@ -1075,6 +1141,8 @@ export default {
     this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
     window.addEventListener('keydown', this.onShortcutKey);
     document.addEventListener('visibilitychange', this.onFeedVisibility);
+    document.addEventListener('visibilitychange', this.onPageHidden);
+    window.addEventListener('pagehide', this.onPageHidden);
     // The autoScroll watcher runs before the container exists; a feed mounted
     // with autoscroll already on (Apply in settings, back from Profile) needs
     // its video-ended listener attached here or "wait for video" never advances.
@@ -1231,6 +1299,9 @@ export default {
   },
   beforeUnmount() {
     clearTimeout(this._revisitTimer);
+    this.saveRunway();
+    document.removeEventListener('visibilitychange', this.onPageHidden);
+    window.removeEventListener('pagehide', this.onPageHidden);
     this.feedDisposed = true;
     this.unsubscribeImageAnalysis?.();
     this.unsubscribeSession?.();
