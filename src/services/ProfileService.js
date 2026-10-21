@@ -102,6 +102,8 @@ export const getActiveProfileDbName = () => getProfileDbName(getActiveProfile().
  * singleton stores, and the gelbooru tag -> category cache.
  * v2: profileSnapshot (ML model, embeddings, bandit state).
  * v3: reports (blocked posts/artists/uploaders).
+ * v4: imageAnalysis, sourceTags and tagCatalogState caches.
+ * v5: feedRunway (unseen posts kept for the next launch, see RunwayCache).
  */
 const SCHEMA_STEPS = [
     {
@@ -143,6 +145,12 @@ const SCHEMA_STEPS = [
             imageAnalysis: 'key, updatedAt',
             sourceTags: '[source+name], source, name',
             tagCatalogState: 'source'
+        }
+    },
+    {
+        version: 5,
+        stores: {
+            feedRunway: 'id'
         }
     }
 ];

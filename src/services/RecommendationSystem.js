@@ -38,6 +38,10 @@ export const COMMON_TAGS = [
 
 const instanceId = Math.floor(Math.random() * 10000);
 
+// Saved runway posts were ranked by the profile being reset; the next launch
+// must not bring them back. Loaded lazily: the cache pulls in the database.
+const clearSavedRunway = () => import('./RunwayCache.js').then(cache => cache.clearRunway()).catch(() => {});
+
 const RATING_CODES = { general: 'g', sensitive: 's', questionable: 'q', explicit: 'e' };
 
 // Unused candidates kept between feed fetches.
@@ -118,6 +122,11 @@ class RecommendationSystem {
     return this.callWorker('initialize');
   }
 
+  /** Seed the pool with candidates saved by the previous launch. */
+  restorePool(posts) {
+    this.candidatePool = posts.slice(0, POOL_CAP);
+  }
+
   resetExploreSession() {
     this.strategyCursors = {};
     this.candidatePool = [];
@@ -132,6 +141,7 @@ class RecommendationSystem {
   async resetRecommendations() {
     this.strategyCursors = {};
     this.candidatePool = [];
+    await clearSavedRunway();
     const result = await this.callWorker('resetRecommendations');
     this.publishDeepDive(null);
     return result;
@@ -140,6 +150,7 @@ class RecommendationSystem {
   async factoryReset() {
     this.strategyCursors = {};
     this.candidatePool = [];
+    await clearSavedRunway();
     const result = await this.callWorker('factoryReset');
     this.publishDeepDive(null);
     return result;
