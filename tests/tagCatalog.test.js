@@ -72,6 +72,6 @@ describe('persistent analysis', () => {
     await db.imageAnalysis.put({ key: analysisKey(a), analysis: { version: 1, composition: Array(32).fill(0.5), aiTags: [{ name: 'cat', confidence: 0.9, category: 0 }] } });
     await hydrateImageAnalysis([b], { includeAi: false }); expect(b.imageAnalysis.aiTags).toEqual([]);
     await hydrateImageAnalysis([b]); expect(b.imageAnalysis.aiTags[0].name).toBe('cat');
-    expect(db.verno).toBe(4);
+    expect(db.verno).toBe(5);
   });
 });
