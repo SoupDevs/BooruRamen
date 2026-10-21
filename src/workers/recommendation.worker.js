@@ -1136,7 +1136,7 @@ export class RecommendationWorkerCore {
     if (selectedStrategies.has('adjacent')) {
       const adjacentTag = this.weightedRandomSelect(this.adjacentInterests(), usedTags);
       if (adjacentTag && !this.exhaustedStrategies.has(adjacentTag.tag)) {
-        queries.push({ tags: adjacentTag.tag, type: 'adjacent', intent: 'Adjacent interest - likely to enjoy, not yet explored' });
+        queries.push({ tags: adjacentTag.tag, type: 'adjacent', intent: 'Adjacent interest - likely to enjoy, not yet explored', reason: { tag: adjacentTag.tag, via: adjacentTag.via || null } });
         usedTags.add(adjacentTag.tag);
       }
     }
@@ -1214,7 +1214,7 @@ export class RecommendationWorkerCore {
     const pick = this.weightedRandomSelect(trends, exclude) || this.weightedRandomSelect(corePool, exclude);
     if (!pick) return null;
     const personal = trends.some(item => item.tag === pick.tag);
-    return { tag: pick.tag, tags: `${pick.tag} order:rank`, type: 'trending', intent: personal ? `Trending near your taste: "${pick.tag}"` : `Hot right now in "${pick.tag}"` };
+    return { tag: pick.tag, tags: `${pick.tag} order:rank`, type: 'trending', intent: personal ? `Trending near your taste: "${pick.tag}"` : `Hot right now in "${pick.tag}"`, reason: { tag: pick.tag, personal } };
   }
 
   /** Learn the booru's tag structure from a batch of fetched candidates. */

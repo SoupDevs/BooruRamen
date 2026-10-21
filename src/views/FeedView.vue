@@ -47,6 +47,15 @@
             :key="mediaBurst(post).id"
             :type="mediaBurst(post).type"
           />
+          <!-- Why a discovery pick is here; fades on its own, never takes a tap -->
+          <transition name="why-chip">
+            <div
+              v-if="whyChip && whyChip.key === getCompositeKey(post)"
+              class="absolute top-3 left-3 z-10 max-w-[80%] truncate pointer-events-none rounded-full bg-black/60 text-white text-xs px-3 py-1 backdrop-blur-sm"
+              role="status"
+              data-why-chip
+            >{{ whyChip.text }}</div>
+          </transition>
           <ProgressiveImage
             v-if="['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'].includes(getFileExtension(post))"
             :src="post.file_url"
@@ -172,6 +181,7 @@ import { contentKeys, excludeDuplicateContent } from '../services/contentIdentit
 import { shortcutFor } from '../services/keyboardShortcuts.js';
 import RunwayCache from '../services/RunwayCache.js';
 import { SESSION_IDLE_MS } from '../services/SessionInterest.js';
+import { whyChipText, WHY_CHIP_MS } from '../services/WhyChip.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
@@ -197,6 +207,8 @@ export default {
   data() {
     return {
       posts: [],
+      // { key, text } of the "why this post" chip on screen
+      whyChip: null,
       loading: true,
       page: 1,
       currentPostIndex: 0,
@@ -271,7 +283,7 @@ export default {
     postIndexes() {
       return new Map(this.posts.map((post, index) => [post, index]));
     },
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'aiTaggingEnabled']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'aiTaggingEnabled', 'showWhyChips', 'focusMode', 'avoidedTags']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Container style that adjusts height for comments sheet
@@ -347,6 +359,8 @@ export default {
     this.videoElements = {}; // Non-reactive to prevent infinite render loops
     this.videoCanvases = {}; // Non-reactive: first-frame canvas elements by composite key
     this.recommendationSystem = recommendationSystem;
+    // Posts whose "why this post" chip has been shown: once per post.
+    this.whyChipShown = new Set();
     // The first search after mounting may start from the runway saved by the
     // previous launch (or the last visit to the feed).
     this.runwayRestoreTried = false;
@@ -773,6 +787,7 @@ export default {
       ) {
         this.currentPostIndex = calculatedIndex;
         this.currentPostKey = currentPostKey;
+        this.showWhyChip(currentPost);
         // The window moved: make sure the clips about to scroll in are loading.
         this.primeNeighbouringVideos();
         this.analyzeUpcomingImages();
@@ -797,6 +812,20 @@ export default {
           this.$emit('current-post-changed', null, null);
         }
       }
+    },
+    /** Show the post's "why this post" chip for a few seconds, once. */
+    showWhyChip(post) {
+      clearTimeout(this._whyChipTimer);
+      this.whyChip = null;
+      if (!post || !this.showWhyChips || this.focusMode || deepDiveState.active) return;
+      const key = this.getCompositeKey(post);
+      if (this.whyChipShown.has(key)) return;
+      const blacklist = this.$route.query.blacklist ? this.$route.query.blacklist.split(',') : (this.blacklistTags || []);
+      const text = whyChipText(post, { blacklist, avoided: this.avoidedTags || [] });
+      if (!text) return;
+      this.whyChipShown.add(key);
+      this.whyChip = { key, text };
+      this._whyChipTimer = setTimeout(() => { this.whyChip = null; }, WHY_CHIP_MS);
     },
     observePosts() {
         if (this.observer) {
@@ -1299,6 +1328,7 @@ export default {
   },
   beforeUnmount() {
     clearTimeout(this._revisitTimer);
+    clearTimeout(this._whyChipTimer);
     this.saveRunway();
     document.removeEventListener('visibilitychange', this.onPageHidden);
     window.removeEventListener('pagehide', this.onPageHidden);
@@ -1398,6 +1428,12 @@ export default {
       </script>
 
       <style scoped>
+      /* "Why this post" chip: fades in, lingers, fades out. */
+      .why-chip-enter-active, .why-chip-leave-active { transition: opacity 0.4s ease; }
+      .why-chip-enter-from, .why-chip-leave-to { opacity: 0; }
+      @media (prefers-reduced-motion: reduce) {
+        .why-chip-enter-active, .why-chip-leave-active { transition: none; }
+      }
       /* Playback glyph over a video: a mildly transparent grey disc with the icon
          on top. The icon pops in like the interaction bursts and, on resume,
          swaps to a play glyph that pops away; the disc only fades. */
