@@ -80,6 +80,10 @@ const MOEBOORU_ORDERS = { rank: 'score', popular: 'score', favcount: 'score' };
 // How long a failed Gelbooru tag-category lookup waits before it is retried
 const TAG_LOOKUP_RETRY_MS = 10 * 60 * 1000;
 
+// Feed post requests give up after this long. A stalled request would
+// otherwise hold up every strategy in the batch until the network gave up.
+export const POST_REQUEST_TIMEOUT_MS = 6000;
+
 class BooruAdapter {
     constructor(baseUrl, type) {
         this.baseUrl = baseUrl;
@@ -327,7 +331,7 @@ export class DanbooruAdapter extends BooruAdapter {
 
         try {
             console.log(`[Danbooru] Fetching: ${url}`);
-            const response = await httpFetch(url);
+            const response = await httpFetch(url, { timeoutMs: POST_REQUEST_TIMEOUT_MS });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json();
             // Attach actual query for debugging
@@ -1079,7 +1083,7 @@ export class GelbooruAdapter extends BooruAdapter {
             // Rate limit requests to avoid 429 errors
             await this.throttle();
             console.log(`[Gelbooru] Fetching: ${url}`);
-            const response = await httpFetch(url);
+            const response = await httpFetch(url, { timeoutMs: POST_REQUEST_TIMEOUT_MS });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
 
             // Safely handle non-JSON or empty responses
@@ -1459,7 +1463,7 @@ export class MoebooruAdapter extends BooruAdapter {
 
         try {
             console.log(`[Moebooru] Fetching: ${url}`);
-            const response = await httpFetch(url);
+            const response = await httpFetch(url, { timeoutMs: POST_REQUEST_TIMEOUT_MS });
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const data = await response.json();
             return data.filter(p => p.file_url).map(p => this.normalizePost(p));
