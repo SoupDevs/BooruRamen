@@ -47,13 +47,35 @@ async function initTauriFetch() {
 }
 
 /**
+ * A signal that aborts after `ms`, or when the caller's own signal does.
+ * @param {AbortSignal|undefined} signal
+ * @param {number} ms
+ * @returns {AbortSignal}
+ */
+function withTimeout(signal, ms) {
+    let timeout;
+    if (typeof AbortSignal.timeout === 'function') {
+        timeout = AbortSignal.timeout(ms);
+    } else {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), ms);
+        timeout = controller.signal;
+    }
+    if (!signal) return timeout;
+    return typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : signal;
+}
+
+/**
  * Unified fetch function that uses Tauri HTTP in production and browser fetch in development.
- * API is compatible with standard fetch.
+ * API is compatible with standard fetch, plus `timeoutMs`: the request (and
+ * reading its body) is aborted once that many milliseconds have passed.
  * @param {string} url - The URL to fetch
- * @param {RequestInit} options - Fetch options
+ * @param {RequestInit & { timeoutMs?: number }} options - Fetch options
  * @returns {Promise<Response>}
  */
-export async function httpFetch(url, options = {}) {
+export async function httpFetch(url, { timeoutMs, ...options } = {}) {
+    if (timeoutMs) options = { ...options, signal: withTimeout(options.signal, timeoutMs) };
+
     // Initialize Tauri fetch if not already done
     const tauriFetchFn = await initTauriFetch();
 
