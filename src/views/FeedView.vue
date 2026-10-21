@@ -180,6 +180,7 @@ import imageAnalysis from '../services/ImageAnalysisService.js';
 import { contentKeys, excludeDuplicateContent } from '../services/contentIdentity.js';
 import { shortcutFor } from '../services/keyboardShortcuts.js';
 import RunwayCache from '../services/RunwayCache.js';
+import { SESSION_IDLE_MS } from '../services/SessionInterest.js';
 import { whyChipText, WHY_CHIP_MS } from '../services/WhyChip.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
@@ -380,6 +381,7 @@ export default {
     scheduleSessionRanking() {
       clearTimeout(this.sessionRankTimer);
       this.sessionRankTimer = setTimeout(async () => {
+        await this.insertRecoveryPick();
         // Keep the visible row, scroll history and the preloaded runway
         // fixed: swapping a post whose media is already buffering would
         // waste the download and show a spinner. Discard a ranking result if
@@ -394,6 +396,50 @@ export default {
           this.analyzeUpcomingImages();
         } catch (error) { console.warn('[Feed] Session ranking unavailable:', error.message); }
       }, 150);
+    },
+    /**
+     * After a run of skips the worker hands back a strong pick it held in
+     * reserve; it goes straight after the current post. The buffered runway
+     * only moves back one slot.
+     */
+    async insertRecoveryPick() {
+      if (deepDiveState.active || this.feedDisposed) return;
+      const posts = this.posts, index = this.currentPostIndex;
+      try {
+        const pick = await this.recommendationSystem.takeRecoveryPick(posts.map(post => this.getCompositeKey(post)));
+        if (!pick || this.posts !== posts || this.currentPostIndex !== index) return;
+        const seen = new Set([...(this._historyKeys || []), ...posts.flatMap(post => [this.getCompositeKey(post), ...contentKeys(post)])]);
+        // Reports made since the pick was set aside still apply.
+        const allowed = excludeDuplicateContent(ReportService.filterPosts([pick], await ReportService.getBlockSets()), seen);
+        if (!allowed.length || this.posts !== posts || this.currentPostIndex !== index) return;
+        this.posts = [...posts.slice(0, index + 1), pick, ...posts.slice(index + 1)];
+      } catch (error) { console.warn('[Feed] Recovery pick unavailable:', error.message); }
+    },
+    onFeedVisibility() {
+      if (document.hidden) {
+        this.hiddenAt = Date.now();
+        return;
+      }
+      const away = this.hiddenAt ? Date.now() - this.hiddenAt : 0;
+      this.hiddenAt = null;
+      if (away >= SESSION_IDLE_MS) this.reopenSession();
+    },
+    /**
+     * Back after a long pause: a new session. Re-rank the queue ahead so it
+     * opens with the most confident picks instead of whatever was next when
+     * the app was left (an exploration slot, a stale streak).
+     */
+    async reopenSession() {
+      if (deepDiveState.active || this.feedDisposed) return;
+      clearTimeout(this.sessionRankTimer);
+      const posts = this.posts, index = this.currentPostIndex, start = index + 1;
+      if (posts.length - start < 2) return;
+      try {
+        const ranked = await this.recommendationSystem.rankPosts(posts.slice(start), posts.slice(Math.max(0, start - 5), start), { opener: true });
+        if (this.posts !== posts || this.currentPostIndex !== index) return;
+        this.posts = [...posts.slice(0, start), ...ranked];
+        this.analyzeUpcomingImages();
+      } catch (error) { console.warn('[Feed] Session re-rank unavailable:', error.message); }
     },
     onImageLoaded(post) {
       imageAnalysis.enqueue([post], true);
@@ -1123,6 +1169,7 @@ export default {
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
     this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
     window.addEventListener('keydown', this.onShortcutKey);
+    document.addEventListener('visibilitychange', this.onFeedVisibility);
     document.addEventListener('visibilitychange', this.onPageHidden);
     window.addEventListener('pagehide', this.onPageHidden);
     // The autoScroll watcher runs before the container exists; a feed mounted
@@ -1293,6 +1340,7 @@ export default {
     this.$refs.feedContainer.removeEventListener('scroll', this.handleScroll);
     this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
     window.removeEventListener('keydown', this.onShortcutKey);
+    document.removeEventListener('visibilitychange', this.onFeedVisibility);
     if (this.observer) {
         this.observer.disconnect();
     }
