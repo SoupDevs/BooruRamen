@@ -180,8 +180,13 @@ class RecommendationSystem {
     return this.callWorker('getPostScoreDetails', post);
   }
 
-  async rankPosts(posts, context = []) {
-    return this.callWorker('rankPosts', { posts, context });
+  async rankPosts(posts, context = [], options = {}) {
+    return this.callWorker('rankPosts', { posts, context, options });
+  }
+
+  /** A held-back strong pick to show after a run of skips, or null. */
+  async takeRecoveryPick(excludeKeys = []) {
+    return this.callWorker('takeRecoveryPick', excludeKeys);
   }
 
   async summarizeTagScores(limit = 10) {
