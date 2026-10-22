@@ -110,6 +110,42 @@ fn android_cookie_header(env: &mut jni::JNIEnv, url: &str) -> Result<String, Str
   Ok(value.into())
 }
 
+/// Android: lets the app page's `<img>` and `<video>` requests to booru CDNs
+/// carry those sites' cookies. The page is served from tauri.localhost, so
+/// every booru request is third-party, and Android's WebView drops
+/// third-party cookies by default. Without this a Cloudflare clearance
+/// reaches the API (the app sends it itself) but never the media.
+#[cfg(target_os = "android")]
+fn allow_third_party_cookies<R: tauri::Runtime>(webview: &Webview<R>) {
+  let _ = webview.with_webview(|platform| {
+    platform.jni_handle().exec(|env, _activity, webview| {
+      if webview.is_null() {
+        return;
+      }
+      let result = env
+        .call_static_method(
+          "android/webkit/CookieManager",
+          "getInstance",
+          "()Landroid/webkit/CookieManager;",
+          &[],
+        )
+        .and_then(|v| v.l())
+        .and_then(|manager| {
+          env.call_method(
+            &manager,
+            "setAcceptThirdPartyCookies",
+            "(Landroid/webkit/WebView;Z)V",
+            &[webview.into(), true.into()],
+          )
+        });
+      if result.is_err() || env.exception_check().unwrap_or(false) {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+      }
+    });
+  });
+}
+
 fn clearance<R: tauri::Runtime>(webview: &Webview<R>, site: &Url) -> Option<String> {
   clearance_in(&cookie_header(webview, site).ok()?)
 }
@@ -160,6 +196,9 @@ pub fn on_page_load<R: tauri::Runtime>(webview: &Webview<R>, url: &Url, event: P
 }
 
 fn after_page_load<R: tauri::Runtime>(webview: &Webview<R>, url: &Url) {
+  #[cfg(target_os = "android")]
+  allow_third_party_cookies(webview);
+
   let state = webview.state::<PendingVerification>();
   let Some(Pending { site, back, stale_clearance }) = state.0.lock().unwrap().clone() else {
     return;
