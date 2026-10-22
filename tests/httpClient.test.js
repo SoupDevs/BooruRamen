@@ -18,7 +18,7 @@ describe('httpClient', () => {
 
     it('recognises a Cloudflare block page', async () => {
         const res = new Response('<html><title>Just a moment...</title></html>', { status: 403 });
-        expect((await httpError(res)).message).toBe('HTTP error! status: 403 (blocked by Cloudflare)');
+        expect((await httpError(res)).message).toBe("HTTP error! status: 403 (blocked by Cloudflare. If you're on a VPN, try another server or turn it off)");
     });
 
     it('falls back to the bare status', async () => {
