@@ -166,6 +166,7 @@ import StorageService from '../services/StorageService';
 import ReportService from '../services/ReportService';
 import recommendationSystem, { deepDiveState } from '../services/RecommendationSystem';
 import { getPlayableVideoUrl, revokeBlobUrl } from '../services/videoProxy.js';
+import { probeMediaBlock } from '../services/httpClient.js';
 import {
   drawFirstFrameNow,
   primeNeighbouringFrames,
@@ -1166,6 +1167,7 @@ export default {
       }
       this.videoLoadingStates[key] = false;
       this.videoErrorStates[key] = true;
+      probeMediaBlock(post.file_url);
     },
   },
   mounted() {

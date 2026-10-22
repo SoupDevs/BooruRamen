@@ -3,7 +3,7 @@
     v-bind="$attrs"
     :src="resolvedSrc"
     @load="$emit('load', $event)"
-    @error="$emit('error', $event)"
+    @error="onError"
   >
 </template>
 
@@ -12,6 +12,7 @@ import {
   getDisplayableMediaUrl,
   releaseDisplayableMediaUrl,
 } from '../services/mediaUrl.js';
+import { probeMediaBlock } from '../services/httpClient.js';
 
 export default {
   name: 'BooruImage',
@@ -44,6 +45,10 @@ export default {
     releaseDisplayableMediaUrl(this.resolvedSrc);
   },
   methods: {
+    onError(event) {
+      probeMediaBlock(this.resolvedSrc);
+      this.$emit('error', event);
+    },
     async resolveSrc() {
       const requestedSrc = this.src;
       const generation = ++this.resolveGeneration;
