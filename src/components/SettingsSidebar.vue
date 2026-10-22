@@ -120,6 +120,27 @@
         </div>
       </div>
       
+      <!-- Why this post chip toggle -->
+      <div class="mb-4">
+        <div class="flex items-center justify-between gap-3">
+          <div :class="focusMode ? 'opacity-60' : ''">
+            <label class="text-sm font-medium">"Why this post" chips</label>
+            <p class="text-xs text-gray-400">{{ focusMode ? 'Hidden while focus mode is on' : 'Short note on discovery picks' }}</p>
+          </div>
+          <button 
+            @click="showWhyChips = !showWhyChips" 
+            class="relative inline-flex h-6 w-11 items-center rounded-full shrink-0"
+            :class="showWhyChips ? 'bg-pink-600' : 'bg-gray-600'"
+            data-why-chip-toggle
+          >
+            <span 
+              class="inline-block h-4 w-4 transform rounded-full bg-white transition"
+              :class="showWhyChips ? 'translate-x-6' : 'translate-x-1'"
+            ></span>
+          </button>
+        </div>
+      </div>
+      
       <!-- Default muted toggle -->
       <div class="mb-4">
         <div class="flex items-center justify-between">
@@ -329,7 +350,7 @@ export default {
   computed: {
     ...mapWritableState(useSettingsStore, [
       'autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos',
-      'mediaType', 'whitelistTags', 'blacklistTags', 'focusMode'
+      'mediaType', 'whitelistTags', 'blacklistTags', 'focusMode', 'showWhyChips'
     ]),
     ...mapWritableState(usePlayerStore, ['defaultMuted']),
   },
