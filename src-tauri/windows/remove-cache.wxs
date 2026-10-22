@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  BooruRamen MSI fragment (bundle.windows.wix.fragmentPaths).
+
+  The AI tagger model (~470 MB) is downloaded into the WebView's Cache Storage
+  under %LOCALAPPDATA%\com.booruramen.app, which the MSI never installed and
+  so never removed (issue #218). On a real uninstall (not the removal of the
+  old version during an upgrade) remove the downloaded model and the booru
+  media cache. Profiles, likes and settings are left alone.
+
+  RemoveFolderEx skips a folder whose property is empty, so the properties are
+  only set when the product is being removed outright.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <Fragment>
+    <SetProperty Id="BOORURAMEN_MODEL_CACHE_DIR"
+                 Value="[LocalAppDataFolder]com.booruramen.app\EBWebView\Default\Service Worker\CacheStorage"
+                 Before="WixRemoveFoldersEx" Sequence="execute">
+      <![CDATA[REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE]]>
+    </SetProperty>
+    <SetProperty Id="BOORURAMEN_MEDIA_CACHE_DIR"
+                 Value="[LocalAppDataFolder]com.booruramen.app\booru-media"
+                 Before="WixRemoveFoldersEx" Sequence="execute">
+      <![CDATA[REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE]]>
+    </SetProperty>
+
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="RemoveDownloadedCaches" Guid="5d3c1f0e-7b8a-4e52-9c61-2f4a8d9b0e17">
+        <RegistryValue Root="HKCU" Key="Software\SoupDevs\BooruRamen" Name="RemoveDownloadedCaches"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <util:RemoveFolderEx On="uninstall" Property="BOORURAMEN_MODEL_CACHE_DIR" />
+        <util:RemoveFolderEx On="uninstall" Property="BOORURAMEN_MEDIA_CACHE_DIR" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>
