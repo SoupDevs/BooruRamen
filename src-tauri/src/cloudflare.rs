@@ -42,13 +42,84 @@ fn https_url(url: &str) -> Result<Url, String> {
   Ok(url)
 }
 
-fn clearance<R: tauri::Runtime>(webview: &Webview<R>, site: &Url) -> Option<String> {
+/// The cookies the WebView holds for `url`, as a `Cookie` header value.
+#[cfg(not(target_os = "android"))]
+fn cookie_header<R: tauri::Runtime>(webview: &Webview<R>, url: &Url) -> Result<String, String> {
+  let cookies = webview.cookies_for_url(url.clone()).map_err(|e| e.to_string())?;
+  Ok(
+    cookies
+      .iter()
+      .map(|c| format!("{}={}", c.name(), c.value()))
+      .collect::<Vec<_>>()
+      .join("; "),
+  )
+}
+
+/// Android: asks CookieManager directly. wry's own cookie read crashes the
+/// app when a site has no cookies yet (its Kotlin helper returns the null
+/// from CookieManager as a non-null String, and the resulting exception
+/// aborts the process), which is exactly the state before a first check.
+#[cfg(target_os = "android")]
+fn cookie_header<R: tauri::Runtime>(webview: &Webview<R>, url: &Url) -> Result<String, String> {
+  let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+  let url = url.to_string();
   webview
-    .cookies_for_url(site.clone())
-    .ok()?
-    .iter()
-    .find(|c| c.name() == CLEARANCE_COOKIE)
-    .map(|c| c.value().to_string())
+    .with_webview(move |platform| {
+      platform.jni_handle().exec(move |env, _activity, _webview| {
+        let result = android_cookie_header(env, &url);
+        if env.exception_check().unwrap_or(false) {
+          let _ = env.exception_describe();
+          let _ = env.exception_clear();
+        }
+        let _ = tx.send(result);
+      });
+    })
+    .map_err(|e| e.to_string())?;
+  rx.recv_timeout(std::time::Duration::from_secs(10))
+    .map_err(|_| "Reading the WebView's cookies timed out".to_string())?
+}
+
+#[cfg(target_os = "android")]
+fn android_cookie_header(env: &mut jni::JNIEnv, url: &str) -> Result<String, String> {
+  use jni::objects::JString;
+
+  let manager = env
+    .call_static_method(
+      "android/webkit/CookieManager",
+      "getInstance",
+      "()Landroid/webkit/CookieManager;",
+      &[],
+    )
+    .and_then(|v| v.l())
+    .map_err(|e| e.to_string())?;
+  let url = env.new_string(url).map_err(|e| e.to_string())?;
+  let value = env
+    .call_method(
+      &manager,
+      "getCookie",
+      "(Ljava/lang/String;)Ljava/lang/String;",
+      &[(&url).into()],
+    )
+    .and_then(|v| v.l())
+    .map_err(|e| e.to_string())?;
+  if value.is_null() {
+    return Ok(String::new());
+  }
+  let value = JString::from(value);
+  let value = env.get_string(&value).map_err(|e| e.to_string())?;
+  Ok(value.into())
+}
+
+fn clearance<R: tauri::Runtime>(webview: &Webview<R>, site: &Url) -> Option<String> {
+  clearance_in(&cookie_header(webview, site).ok()?)
+}
+
+fn clearance_in(header: &str) -> Option<String> {
+  header
+    .split(';')
+    .filter_map(|pair| pair.trim().split_once('='))
+    .find(|(name, _)| *name == CLEARANCE_COOKIE)
+    .map(|(_, value)| value.to_string())
 }
 
 // Both commands are async so they run off the main thread: on Android,
@@ -72,14 +143,7 @@ pub async fn cloudflare_verify<R: tauri::Runtime>(
 #[tauri::command]
 pub async fn cloudflare_cookies<R: tauri::Runtime>(webview: Webview<R>, url: String) -> Result<String, String> {
   let url = https_url(&url)?;
-  let cookies = webview.cookies_for_url(url).map_err(|e| e.to_string())?;
-  Ok(
-    cookies
-      .iter()
-      .map(|c| format!("{}={}", c.name(), c.value()))
-      .collect::<Vec<_>>()
-      .join("; "),
-  )
+  cookie_header(&webview, &url)
 }
 
 /// Page-load hook: while a verification is pending and the site has loaded,
@@ -142,5 +206,12 @@ mod tests {
     assert!(https_url("http://danbooru.donmai.us/").is_err());
     assert!(https_url("javascript:alert(1)").is_err());
     assert!(https_url("not a url").is_err());
+  }
+
+  #[test]
+  fn finds_the_clearance_cookie_in_a_cookie_header() {
+    assert_eq!(clearance_in("a=1; cf_clearance=abc.def=; b=2"), Some("abc.def=".into()));
+    assert_eq!(clearance_in("cf_clearance_x=1"), None);
+    assert_eq!(clearance_in(""), None);
   }
 }

@@ -30,9 +30,10 @@ log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Used by the updater to fire the Android package-installer intent.
+# Used by the updater to fire the Android package-installer intent, and to
+# read WebView cookies for the Cloudflare check.
 [target.'cfg(target_os = "android")'.dependencies]
-jni = { version = "0.21", optional = true }
+jni = "0.21"
 
 [features]
 # Sideloaded self-updates: download the release APK and hand it to the system
@@ -40,10 +41,10 @@ jni = { version = "0.21", optional = true }
 # themselves today.
 #
 # A build whose updates are managed elsewhere (Google Play, F-Droid) removes
-# "sideload-updates" from `default` below: the installer intent, the JNI
-# dependency, and - via scripts/android/patch_android_project.mjs - the
+# "sideload-updates" from `default` below: the installer intent and
+# - via scripts/android/patch_android_project.mjs - the
 # REQUEST_INSTALL_PACKAGES permission and the FileProvider all disappear from
 # the build. The command keeps existing so the UI gets a clear message instead
 # of an "unknown command" error.
 default = ["sideload-updates"]
-sideload-updates = ["dep:jni"]
+sideload-updates = []
