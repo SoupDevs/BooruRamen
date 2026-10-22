@@ -40,6 +40,10 @@ export function withAppUserAgent(headers) {
  * @param {Response} response
  * @returns {Promise<Error>}
  */
+// Cloudflare blocks by IP reputation, and shared VPN exit servers are the
+// usual reason a user's requests get flagged while the site works elsewhere.
+const CLOUDFLARE_BLOCK = "blocked by Cloudflare. If you're on a VPN, try another server or turn it off";
+
 export async function httpError(response) {
     let detail = '';
     try {
@@ -49,13 +53,13 @@ export async function httpError(response) {
             detail = json.message || json.reason || json.error || '';
         } catch {
             if (/cloudflare|cf-ray|just a moment|attention required/i.test(body)) {
-                detail = 'blocked by Cloudflare';
+                detail = CLOUDFLARE_BLOCK;
             }
         }
     } catch {
         // Body unreadable; the status alone will have to do.
     }
-    if (!detail && response.headers?.get?.('cf-mitigated')) detail = 'blocked by Cloudflare';
+    if (!detail && response.headers?.get?.('cf-mitigated')) detail = CLOUDFLARE_BLOCK;
     const error = new Error(`HTTP error! status: ${response.status}${detail ? ` (${detail})` : ''}`);
     error.status = response.status;
     return error;
