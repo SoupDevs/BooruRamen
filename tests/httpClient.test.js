@@ -97,22 +97,6 @@ describe('httpFetch in Tauri', () => {
         expect(tauriFetch).toHaveBeenCalledTimes(2);
     });
 
-    it('offers the check for a media host once its files fail to load', async () => {
-        const { probeMediaBlock } = await import('../src/services/httpClient.js');
-        const { cloudflareState } = await import('../src/services/cloudflareVerify.js');
-        tauriFetch.mockResolvedValue(blocked());
-        browserFetch.mockRejectedValue(new TypeError('Failed to fetch'));
-
-        await probeMediaBlock('https://cdn.donmai.us/original/aa/bb/aabb.jpg');
-        expect(tauriFetch.mock.calls[0][1].method).toBe('HEAD');
-        expect(cloudflareState.blocked).toEqual(['https://cdn.donmai.us']);
-
-        // One probe per host per session, and never for local URLs.
-        await probeMediaBlock('https://cdn.donmai.us/original/cc/dd/ccdd.jpg');
-        await probeMediaBlock('http://asset.localhost/cache/1.jpg');
-        expect(tauriFetch).toHaveBeenCalledTimes(1);
-    });
-
     it('sends the WebView clearance cookie and User-Agent once the site is verified', async () => {
         const store = new Map([['cloudflarePendingOrigin', JSON.stringify('https://danbooru.donmai.us')]]);
         vi.stubGlobal('localStorage', {

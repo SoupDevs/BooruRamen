@@ -23,6 +23,8 @@
  * as-is.
  */
 
+import { clearanceHeaders, verifiedOriginList } from './cloudflareVerify.js';
+
 // Built-in booru whose media is known to need a Referer. Kept permanent so
 // media already in a feed keeps working even if the source is disabled.
 const BUILTIN_REFERER_SOURCES = [
@@ -157,11 +159,41 @@ export function isGelbooruMediaUrl(url) {
     return needsRefererProxy(url);
 }
 
+function isTauri() {
+    return typeof window !== 'undefined' && window.__TAURI_INTERNALS__ !== undefined;
+}
+
+/**
+ * The Cloudflare clearance for this media URL's site, if the user passed the
+ * check for it. Media often lives on a separate host (cdn.donmai.us for
+ * danbooru.donmai.us), so any verified origin on the same site counts.
+ * On a network Cloudflare blocks, the WebView's own <img>/<video> requests
+ * are refused even after the check, so those files are fetched natively with
+ * the clearance instead (see the cache_booru_media command).
+ * @returns {Promise<{referer: string, cookie: string, userAgent: string}|null>}
+ */
+async function clearanceFor(url) {
+    if (!isTauri() || !/^https:\/\//i.test(url || '')) return null;
+    const host = safeHost(url);
+    const origin = verifiedOriginList().find(o => hostsShareSite(host, safeHost(o)));
+    if (!origin) return null;
+    const headers = await clearanceHeaders(origin);
+    if (!headers) return null;
+    return { referer: `${origin}/`, cookie: headers.Cookie, userAgent: headers['User-Agent'] };
+}
+
 /**
  * Resolve a URL that an img/video element can load even when the booru blocks
- * hotlinks. Non-protected URLs pass through untouched.
+ * hotlinks or Cloudflare blocks the WebView. Other URLs pass through untouched.
  */
 export async function getDisplayableMediaUrl(url) {
+    const clearance = await clearanceFor(url);
+    if (clearance) {
+        const { convertFileSrc, invoke } = await import('@tauri-apps/api/core');
+        const cachedPath = await invoke('cache_booru_media', { url, ...clearance });
+        return convertFileSrc(cachedPath);
+    }
+
     const source = refererSourceFor(url);
     if (!source) return url;
 
@@ -170,7 +202,7 @@ export async function getDisplayableMediaUrl(url) {
         return `/booru-media?url=${encodeURIComponent(url)}&referer=${encodeURIComponent(source.referer)}`;
     }
 
-    if (typeof window !== 'undefined' && window.__TAURI_INTERNALS__ !== undefined) {
+    if (isTauri()) {
         const { convertFileSrc, invoke } = await import('@tauri-apps/api/core');
         const cachedPath = await invoke('cache_booru_media', {
             url,

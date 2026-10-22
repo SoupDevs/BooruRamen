@@ -80,6 +80,11 @@ export function wasVerified(origin) {
     return verifiedOrigins().has(origin);
 }
 
+/** Every origin the user has passed the check for. */
+export function verifiedOriginList() {
+    return [...verifiedOrigins()];
+}
+
 /**
  * Open `origin` in the app's WebView so the user can pass the check. The app
  * page is replaced until the check passes (or the user taps back).
