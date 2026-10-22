@@ -143,4 +143,14 @@ describe('feed chip', () => {
     vm.showWhyChip(post(2, { _strategy: 'anchor' }));
     expect(vm.whyChip).toBeNull();
   });
+
+  it('clears a chip on screen when focus mode turns on or chips are switched off', () => {
+    for (const [watcher, value] of [['focusMode', true], ['showWhyChips', false]]) {
+      const vm = feed();
+      vm.showWhyChip(discovery);
+      expect(vm.whyChip).not.toBeNull();
+      FeedView.watch[watcher].call(vm, value);
+      expect(vm.whyChip).toBeNull();
+    }
+  });
 });

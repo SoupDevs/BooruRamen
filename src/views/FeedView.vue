@@ -44,7 +44,7 @@
              never takes a tap. -->
         <transition name="why-chip">
           <div
-            v-if="whyChip && whyChip.key === getCompositeKey(post)"
+            v-if="whyChip && showWhyChips && !focusMode && whyChip.key === getCompositeKey(post)"
             class="why-chip absolute left-1/2 -translate-x-1/2 z-10 truncate pointer-events-none rounded-full bg-black/35 text-white/90 text-[11px] font-medium leading-5 px-3 backdrop-blur-sm ring-1 ring-white/10"
             role="status"
             data-why-chip
@@ -829,6 +829,10 @@ export default {
       this.whyChip = { key, text };
       this._whyChipTimer = setTimeout(() => { this.whyChip = null; }, WHY_CHIP_MS);
     },
+    hideWhyChip() {
+      clearTimeout(this._whyChipTimer);
+      this.whyChip = null;
+    },
     observePosts() {
         if (this.observer) {
             this.observer.disconnect();
@@ -1355,6 +1359,13 @@ export default {
     Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
   },
   watch: {
+    // Turning chips off, or entering focus mode, clears one already on screen.
+    showWhyChips(on) {
+      if (!on) this.hideWhyChip();
+    },
+    focusMode(enabled) {
+      if (enabled) this.hideWhyChip();
+    },
     aiTaggingEnabled(enabled) {
       if (enabled) this.analyzeUpcomingImages();
     },
