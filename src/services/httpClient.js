@@ -127,15 +127,67 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
     const tauriFetchFn = await initTauriFetch();
 
     if (tauriFetchFn) {
+        const origin = originOf(url);
+        if (webviewOrigins.has(origin)) return browserFetch(url, options);
+
         // Use Tauri's HTTP plugin fetch (bypasses CORS)
-        return tauriFetchFn(url, { ...options, headers: withAppUserAgent(options.headers) });
+        const response = await tauriFetchFn(url, { ...options, headers: withAppUserAgent(options.headers) });
+        if (!isCloudflareBlock(response)) return response;
+
+        // Cloudflare refused the plugin's client (seen on Android for
+        // Danbooru, whatever User-Agent we send), so the block is on how the
+        // connection looks rather than on what we ask for. The WebView's own
+        // fetch goes out as the system browser would, and APIs that allow
+        // CORS (Danbooru does) answer it. Remember the origin so later
+        // requests skip the refused attempt; keep the plugin's 403 when CORS
+        // rules the WebView out.
+        try {
+            const retry = await browserFetch(url, options);
+            webviewOrigins.add(origin);
+            console.warn(`[httpClient] Cloudflare blocked native requests to ${origin}; using the WebView's fetch instead`);
+            return retry;
+        } catch (e) {
+            if (options.signal?.aborted) throw e;
+            return response;
+        }
     }
 
     // Fall back to browser fetch (works in dev with Vite proxy)
+    return browserFetch(url, options);
+}
+
+// Origins whose native requests Cloudflare blocks; see httpFetch.
+const webviewOrigins = new Set();
+
+function originOf(url) {
+    try {
+        return new URL(url).origin;
+    } catch {
+        return String(url);
+    }
+}
+
+function browserFetch(url, options) {
     return fetch(url, {
         ...options,
         referrerPolicy: 'strict-origin-when-cross-origin'
     });
+}
+
+/**
+ * Whether a response is Cloudflare refusing the client rather than the site
+ * answering: a 403 Cloudflare marks as a challenge, or an HTML block page it
+ * served in place of the API's JSON.
+ * @param {Response} response
+ * @returns {boolean}
+ */
+function isCloudflareBlock(response) {
+    if (response?.status !== 403) return false;
+    const headers = response.headers;
+    if (!headers?.get) return false;
+    if (headers.get('cf-mitigated')) return true;
+    return /cloudflare/i.test(headers.get('server') || '') &&
+        /text\/html/i.test(headers.get('content-type') || '');
 }
 
 // Export a default fetch-like function for convenience
