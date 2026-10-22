@@ -328,6 +328,7 @@
     <!-- New release notification splash -->
     <UpdateSplash />
     <AiModelDialog />
+    <CloudflareVerifyBanner />
   </div>
 </template>
 
@@ -353,6 +354,7 @@ import SettingsSidebar from './components/SettingsSidebar.vue';
 import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 import AiModelDialog from './components/AiModelDialog.vue';
+import CloudflareVerifyBanner from './components/CloudflareVerifyBanner.vue';
 import aiTagger from './services/AiTaggerService.js';
 import { WatchTimer, MIN_IMPRESSION_MS } from './services/WatchTimer.js';
 
@@ -380,6 +382,7 @@ export default {
     ShareSheet,
     UpdateSplash,
     AiModelDialog,
+    CloudflareVerifyBanner,
   },
   data() {
     return {

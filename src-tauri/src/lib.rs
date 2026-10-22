@@ -14,6 +14,7 @@ use std::{
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 
+mod cloudflare;
 mod updater;
 
 #[cfg(target_os = "android")]
@@ -405,7 +406,11 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_opener::init())
+    .manage(cloudflare::PendingVerification::default())
+    .on_page_load(|webview, payload| cloudflare::on_page_load(webview, payload.url(), payload.event()))
     .invoke_handler(tauri::generate_handler![
+      cloudflare::cloudflare_verify,
+      cloudflare::cloudflare_cookies,
       cache_booru_media,
       download_file,
       clear_downloads,

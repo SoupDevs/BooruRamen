@@ -13,6 +13,7 @@ import App from './App.vue'
 import './assets/tailwind.css'
 import router from './router'
 import { cleanupPendingDeletes } from './services/ProfileService'
+import { finishPendingVerification } from './services/cloudflareVerify'
 
 // Retry profile database deletions that were interrupted by a reload
 cleanupPendingDeletes()
@@ -22,4 +23,6 @@ const app = createApp(App)
 
 app.use(pinia)
 app.use(router)
-app.mount('#app')
+// Coming back from a Cloudflare check: keep the clearance before the feed
+// starts fetching, so its first requests already carry it.
+finishPendingVerification().finally(() => app.mount('#app'))
