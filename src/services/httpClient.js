@@ -15,6 +15,7 @@
  */
 
 /* global __APP_VERSION__ */
+import { clearanceHeaders, noteCloudflareBlock } from './cloudflareVerify.js';
 
 // Sent on native (Tauri) requests. Without it the HTTP plugin identifies us as
 // "tauri-plugin-http/x.y.z", a generic library agent that Danbooru's bot
@@ -132,6 +133,18 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
 
     if (tauriFetchFn) {
         const origin = originOf(url);
+
+        // A site the user passed Cloudflare's check for: send the WebView's
+        // clearance cookie and User-Agent, which the clearance is tied to.
+        const clearance = await clearanceHeaders(origin);
+        if (clearance) {
+            const headers = new Headers(options.headers || {});
+            for (const [name, value] of Object.entries(clearance)) headers.set(name, value);
+            const response = await tauriFetchFn(url, { ...options, headers });
+            if (isCloudflareBlock(response)) noteCloudflareBlock(origin);
+            return response;
+        }
+
         if (webviewOrigins.has(origin)) return browserFetch(url, options);
 
         // Use Tauri's HTTP plugin fetch (bypasses CORS)
@@ -139,21 +152,25 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
         if (!isCloudflareBlock(response)) return response;
 
         // Cloudflare refused the plugin's client (seen on Android for
-        // Danbooru, whatever User-Agent we send), so the block is on how the
-        // connection looks rather than on what we ask for. The WebView's own
-        // fetch goes out as the system browser would, and APIs that allow
+        // Danbooru, whatever User-Agent we send), so the block may be on how
+        // the connection looks rather than on what we ask for. The WebView's
+        // own fetch goes out as the system browser would, and APIs that allow
         // CORS (Danbooru does) answer it. Remember the origin so later
         // requests skip the refused attempt; keep the plugin's 403 when CORS
-        // rules the WebView out.
+        // rules the WebView out or Cloudflare refuses the WebView too (the
+        // network itself is flagged), and offer the user the check.
         try {
             const retry = await browserFetch(url, options);
-            webviewOrigins.add(origin);
-            console.warn(`[httpClient] Cloudflare blocked native requests to ${origin}; using the WebView's fetch instead`);
-            return retry;
+            if (retry.status !== 403) {
+                webviewOrigins.add(origin);
+                console.warn(`[httpClient] Cloudflare blocked native requests to ${origin}; using the WebView's fetch instead`);
+                return retry;
+            }
         } catch (e) {
             if (options.signal?.aborted) throw e;
-            return response;
         }
+        noteCloudflareBlock(origin);
+        return response;
     }
 
     // Fall back to browser fetch (works in dev with Vite proxy)

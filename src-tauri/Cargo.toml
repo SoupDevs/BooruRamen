@@ -20,7 +20,9 @@ tauri-build = { version = "2.0.3", features = [] }
 [dependencies]
 tauri = { version = "2.11", features = ["protocol-asset"] }
 tauri-plugin-log = "2"
-tauri-plugin-http = "2"
+# unsafe-headers lets requests carry a Cloudflare clearance cookie from the
+# WebView (see src/cloudflare.rs); the frontend only sets Cookie for that.
+tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"

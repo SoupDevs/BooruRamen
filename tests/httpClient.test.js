@@ -81,4 +81,47 @@ describe('httpFetch in Tauri', () => {
         expect((await httpFetch('https://danbooru.donmai.us/posts.json')).status).toBe(403);
         expect(browserFetch).not.toHaveBeenCalled();
     });
+
+    it('offers the check when Cloudflare refuses the WebView too', async () => {
+        const { httpFetch } = await import('../src/services/httpClient.js');
+        const { cloudflareState } = await import('../src/services/cloudflareVerify.js');
+        tauriFetch.mockResolvedValue(blocked());
+        browserFetch.mockResolvedValue(new Response('<html></html>', { status: 403 }));
+
+        const res = await httpFetch('https://danbooru.donmai.us/posts.json');
+        expect(res.headers.get('server')).toBe('cloudflare');
+        expect(cloudflareState.blocked).toEqual(['https://danbooru.donmai.us']);
+
+        // Not remembered as a WebView origin: the next request tries natively again.
+        await httpFetch('https://danbooru.donmai.us/posts.json');
+        expect(tauriFetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('sends the WebView clearance cookie and User-Agent once the site is verified', async () => {
+        const store = new Map([['cloudflarePendingOrigin', JSON.stringify('https://danbooru.donmai.us')]]);
+        vi.stubGlobal('localStorage', {
+            getItem: k => (store.has(k) ? store.get(k) : null),
+            setItem: (k, v) => store.set(k, String(v)),
+            removeItem: k => store.delete(k),
+        });
+        vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Linux; Android 14; wv) Chrome/130' });
+        const invoke = vi.fn().mockResolvedValue('cf_clearance=abc; other=1');
+        vi.doMock('@tauri-apps/api/core', () => ({ invoke }));
+
+        const { finishPendingVerification } = await import('../src/services/cloudflareVerify.js');
+        const { httpFetch } = await import('../src/services/httpClient.js');
+        expect(await finishPendingVerification()).toBe('https://danbooru.donmai.us');
+        expect(store.has('cloudflarePendingOrigin')).toBe(false);
+
+        tauriFetch.mockResolvedValue(ok());
+        await httpFetch('https://danbooru.donmai.us/posts.json');
+        const headers = tauriFetch.mock.calls[0][1].headers;
+        expect(headers.get('Cookie')).toBe('cf_clearance=abc; other=1');
+        expect(headers.get('User-Agent')).toMatch(/Android/);
+
+        // Other sites are untouched.
+        await httpFetch('https://yande.re/post.json');
+        expect(tauriFetch.mock.calls[1][1].headers.get('Cookie')).toBeNull();
+        vi.doUnmock('@tauri-apps/api/core');
+    });
 });
