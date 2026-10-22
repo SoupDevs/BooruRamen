@@ -14,6 +14,53 @@
  * In development or browser contexts, uses native browser fetch.
  */
 
+/* global __APP_VERSION__ */
+
+// Sent on native (Tauri) requests. Without it the HTTP plugin identifies us as
+// "tauri-plugin-http/x.y.z", a generic library agent that Danbooru's bot
+// protection can answer with a 403 (seen on Android while desktop still got
+// through). Danbooru asks API clients to name themselves, so we do.
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
+export const APP_USER_AGENT = `BooruRamen/${APP_VERSION} (+https://github.com/SoupDevs/BooruRamen)`;
+
+/**
+ * Request headers with our User-Agent added, unless the caller set one.
+ * @param {HeadersInit|undefined} headers
+ * @returns {Headers}
+ */
+export function withAppUserAgent(headers) {
+    const merged = new Headers(headers || {});
+    if (!merged.has('User-Agent')) merged.set('User-Agent', APP_USER_AGENT);
+    return merged;
+}
+
+/**
+ * A readable error for a failed response, with a hint at what refused it:
+ * Danbooru's own JSON error message, or a Cloudflare block page.
+ * @param {Response} response
+ * @returns {Promise<Error>}
+ */
+export async function httpError(response) {
+    let detail = '';
+    try {
+        const body = (await response.text()).slice(0, 2000);
+        try {
+            const json = JSON.parse(body);
+            detail = json.message || json.reason || json.error || '';
+        } catch {
+            if (/cloudflare|cf-ray|just a moment|attention required/i.test(body)) {
+                detail = 'blocked by Cloudflare';
+            }
+        }
+    } catch {
+        // Body unreadable; the status alone will have to do.
+    }
+    if (!detail && response.headers?.get?.('cf-mitigated')) detail = 'blocked by Cloudflare';
+    const error = new Error(`HTTP error! status: ${response.status}${detail ? ` (${detail})` : ''}`);
+    error.status = response.status;
+    return error;
+}
+
 // Check if we're running in a Tauri context
 const isTauri = () => {
     return typeof window !== 'undefined' && window.__TAURI_INTERNALS__ !== undefined;
@@ -81,7 +128,7 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
 
     if (tauriFetchFn) {
         // Use Tauri's HTTP plugin fetch (bypasses CORS)
-        return tauriFetchFn(url, options);
+        return tauriFetchFn(url, { ...options, headers: withAppUserAgent(options.headers) });
     }
 
     // Fall back to browser fetch (works in dev with Vite proxy)
