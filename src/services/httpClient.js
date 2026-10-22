@@ -177,6 +177,30 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
     return browserFetch(url, options);
 }
 
+// Media origins already probed this session; see probeMediaBlock.
+const probedMediaOrigins = new Set();
+
+/**
+ * Called when the WebView fails to load a media file. An <img> or <video>
+ * error carries no status, so ask the file's host once per session through
+ * httpFetch, which offers the Cloudflare check when the host is blocking us.
+ * A booru's media often lives on a separate CDN host (cdn.donmai.us) that
+ * Cloudflare challenges on its own, so passing the check for the API host
+ * does not cover it.
+ * @param {string} url
+ */
+export async function probeMediaBlock(url) {
+    if (!url || !(await initTauriFetch())) return;
+    const origin = originOf(url);
+    if (!/^https:/.test(origin) || probedMediaOrigins.has(origin)) return;
+    probedMediaOrigins.add(origin);
+    try {
+        await httpFetch(url, { method: 'HEAD', timeoutMs: 15000 });
+    } catch {
+        // Unreachable is not a Cloudflare block; nothing to offer.
+    }
+}
+
 // Origins whose native requests Cloudflare blocks; see httpFetch.
 const webviewOrigins = new Set();
 
