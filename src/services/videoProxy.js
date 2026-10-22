@@ -15,6 +15,10 @@
 
 import { getDisplayableMediaUrl, needsRefererProxy } from './mediaUrl.js';
 
+function isTauriApp() {
+    return typeof window !== 'undefined' && window.__TAURI_INTERNALS__ !== undefined;
+}
+
 // Cache for blob URLs to avoid re-fetching
 const blobUrlCache = new Map();
 
@@ -29,8 +33,9 @@ export async function getPlayableVideoUrl(url) {
 
     // Boorus that hotlink-protect their files need the referer-capable fetch
     // path, same as images. Covers the built-in source and any custom booru the
-    // user configured with this engine.
-    if (needsRefererProxy(url)) {
+    // user configured with this engine. Sites the user passed a Cloudflare
+    // check for take the same native path.
+    if (needsRefererProxy(url) || isTauriApp()) {
         return getDisplayableMediaUrl(url);
     }
 
