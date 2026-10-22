@@ -39,6 +39,17 @@
         @dragstart.prevent="blockRowDrag"
         v-observe-visibility
       >
+        <!-- Why a discovery pick is here: a quiet pill centred at the top, level
+             with the sidebar tabs and clear of them. Fades on its own and
+             never takes a tap. -->
+        <transition name="why-chip">
+          <div
+            v-if="whyChip && showWhyChips && !focusMode && whyChip.key === getCompositeKey(post)"
+            class="why-chip absolute left-1/2 -translate-x-1/2 z-10 truncate pointer-events-none rounded-full bg-black/35 text-white/90 text-[11px] font-medium leading-5 px-3 backdrop-blur-sm ring-1 ring-white/10"
+            role="status"
+            data-why-chip
+          >{{ whyChip.text }}</div>
+        </transition>
         <!-- Post media -->
         <div class="relative h-full max-w-full flex items-center justify-center">
           <!-- Feedback for the interaction that was just logged -->
@@ -170,6 +181,9 @@ import tagSuggestion from '../services/TagSuggestionService';
 import imageAnalysis from '../services/ImageAnalysisService.js';
 import { contentKeys, excludeDuplicateContent } from '../services/contentIdentity.js';
 import { shortcutFor } from '../services/keyboardShortcuts.js';
+import RunwayCache from '../services/RunwayCache.js';
+import { SESSION_IDLE_MS } from '../services/SessionInterest.js';
+import { whyChipText, WHY_CHIP_MS } from '../services/WhyChip.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
@@ -195,6 +209,8 @@ export default {
   data() {
     return {
       posts: [],
+      // { key, text } of the "why this post" chip on screen
+      whyChip: null,
       loading: true,
       page: 1,
       currentPostIndex: 0,
@@ -269,7 +285,7 @@ export default {
     postIndexes() {
       return new Map(this.posts.map((post, index) => [post, index]));
     },
-    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'aiTaggingEnabled']),
+    ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'aiTaggingEnabled', 'showWhyChips', 'focusMode', 'avoidedTags']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
 
     // Container style that adjusts height for comments sheet
@@ -345,6 +361,11 @@ export default {
     this.videoElements = {}; // Non-reactive to prevent infinite render loops
     this.videoCanvases = {}; // Non-reactive: first-frame canvas elements by composite key
     this.recommendationSystem = recommendationSystem;
+    // Posts whose "why this post" chip has been shown: once per post.
+    this.whyChipShown = new Set();
+    // The first search after mounting may start from the runway saved by the
+    // previous launch (or the last visit to the feed).
+    this.runwayRestoreTried = false;
     // Initialize recommendation system (async)
     await this.recommendationSystem.initialize();
   },
@@ -362,6 +383,7 @@ export default {
     scheduleSessionRanking() {
       clearTimeout(this.sessionRankTimer);
       this.sessionRankTimer = setTimeout(async () => {
+        await this.insertRecoveryPick();
         // Keep the visible row, scroll history and the preloaded runway
         // fixed: swapping a post whose media is already buffering would
         // waste the download and show a spinner. Discard a ranking result if
@@ -376,6 +398,50 @@ export default {
           this.analyzeUpcomingImages();
         } catch (error) { console.warn('[Feed] Session ranking unavailable:', error.message); }
       }, 150);
+    },
+    /**
+     * After a run of skips the worker hands back a strong pick it held in
+     * reserve; it goes straight after the current post. The buffered runway
+     * only moves back one slot.
+     */
+    async insertRecoveryPick() {
+      if (deepDiveState.active || this.feedDisposed) return;
+      const posts = this.posts, index = this.currentPostIndex;
+      try {
+        const pick = await this.recommendationSystem.takeRecoveryPick(posts.map(post => this.getCompositeKey(post)));
+        if (!pick || this.posts !== posts || this.currentPostIndex !== index) return;
+        const seen = new Set([...(this._historyKeys || []), ...posts.flatMap(post => [this.getCompositeKey(post), ...contentKeys(post)])]);
+        // Reports made since the pick was set aside still apply.
+        const allowed = excludeDuplicateContent(ReportService.filterPosts([pick], await ReportService.getBlockSets()), seen);
+        if (!allowed.length || this.posts !== posts || this.currentPostIndex !== index) return;
+        this.posts = [...posts.slice(0, index + 1), pick, ...posts.slice(index + 1)];
+      } catch (error) { console.warn('[Feed] Recovery pick unavailable:', error.message); }
+    },
+    onFeedVisibility() {
+      if (document.hidden) {
+        this.hiddenAt = Date.now();
+        return;
+      }
+      const away = this.hiddenAt ? Date.now() - this.hiddenAt : 0;
+      this.hiddenAt = null;
+      if (away >= SESSION_IDLE_MS) this.reopenSession();
+    },
+    /**
+     * Back after a long pause: a new session. Re-rank the queue ahead so it
+     * opens with the most confident picks instead of whatever was next when
+     * the app was left (an exploration slot, a stale streak).
+     */
+    async reopenSession() {
+      if (deepDiveState.active || this.feedDisposed) return;
+      clearTimeout(this.sessionRankTimer);
+      const posts = this.posts, index = this.currentPostIndex, start = index + 1;
+      if (posts.length - start < 2) return;
+      try {
+        const ranked = await this.recommendationSystem.rankPosts(posts.slice(start), posts.slice(Math.max(0, start - 5), start), { opener: true });
+        if (this.posts !== posts || this.currentPostIndex !== index) return;
+        this.posts = [...posts.slice(0, start), ...ranked];
+        this.analyzeUpcomingImages();
+      } catch (error) { console.warn('[Feed] Session re-rank unavailable:', error.message); }
     },
     onImageLoaded(post) {
       imageAnalysis.enqueue([post], true);
@@ -537,6 +603,26 @@ export default {
         const activeWhitelist = whitelist ? whitelist.split(',') : (this.whitelistTags || []);
         const activeBlacklist = blacklist ? blacklist.split(',') : (this.blacklistTags || []);
 
+        // Show the saved runway right away; the fetch below queues fresh
+        // posts behind it.
+        if (newSearch && !this.runwayRestoreTried && !deepDiveState.active) {
+          this.runwayRestoreTried = true;
+          const restored = await this.restoreRunway({ blockedKeys, blockSets, whitelist: activeWhitelist, blacklist: activeBlacklist });
+          if (superseded()) return;
+          if (restored.length) {
+            console.log(`Restored ${restored.length} saved posts`);
+            this.posts = restored;
+            this.loading = false;
+            this.analyzeUpcomingImages();
+            this.processVideoUrls(restored);
+            this.$nextTick(() => {
+              if (this.feedDisposed) return;
+              this.observePosts();
+              this.determineCurrentPost();
+            });
+          }
+        }
+
         while (newPosts.length < targetCount && attempts < maxAttempts && emptyAttempts < maxEmptyAttempts) {
           attempts++;
           
@@ -578,6 +664,8 @@ export default {
           console.log(`Added ${newPosts.length} new posts. Total: ${this.posts.length}`);
           // Pre-fetch video URLs as blobs for Tauri production (non-blocking)
           this.processVideoUrls(newPosts);
+          // Kept current in case the app is killed without being hidden first.
+          this.saveRunway();
         } else if (newPosts.length === 0) {
             console.log("No new posts found in batch.");
             this.hasMorePosts = false;
@@ -599,6 +687,46 @@ export default {
           this.determineCurrentPost();
         });
       }
+    },
+    /** Identifies the feed a saved runway belongs to. */
+    runwayContext() {
+      const query = this.$route.query;
+      const settings = useSettingsStore();
+      return JSON.stringify({
+        whitelist: query.whitelist ? query.whitelist.split(',') : (this.whitelistTags || []),
+        images: 'images' in query ? query.images === '1' : !!this.mediaType.images,
+        videos: 'videos' in query ? query.videos === '1' : !!this.mediaType.videos,
+        sources: [settings.activeSource, ...(settings.customSources || [])].filter(Boolean).map(source => [source.type, source.url, source.enabled !== false]),
+      });
+    },
+    /** Save the unseen posts ahead of the current one for the next launch. */
+    saveRunway() {
+      if (deepDiveState.active || !this.recommendationSystem || !this.posts.length) return;
+      RunwayCache.saveRunway(this.runwayContext(), this.posts.slice(Math.max(0, this.currentPostIndex + 1)), this.recommendationSystem.candidatePool);
+    },
+    onPageHidden(event) {
+      if (event.type === 'pagehide' || document.hidden) this.saveRunway();
+    },
+    /**
+     * Take the saved runway and keep only what may still be shown: the same
+     * content gate, reports and seen-filtering as a fresh fetch. Its leftover
+     * candidates go back into the recommendation pool.
+     */
+    async restoreRunway({ blockedKeys, blockSets, whitelist, blacklist }) {
+      const saved = await RunwayCache.takeRunway(this.runwayContext());
+      if (!saved) return [];
+      const rs = this.recommendationSystem;
+      const allowed = posts => excludeDuplicateContent(
+        ReportService.filterPosts(rs.applyClientSideFilters(rs.applyContentFilters(posts, { blacklist, selectedRatings: ['general'] }), { whitelist }), blockSets),
+        blockedKeys
+      );
+      const runway = allowed(saved.runway);
+      for (const post of runway) {
+        blockedKeys.add(this.getCompositeKey(post));
+        contentKeys(post).forEach(key => blockedKeys.add(key));
+      }
+      rs.restorePool(allowed(saved.pool));
+      return runway;
     },
     handleScroll() {
       if (this.isResizing) return;
@@ -661,6 +789,7 @@ export default {
       ) {
         this.currentPostIndex = calculatedIndex;
         this.currentPostKey = currentPostKey;
+        this.showWhyChip(currentPost);
         // The window moved: make sure the clips about to scroll in are loading.
         this.primeNeighbouringVideos();
         this.analyzeUpcomingImages();
@@ -685,6 +814,24 @@ export default {
           this.$emit('current-post-changed', null, null);
         }
       }
+    },
+    /** Show the post's "why this post" chip for a few seconds, once. */
+    showWhyChip(post) {
+      clearTimeout(this._whyChipTimer);
+      this.whyChip = null;
+      if (!post || !this.showWhyChips || this.focusMode || deepDiveState.active) return;
+      const key = this.getCompositeKey(post);
+      if (this.whyChipShown.has(key)) return;
+      const blacklist = this.$route.query.blacklist ? this.$route.query.blacklist.split(',') : (this.blacklistTags || []);
+      const text = whyChipText(post, { blacklist, avoided: this.avoidedTags || [] });
+      if (!text) return;
+      this.whyChipShown.add(key);
+      this.whyChip = { key, text };
+      this._whyChipTimer = setTimeout(() => { this.whyChip = null; }, WHY_CHIP_MS);
+    },
+    hideWhyChip() {
+      clearTimeout(this._whyChipTimer);
+      this.whyChip = null;
     },
     observePosts() {
         if (this.observer) {
@@ -1028,6 +1175,9 @@ export default {
     this.$refs.feedContainer.addEventListener('scroll', this.handleScroll, { passive: true });
     this.$refs.feedContainer.addEventListener('wheel', this._onWheel, { passive: false });
     window.addEventListener('keydown', this.onShortcutKey);
+    document.addEventListener('visibilitychange', this.onFeedVisibility);
+    document.addEventListener('visibilitychange', this.onPageHidden);
+    window.addEventListener('pagehide', this.onPageHidden);
     // The autoScroll watcher runs before the container exists; a feed mounted
     // with autoscroll already on (Apply in settings, back from Profile) needs
     // its video-ended listener attached here or "wait for video" never advances.
@@ -1184,6 +1334,10 @@ export default {
   },
   beforeUnmount() {
     clearTimeout(this._revisitTimer);
+    clearTimeout(this._whyChipTimer);
+    this.saveRunway();
+    document.removeEventListener('visibilitychange', this.onPageHidden);
+    window.removeEventListener('pagehide', this.onPageHidden);
     this.feedDisposed = true;
     this.unsubscribeImageAnalysis?.();
     this.unsubscribeSession?.();
@@ -1192,6 +1346,7 @@ export default {
     this.$refs.feedContainer.removeEventListener('scroll', this.handleScroll);
     this.$refs.feedContainer.removeEventListener('wheel', this._onWheel);
     window.removeEventListener('keydown', this.onShortcutKey);
+    document.removeEventListener('visibilitychange', this.onFeedVisibility);
     if (this.observer) {
         this.observer.disconnect();
     }
@@ -1204,6 +1359,13 @@ export default {
     Object.values(this.videoBlobUrls).forEach(revokeBlobUrl);
   },
   watch: {
+    // Turning chips off, or entering focus mode, clears one already on screen.
+    showWhyChips(on) {
+      if (!on) this.hideWhyChip();
+    },
+    focusMode(enabled) {
+      if (enabled) this.hideWhyChip();
+    },
     aiTaggingEnabled(enabled) {
       if (enabled) this.analyzeUpcomingImages();
     },
@@ -1279,6 +1441,18 @@ export default {
       </script>
 
       <style scoped>
+      /* "Why this post" chip: fades in, lingers, fades out. Its top lines its
+         centre up with the sidebar tabs (1rem down, ~44px tall); the width
+         cap keeps it clear of them on narrow screens. */
+      .why-chip {
+        top: calc(1rem + 12px + env(safe-area-inset-top, 0px));
+        max-width: calc(100% - 7rem);
+      }
+      .why-chip-enter-active, .why-chip-leave-active { transition: opacity 0.4s ease; }
+      .why-chip-enter-from, .why-chip-leave-to { opacity: 0; }
+      @media (prefers-reduced-motion: reduce) {
+        .why-chip-enter-active, .why-chip-leave-active { transition: none; }
+      }
       /* Playback glyph over a video: a mildly transparent grey disc with the icon
          on top. The icon pops in like the interaction bursts and, on resume,
          swaps to a play glyph that pops away; the disc only fades. */

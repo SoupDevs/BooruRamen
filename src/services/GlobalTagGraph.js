@@ -115,6 +115,8 @@ export class GlobalTagGraph {
    */
   adjacentTags(interests, familiarity = () => 0, exclude = new Set(), limit = 10) {
     const scores = new Map();
+    // The interest each tag owes most of its score to, for "close to X".
+    const via = new Map();
     for (const { tag: interest, score: weight } of interests) {
       const map = this.neighbors.get(interest);
       const base = this.docFreq.get(interest) || 0;
@@ -126,10 +128,11 @@ export class GlobalTagGraph {
         if (lift < 1.5) continue;
         const value = weight * Math.log(lift) * this.idf(tag) * Math.min(1, count / 5);
         scores.set(tag, (scores.get(tag) || 0) + value);
+        if (value > (via.get(tag)?.value ?? -Infinity)) via.set(tag, { interest, value });
       }
     }
     return [...scores]
-      .map(([tag, score]) => ({ tag, score: score / (1 + familiarity(tag)) }))
+      .map(([tag, score]) => ({ tag, score: score / (1 + familiarity(tag)), via: via.get(tag)?.interest }))
       .filter(item => item.score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, limit);

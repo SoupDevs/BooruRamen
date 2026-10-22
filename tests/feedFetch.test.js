@@ -67,6 +67,20 @@ describe('feed fetching', () => {
     expect(vm.posts.map(p => p.id)).toContain(1);
   });
 
+  it('puts a recovery pick right after the current post', async () => {
+    const { vm } = feed({});
+    let pick = post(9, 'cat');
+    vm.recommendationSystem.takeRecoveryPick = async () => pick;
+    vm.posts = [post(1, 'a'), post(2, 'b'), post(3, 'c')];
+    vm.currentPostIndex = 0;
+    await vm.insertRecoveryPick();
+    expect(vm.posts.map(p => p.id)).toEqual([1, 9, 2, 3]);
+    // Never a post that is already queued.
+    pick = post(3, 'c');
+    await vm.insertRecoveryPick();
+    expect(vm.posts.map(p => p.id)).toEqual([1, 9, 2, 3]);
+  });
+
   it('reads the extension from file_ext, ignoring case and query strings', () => {
     const ext = FeedView.methods.getFileExtension;
     expect(ext({ file_ext: 'MP4' })).toBe('mp4');

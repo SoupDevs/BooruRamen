@@ -32,6 +32,8 @@ export class SessionInterest {
     // Satiation: recent impressions per artist/character/copyright, and the
     // current run of skips (negative momentum).
     this.exposure = new Map(); this.skipStreak = 0;
+    // Feed pacing keys its session openers off this.
+    this.startedAt = this.clock();
   }
   advance() {
     const now = this.clock();

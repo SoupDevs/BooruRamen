@@ -38,11 +38,53 @@ export const COMMON_TAGS = [
 
 const instanceId = Math.floor(Math.random() * 10000);
 
+// Saved runway posts were ranked by the profile being reset; the next launch
+// must not bring them back. Loaded lazily: the cache pulls in the database.
+const clearSavedRunway = () => import('./RunwayCache.js').then(cache => cache.clearRunway()).catch(() => {});
+
 const RATING_CODES = { general: 'g', sensitive: 's', questionable: 'q', explicit: 'e' };
 
 // Unused candidates kept between feed fetches.
 const POOL_CAP = 150;
 const POOL_SKIP_FETCH_FACTOR = 3;
+
+// A batch is assembled once this long has passed and enough fresh posts are
+// in hand. Strategies still in flight land in the pool for the next batch,
+// so one slow query no longer holds up the runway.
+export const BATCH_SOFT_DEADLINE_MS = 2000;
+const FALLBACK_ROUNDS = 2;
+
+const candidateKey = post => post.source ? `${post.source}|${post.id}` : String(post.id);
+
+/**
+ * Wait for the given never-rejecting promises until all have settled, or the
+ * deadline has passed and ready(settledValues) holds, whichever is first.
+ * @returns {Promise<{ results: Array, done: boolean[] }>}
+ */
+export function settleEarly(promises, { deadlineMs, ready }) {
+  return new Promise(resolve => {
+    const results = new Array(promises.length);
+    const done = new Array(promises.length).fill(false);
+    let remaining = promises.length, deadlinePassed = false, finished = false, timer = null;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve({ results: [...results], done: [...done] });
+    };
+    const check = () => {
+      if (remaining === 0 || (deadlinePassed && ready(results.filter((_, i) => done[i])))) finish();
+    };
+    if (remaining === 0) return finish();
+    timer = setTimeout(() => { deadlinePassed = true; check(); }, deadlineMs);
+    promises.forEach((promise, i) => promise.then(value => {
+      results[i] = value;
+      done[i] = true;
+      remaining--;
+      check();
+    }));
+  });
+}
 
 class RecommendationSystem {
   constructor() {
@@ -70,6 +112,9 @@ class RecommendationSystem {
     // Local session state for strategy pagination cursors
     this.strategyCursors = {};
     this.candidatePool = [];
+    // Bumped whenever the pool is emptied, so a request that started before
+    // (a late strategy, a superseded batch) can't refill it.
+    this.poolEpoch = 0;
 
     // Set up message listener from worker
     this.worker.onmessage = (e) => {
@@ -112,15 +157,45 @@ class RecommendationSystem {
     });
   }
 
+  clearPool() {
+    this.candidatePool = [];
+    this.poolEpoch++;
+  }
+
+  /**
+   * Posts from a strategy that answered after its batch was assembled. They
+   * pass the same content gate as everything else and wait in the pool;
+   * seen-filtering and scoring happen when the next batch draws on it.
+   */
+  absorbLatePosts(posts, { epoch, modeGeneration, blacklist, selectedRatings }) {
+    if (!posts?.length || epoch !== this.poolEpoch || modeGeneration !== deepDiveState.generation) return;
+    const allowed = this.applyContentFilters(posts, { blacklist, selectedRatings });
+    if (!deepDiveState.active) this.callWorker('observeCandidates', allowed).catch(() => {});
+    const inPool = new Set(this.candidatePool.map(candidateKey));
+    for (const post of allowed) {
+      if (this.candidatePool.length >= POOL_CAP) break;
+      const key = candidateKey(post);
+      if (inPool.has(key)) continue;
+      inPool.add(key);
+      this.candidatePool.push(post);
+    }
+    console.log(`Late strategy results: ${allowed.length} posts added to the pool (${this.candidatePool.length} total)`);
+  }
+
   async initialize() {
     this.strategyCursors = {};
-    this.candidatePool = [];
+    this.clearPool();
     return this.callWorker('initialize');
+  }
+
+  /** Seed the pool with candidates saved by the previous launch. */
+  restorePool(posts) {
+    this.candidatePool = posts.slice(0, POOL_CAP);
   }
 
   resetExploreSession() {
     this.strategyCursors = {};
-    this.candidatePool = [];
+    this.clearPool();
     this.callWorker('resetExploreSession');
     console.log("Explore session reset");
   }
@@ -131,7 +206,8 @@ class RecommendationSystem {
 
   async resetRecommendations() {
     this.strategyCursors = {};
-    this.candidatePool = [];
+    this.clearPool();
+    await clearSavedRunway();
     const result = await this.callWorker('resetRecommendations');
     this.publishDeepDive(null);
     return result;
@@ -139,7 +215,8 @@ class RecommendationSystem {
 
   async factoryReset() {
     this.strategyCursors = {};
-    this.candidatePool = [];
+    this.clearPool();
+    await clearSavedRunway();
     const result = await this.callWorker('factoryReset');
     this.publishDeepDive(null);
     return result;
@@ -157,7 +234,7 @@ class RecommendationSystem {
   publishDeepDive(post) {
     Object.assign(deepDiveState, { active: !!post, anchorKey: post ? postKey(post) : null, anchorId: post?.id ?? null, generation: deepDiveState.generation + 1 });
     this.strategyCursors = {};
-    this.candidatePool = [];
+    this.clearPool();
     this.modeListeners.forEach(listener => listener());
   }
   async setDeepDive(post = null) {
@@ -180,8 +257,13 @@ class RecommendationSystem {
     return this.callWorker('getPostScoreDetails', post);
   }
 
-  async rankPosts(posts, context = []) {
-    return this.callWorker('rankPosts', { posts, context });
+  async rankPosts(posts, context = [], options = {}) {
+    return this.callWorker('rankPosts', { posts, context, options });
+  }
+
+  /** A held-back strong pick to show after a run of skips, or null. */
+  async takeRecoveryPick(excludeKeys = []) {
+    return this.callWorker('takeRecoveryPick', excludeKeys);
   }
 
   async summarizeTagScores(limit = 10) {
@@ -263,6 +345,7 @@ class RecommendationSystem {
 
   async getCuratedExploreFeed(fetchFunction, options = {}) {
     const modeGeneration = deepDiveState.generation;
+    const poolEpoch = this.poolEpoch;
     const {
       postsPerFetch = 20,
       maxTotal = 10,
@@ -432,6 +515,8 @@ class RecommendationSystem {
 
               post._strategy = query.type || 'unknown';
               post._searchCriteria = apiTagsSent;
+              // What the "why this post" chip names (adjacent, trending).
+              if (query.reason) post._reason = query.reason;
 
               return post;
             });
@@ -442,8 +527,20 @@ class RecommendationSystem {
           });
       });
 
-      const fetchResults = await Promise.all(fetchPromises);
-      if (modeGeneration !== deepDiveState.generation) return [];
+      // Enough is what this batch needs on top of the pool, counting only
+      // posts the user hasn't seen.
+      const ready = arrived => {
+        let fresh = this.candidatePool.length;
+        for (const posts of arrived) for (const post of posts || []) if (!existingPostIds.has(candidateKey(post))) fresh++;
+        return fresh >= maxTotal;
+      };
+      const { results: fetchResults, done } = await settleEarly(fetchPromises, { deadlineMs: BATCH_SOFT_DEADLINE_MS, ready });
+      if (modeGeneration !== deepDiveState.generation || poolEpoch !== this.poolEpoch) return [];
+      fetchPromises.forEach((promise, index) => {
+        if (done[index]) return;
+        console.log(`Query [${(plannedQueries[index].query.type || 'UNKNOWN').toUpperCase()}] "${plannedQueries[index].query.tags}" still running; its posts go to the pool`);
+        promise.then(posts => this.absorbLatePosts(posts, { epoch: poolEpoch, modeGeneration, blacklist, selectedRatings }));
+      });
 
       let allPosts = [];
       fetchResults.forEach((posts, index) => {
@@ -461,17 +558,14 @@ class RecommendationSystem {
       const prepare = async (posts) => {
         const uniqueMap = new Map();
         posts.forEach(post => {
-          const key = post.source ? `${post.source}|${post.id}` : String(post.id);
+          const key = candidateKey(post);
           if (!uniqueMap.has(key)) uniqueMap.set(key, post);
         });
         let unique = this.applyContentFilters(Array.from(uniqueMap.values()), { blacklist, selectedRatings });
         await hydrateImageAnalysis(unique, { includeAi: useSettingsStore().aiTaggingEnabled });
         unique = excludeDuplicateContent(unique, existingPostIds);
         if (existingPostIds.size > 0) {
-          unique = unique.filter(post => {
-            const key = post.source ? `${post.source}|${post.id}` : String(post.id);
-            return !existingPostIds.has(key);
-          });
+          unique = unique.filter(post => !existingPostIds.has(candidateKey(post)));
         }
         return unique;
       };
@@ -502,22 +596,28 @@ class RecommendationSystem {
       // are all about one post, so they would skew the feed's view of the
       // booru toward the dive's topic and are left out.
       if (allPosts.length && !deepDiveState.active) this.callWorker('observeCandidates', allPosts).catch(() => {});
+      // Late strategy results are appended to the pool while this batch is
+      // assembled; they are kept when the pool is replaced below.
+      const poolSize = this.candidatePool.length;
       let uniquePosts = await prepare([...this.candidatePool, ...allPosts]);
       const minFresh = Math.min(5, maxTotal);
       const FALLBACK_QUERIES = ['order:rank', 'order:favcount', ''];
-      for (let attempt = 0; uniquePosts.length < minFresh && !deepDiveState.active && attempt < FALLBACK_QUERIES.length * 2; attempt++) {
-        let extra = [];
-        try { extra = await fetchFallback(FALLBACK_QUERIES[attempt % FALLBACK_QUERIES.length]); }
-        catch (fallbackError) { console.error('Fallback query failed:', fallbackError); }
-        if (modeGeneration !== deepDiveState.generation) return [];
+      // Each round sends every fallback at once instead of one after another.
+      for (let round = 0; uniquePosts.length < minFresh && !deepDiveState.active && round < FALLBACK_ROUNDS; round++) {
+        const extra = (await Promise.all(FALLBACK_QUERIES.map(tags => fetchFallback(tags).catch(fallbackError => {
+          console.error('Fallback query failed:', fallbackError);
+          return [];
+        })))).flat();
+        if (modeGeneration !== deepDiveState.generation || poolEpoch !== this.poolEpoch) return [];
         if (extra.length) uniquePosts = await prepare([...uniquePosts, ...extra]);
       }
       console.log(`Found ${uniquePosts.length} unique posts after deduplication`);
 
       // Scoring, exploration and diversity all live in the worker.
       const { feed, rest } = await this.callWorker('assembleFeed', { posts: uniquePosts, options: { maxTotal, context: contextPosts.slice(-5) } });
-      if (modeGeneration !== deepDiveState.generation) return [];
-      this.candidatePool = rest.slice(0, POOL_CAP);
+      if (modeGeneration !== deepDiveState.generation || poolEpoch !== this.poolEpoch) return [];
+      const arrivedLate = this.candidatePool.slice(poolSize);
+      this.candidatePool = [...rest, ...arrivedLate].slice(0, POOL_CAP);
       console.log(`Returning ${feed.length} curated posts (${feed.filter(post => post._explore).length} exploratory), ${this.candidatePool.length} kept in the pool`);
       return feed;
     } catch (error) {

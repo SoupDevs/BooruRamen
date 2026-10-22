@@ -229,7 +229,7 @@
                 <div
                   v-for="option in feedButtonOptions"
                   :key="option.key"
-                  class="flex items-center justify-between p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
+                  class="flex items-center justify-between gap-3 p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
                   :data-button-toggle="option.key"
                   @click="toggleInteraction(option.key)"
                 >
@@ -238,7 +238,7 @@
                     <span class="text-xs text-gray-400">{{ option.hint }}</span>
                   </div>
                   <div
-                    class="relative inline-flex h-6 w-11 items-center rounded-full"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full shrink-0"
                     :class="isInteractionEnabled(option.key) ? 'bg-pink-600' : 'bg-gray-600'"
                   >
                     <span
@@ -253,7 +253,7 @@
                 <div
                   v-for="option in feedGestureOptions"
                   :key="option.key"
-                  class="flex items-center justify-between p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
+                  class="flex items-center justify-between gap-3 p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
                   :data-gesture-toggle="option.key"
                   @click="toggleInteraction(option.key)"
                 >
@@ -262,7 +262,7 @@
                     <span class="text-xs text-gray-400">{{ option.hint }}</span>
                   </div>
                   <div
-                    class="relative inline-flex h-6 w-11 items-center rounded-full"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full shrink-0"
                     :class="isInteractionEnabled(option.key) ? 'bg-pink-600' : 'bg-gray-600'"
                   >
                     <span
@@ -277,7 +277,7 @@
                 <div
                   v-for="option in interactionOptions"
                   :key="option.key"
-                  class="flex items-center justify-between p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
+                  class="flex items-center justify-between gap-3 p-3 rounded-lg bg-gray-900 cursor-pointer hover:bg-gray-750"
                   @click="toggleInteraction(option.key)"
                 >
                   <div class="flex flex-col">
@@ -285,7 +285,7 @@
                     <span class="text-xs text-gray-400">{{ option.hint }}</span>
                   </div>
                   <div
-                    class="relative inline-flex h-6 w-11 items-center rounded-full"
+                    class="relative inline-flex h-6 w-11 items-center rounded-full shrink-0"
                     :class="isInteractionEnabled(option.key) ? 'bg-pink-600' : 'bg-gray-600'"
                   >
                     <span
@@ -791,7 +791,7 @@
                 <span class="text-sm text-gray-400">Show recommendation analytics overlay</span>
               </div>
               <div
-                class="relative inline-flex h-6 w-11 items-center rounded-full"
+                class="relative inline-flex h-6 w-11 items-center rounded-full shrink-0"
                 :class="debugMode ? 'bg-pink-600' : 'bg-gray-600'"
               >
                 <span
@@ -808,7 +808,7 @@
                 <span class="text-sm text-gray-400">Disabling view history may cause the feed to show previously viewed posts</span>
               </div>
               <div
-                class="relative inline-flex h-6 w-11 items-center rounded-full"
+                class="relative inline-flex h-6 w-11 items-center rounded-full shrink-0"
                 :class="disableHistory ? 'bg-pink-600' : 'bg-gray-600'"
               >
                 <span
@@ -1010,6 +1010,7 @@ export default {
         { key: 'showLikeAnimation', label: 'Like Animation', hint: 'White hearts when a post is liked, a muted falling heart when the like is removed' },
         { key: 'showDislikeAnimation', label: 'Dislike Animation', hint: 'Thumbs down when a post is disliked, a muted one when it is removed' },
         { key: 'showFavoriteAnimation', label: 'Favorite Animation', hint: 'Star when a post is favorited, a muted falling star when it is removed' },
+        { key: 'showWhyChips', label: 'Why This Post', hint: 'Says why a discovery post was picked, like "Because you liked Genshin Impact". Hidden in focus mode' },
       ],
       // Which buttons show in the feed's right-hand action column.
       feedButtonOptions: [
@@ -1036,7 +1037,7 @@ export default {
     ...mapWritableState(useSettingsStore, [
       'disableHistory', 'debugMode', 'customSources', 'activeSource',
       'tagAlwaysInclude', 'tagNeverInclude',
-      'doubleTapToLike', 'showLikeAnimation', 'showDislikeAnimation', 'showFavoriteAnimation',
+      'doubleTapToLike', 'showLikeAnimation', 'showDislikeAnimation', 'showFavoriteAnimation', 'showWhyChips',
       'showLikeButton', 'showDislikeButton', 'showFavoriteButton',
       'swipeRightToFavorite', 'swipeLeftToDislike', 'holdToSeek',
       'downloadLocation', 'downloadLiked', 'downloadFavorited', 'downloadSeparateFolders',

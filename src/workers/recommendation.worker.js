@@ -24,6 +24,19 @@ const EXPLORE_INTERVAL_PRESSURED = 2;
 const EXPLORE_UCB = 0.5;
 // Exploration never reaches into the bottom of the candidate list.
 const EXPLORE_SCORE_FLOOR_QUANTILE = 0.3;
+// Session pacing. The first posts of a session decide whether it goes on,
+// and a run of skips is where users leave:
+//  - a session opens with OPENER_SLOTS of the most confident exploit picks,
+//  - RESERVE_SIZE strong candidates are held back from later batches, and
+//  - after RECOVERY_SKIP_STREAK skips in a row one of them is served next.
+export const OPENER_SLOTS = 3;
+export const RESERVE_SIZE = 2;
+export const RECOVERY_SKIP_STREAK = 3;
+// "Why this post": discovery picks name the liked tag that best explains
+// them, if any of the post's tags has at least this much affinity.
+const DISCOVERY_STRATEGIES = new Set(['adjacent', 'trending', 'wildcard']);
+const LIKED_REASON_MIN = 0.15;
+const IDENTITY_CATEGORIES = new Set(['artist', 'copyright', 'character']);
 
 const TAG_CATEGORIES = ['artist', 'copyright', 'character', 'general', 'meta'];
 // Slow "core" profile: long-standing favourites outlive a month-long phase.
@@ -75,6 +88,7 @@ export class RecommendationWorkerCore {
     this.snapshotTimer = null;
     this.sessionInterest = new SessionInterest();
     this.deepDive = new DeepDiveInterest();
+    this.resetPacing();
     // In-memory state is authoritative once loaded; snapshots only persist it.
     this.dwellBaseline = null;
     this.impressions = new Map();
@@ -136,6 +150,9 @@ export class RecommendationWorkerCore {
   resetExploreSession() {
     this.strategyCursors = {};
     this.exhaustedStrategies = new Set();
+    // A new search or mode starts its feed from the top: open strongly
+    // again, and drop reserve picks chosen under the old filters.
+    this.resetPacing();
     // ML components only exist after initialize(); a reset triggered from
     // the settings page can arrive before the feed ever initialized them
     if (this.banditExplorer) this.banditExplorer.endSession();
@@ -748,6 +765,80 @@ export class RecommendationWorkerCore {
     return 1 / Math.sqrt(1 + evidence);
   }
 
+  resetPacing() {
+    this.pacingSessionStart = this.sessionInterest?.startedAt ?? null;
+    this.slotsServed = 0;
+    this.reserve = [];
+    this.recoveryArmed = true;
+  }
+
+  /** Opener slots still owed to the current session. */
+  openerSlotsLeft() {
+    if (!this.reserve) this.resetPacing();
+    const startedAt = this.sessionInterest.startedAt;
+    if (startedAt !== this.pacingSessionStart) {
+      // The session interest went idle and restarted: a new session.
+      this.pacingSessionStart = startedAt;
+      this.slotsServed = 0;
+      this.recoveryArmed = true;
+    }
+    return Math.max(0, OPENER_SLOTS - this.slotsServed);
+  }
+
+  /**
+   * The tag on this post the user has shown the most liking for, preferring
+   * a series, character or artist when it is about as strong. Never an
+   * avoided, meta or metatag tag.
+   * @returns {{ tag: string, category: string }|null}
+   */
+  likedReasonTag(post) {
+    const avoided = new Set([...this.avoidedTags, 'video']);
+    const categoryOf = tag => this.tagCategories?.[tag]
+      || [...IDENTITY_CATEGORIES].find(category => (post[`tag_string_${category}`] || '').split(/\s+/).includes(tag))
+      || 'general';
+    let best = null, bestScore = LIKED_REASON_MIN;
+    for (const tag of new Set((post.tag_string || '').split(/\s+/))) {
+      if (!tag || tag.includes(':') || avoided.has(tag)) continue;
+      const category = categoryOf(tag);
+      if (category === 'meta') continue;
+      const score = (this.tagScores?.[tag] || 0) * (IDENTITY_CATEGORIES.has(category) ? 1.25 : 1);
+      if (score > bestScore) { best = { tag, category }; bestScore = score; }
+    }
+    return best;
+  }
+
+  /** Lower confidence bound: a high score the model is sure about. */
+  confidentScore(item) {
+    return item.score - EXPLORE_UCB * this.postUncertainty(item.post);
+  }
+
+  /**
+   * After a run of skips, hand back one held-back strong pick to show next.
+   * Fires once per run: the streak has to be broken before it fires again.
+   * @returns {Object|null} the post, marked _recovery
+   */
+  takeRecoveryPick(exclude = []) {
+    this.openerSlotsLeft();
+    if (this.deepDive.active) return null;
+    if (this.sessionInterest.skipStreak < RECOVERY_SKIP_STREAK) {
+      this.recoveryArmed = true;
+      return null;
+    }
+    if (!this.recoveryArmed) return null;
+    const excluded = new Set(exclude);
+    this.reserve = this.reserve.filter(post => !excluded.has(postKey(post)));
+    if (!this.reserve.length) return null;
+    // The reserve was scored when it was set aside; the session has moved
+    // on since, so pick by today's score.
+    const best = this.reserve
+      .map(post => ({ post, score: this.scorePost(post) }))
+      .sort((a, b) => this.confidentScore(b) - this.confidentScore(a))[0];
+    this.reserve = this.reserve.filter(post => post !== best.post);
+    this.recoveryArmed = false;
+    best.post._score = Math.round(best.score * 1e4) / 1e4;
+    return Object.assign(best.post, { _recovery: true });
+  }
+
   /**
    * Order a batch of candidates for the feed.
    * Exploit slots: best scores, diversified against what was just shown.
@@ -769,7 +860,17 @@ export class RecommendationWorkerCore {
       const ordered = diversify(scored, context, { lambda: 0.1 });
       return { feed: ordered.slice(0, maxTotal).map(item => item.post), rest: ordered.slice(maxTotal).map(item => item.post) };
     }
-    const byScore = [...scored].sort((a, b) => b.score - a.score);
+    const openers = this.openerSlotsLeft();
+    const reserved = new Set(this.reserve.map(postKey));
+    let byScore = scored.filter(item => !reserved.has(postKey(item.post))).sort((a, b) => b.score - a.score);
+    // Top up the reserve once the session is under way, and only from a
+    // batch with candidates to spare.
+    const missing = RESERVE_SIZE - this.reserve.length;
+    if (!openers && missing > 0 && byScore.length >= maxTotal + missing) {
+      const held = [...byScore].sort((a, b) => this.confidentScore(b) - this.confidentScore(a)).slice(0, missing);
+      this.reserve.push(...held.map(item => item.post));
+      byScore = byScore.filter(item => !held.includes(item));
+    }
     const total = Math.min(maxTotal, byScore.length);
     const interval = this.sessionInterest.explorationPressure >= 0.75 ? EXPLORE_INTERVAL_PRESSURED : EXPLORE_INTERVAL;
     const exploreCount = Math.floor(total / interval);
@@ -781,13 +882,22 @@ export class RecommendationWorkerCore {
       .sort((a, b) => b.ucb - a.ucb)
       .slice(0, exploreCount);
     const chosen = new Set([...exploit, ...explore].map(item => item.post));
-    const exploitOrder = diversify(exploit, context);
+    // Openers: the most confident exploit picks, ahead of everything else.
+    const opening = [...exploit].sort((a, b) => this.confidentScore(b) - this.confidentScore(a)).slice(0, openers);
+    const exploitOrder = [...opening, ...diversify(exploit.filter(item => !opening.includes(item)), [...context, ...opening.map(item => item.post)])];
     const feed = [];
     let e = 0, x = 0;
     for (let position = 0; feed.length < exploit.length + explore.length; position++) {
-      if ((position + 1) % interval === 0 && x < explore.length) feed.push(Object.assign(explore[x++].post, { _explore: true }));
+      const slot = position - opening.length;
+      if (slot >= 0 && (slot + 1) % interval === 0 && x < explore.length) feed.push(Object.assign(explore[x++].post, { _explore: true }));
       else if (e < exploitOrder.length) feed.push(exploitOrder[e++].post);
       else feed.push(Object.assign(explore[x++].post, { _explore: true }));
+    }
+    this.slotsServed += feed.length;
+    for (const post of feed) {
+      if (!post._explore && !DISCOVERY_STRATEGIES.has(post._strategy)) continue;
+      const liked = this.likedReasonTag(post);
+      if (liked) post._reason = { ...post._reason, liked };
     }
     return { feed, rest: byScore.filter(item => !chosen.has(item.post)).map(item => item.post) };
   }
@@ -901,7 +1011,15 @@ export class RecommendationWorkerCore {
     return details;
   }
 
-  rankPosts(posts, context = []) {
+  /**
+   * @param {Object[]} posts
+   * @param {Object[]} [context] - what the user just saw
+   * @param {Object} [options]
+   * @param {boolean} [options.opener] - these posts open a new session (the
+   *   app came back after a long pause): lead with the most confident
+   *   non-exploration picks.
+   */
+  rankPosts(posts, context = [], { opener = false } = {}) {
     if (!posts || posts.length === 0) return [];
     // Exploration is chosen deliberately at feed assembly; a flat bonus per
     // strategy here would override the model on every re-rank.
@@ -910,7 +1028,15 @@ export class RecommendationWorkerCore {
       post._score = Math.round(score * 1e4) / 1e4;
       return { post, score };
     });
-    return diversify(scoredPosts, context, this.deepDive.active ? { lambda: 0.1 } : undefined).map(sp => sp.post);
+    if (this.deepDive.active) return diversify(scoredPosts, context, { lambda: 0.1 }).map(sp => sp.post);
+    if (!opener) return diversify(scoredPosts, context).map(sp => sp.post);
+    this.openerSlotsLeft();
+    const opening = scoredPosts.filter(item => !item.post._explore)
+      .sort((a, b) => this.confidentScore(b) - this.confidentScore(a))
+      .slice(0, OPENER_SLOTS);
+    this.slotsServed = opening.length;
+    const rest = diversify(scoredPosts.filter(item => !opening.includes(item)), [...context, ...opening.map(item => item.post)]);
+    return [...opening, ...rest].map(sp => sp.post);
   }
 
   summarizeTagScores(limit = 10) {
@@ -1042,7 +1168,7 @@ export class RecommendationWorkerCore {
     if (selectedStrategies.has('adjacent')) {
       const adjacentTag = this.weightedRandomSelect(this.adjacentInterests(), usedTags);
       if (adjacentTag && !this.exhaustedStrategies.has(adjacentTag.tag)) {
-        queries.push({ tags: adjacentTag.tag, type: 'adjacent', intent: 'Adjacent interest - likely to enjoy, not yet explored' });
+        queries.push({ tags: adjacentTag.tag, type: 'adjacent', intent: 'Adjacent interest - likely to enjoy, not yet explored', reason: { tag: adjacentTag.tag, via: adjacentTag.via || null, viaCategory: this.tagCategories?.[adjacentTag.via] || null } });
         usedTags.add(adjacentTag.tag);
       }
     }
@@ -1120,7 +1246,7 @@ export class RecommendationWorkerCore {
     const pick = this.weightedRandomSelect(trends, exclude) || this.weightedRandomSelect(corePool, exclude);
     if (!pick) return null;
     const personal = trends.some(item => item.tag === pick.tag);
-    return { tag: pick.tag, tags: `${pick.tag} order:rank`, type: 'trending', intent: personal ? `Trending near your taste: "${pick.tag}"` : `Hot right now in "${pick.tag}"` };
+    return { tag: pick.tag, tags: `${pick.tag} order:rank`, type: 'trending', intent: personal ? `Trending near your taste: "${pick.tag}"` : `Hot right now in "${pick.tag}"`, reason: { tag: pick.tag, personal } };
   }
 
   /** Learn the booru's tag structure from a batch of fetched candidates. */
@@ -1279,8 +1405,11 @@ if (typeof self !== 'undefined') self.onmessage = async (e) => {
       case 'getPostScoreDetails':
         result = core.getPostScoreDetails(payload);
         break;
+      case 'takeRecoveryPick':
+        result = core.takeRecoveryPick(payload);
+        break;
       case 'rankPosts':
-        result = Array.isArray(payload) ? core.rankPosts(payload) : core.rankPosts(payload.posts, payload.context);
+        result = Array.isArray(payload) ? core.rankPosts(payload) : core.rankPosts(payload.posts, payload.context, payload.options);
         break;
       case 'observeCandidates':
         core.observeCandidates(payload);
