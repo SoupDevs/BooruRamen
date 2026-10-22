@@ -1010,7 +1010,7 @@ export default {
         { key: 'showLikeAnimation', label: 'Like Animation', hint: 'White hearts when a post is liked, a muted falling heart when the like is removed' },
         { key: 'showDislikeAnimation', label: 'Dislike Animation', hint: 'Thumbs down when a post is disliked, a muted one when it is removed' },
         { key: 'showFavoriteAnimation', label: 'Favorite Animation', hint: 'Star when a post is favorited, a muted falling star when it is removed' },
-        { key: 'showWhyChips', label: 'Why This Post', hint: 'A short note on discovery posts saying why they were picked, such as "Trending near Genshin Impact"' },
+        { key: 'showWhyChips', label: 'Why This Post', hint: 'A short note on discovery posts saying why they were picked, such as "Because you liked Genshin Impact"' },
       ],
       // Which buttons show in the feed's right-hand action column.
       feedButtonOptions: [
