@@ -5,6 +5,8 @@ name: "Android Test Build"
 # merged fix PR gets one) and on demand from the Actions tab. Download it
 # from the run's "android-test-apk" artifact. It is signed with the release
 # key, so it installs over the store-less release build and keeps app data.
+# On a release/vX.Y.Z branch the build is labelled X.Y.Z, the version that
+# branch will ship as.
 
 on:
   push:
@@ -17,10 +19,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if [[ "$BRANCH" =~ ^release/v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+          fi
+
   build-android:
+    needs: version
     permissions:
       contents: read
     uses: ./.github/workflows/android-build.yaml
     with:
       artifact-name: android-test-apk
+      version: ${{ needs.version.outputs.version }}
     secrets: inherit

@@ -14,6 +14,10 @@ on:
       artifact-name:
         type: string
         default: android-artifacts
+      version:
+        description: Version to stamp into the build (empty = keep package.json's)
+        type: string
+        default: ''
 
 jobs:
   build-android:
@@ -33,6 +37,16 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      - name: Set build version
+        if: ${{ inputs.version != '' }}
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # Only for this build; nothing is committed.
+          npm pkg set version="$VERSION"
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
+          grep '"version"' package.json src-tauri/tauri.conf.json
 
       - name: Setup Java
         uses: actions/setup-java@v4
