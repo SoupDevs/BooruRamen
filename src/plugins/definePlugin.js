@@ -47,7 +47,6 @@ function checkSetting(setting, pluginId) {
  * @param {string} [definition.description]
  * @param {string} [definition.author]
  * @param {number} [definition.apiVersion] the plugin API it was written for
- * @param {boolean} [definition.enabledByDefault] bundled plugins only
  * @param {Array} [definition.settings] settings shown on the Plugins page
  * @param {(api: Object) => (void|Function|Promise)} definition.setup
  * @returns {Readonly<Object>} the checked definition
@@ -75,7 +74,6 @@ export function definePlugin(definition) {
     description: definition.description || '',
     author: definition.author || '',
     apiVersion,
-    enabledByDefault: !!definition.enabledByDefault,
     settings: Object.freeze(settings),
   });
 }

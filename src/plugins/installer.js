@@ -63,7 +63,8 @@ export function listInstalled() {
 
 /**
  * Install a plugin from its source, or update it if one with its id is
- * installed. It is turned on.
+ * installed. It is installed for every profile on this device and starts
+ * turned off; an update keeps each profile's choice.
  * @returns {Promise<Object>} the plugin's record
  */
 export async function installPlugin(source) {
@@ -73,12 +74,10 @@ export async function installPlugin(source) {
   if (existing && existing.origin !== 'installed') throw new Error(`"${def.id}" is a built-in plugin`);
   if (existing) await pluginHost.unregister(def.id);
   writeInstalled([...installed.filter(entry => entry.id !== def.id), { id: def.id, name: def.name, code: String(source), installedAt: Date.now() }]);
-  const record = await pluginHost.register(def, { origin: 'installed' });
-  if (!record.enabled) await pluginHost.setEnabled(def.id, true);
-  return record;
+  return pluginHost.register(def, { origin: 'installed' });
 }
 
-/** Turn an installed plugin off, remove it and everything it stored. */
+/** Turn an installed plugin off and remove it, with what it stored in every profile. */
 export async function uninstallPlugin(id) {
   await pluginHost.unregister(id);
   writeInstalled(readInstalled().filter(entry => entry.id !== id));
@@ -97,7 +96,9 @@ export async function loadInstalledPlugins() {
       console.error(`[Plugins] Installed plugin ${entry.id} failed to load:`, error);
       const message = error?.message || String(error);
       try {
-        await pluginHost.register({ id: entry.id, name: entry.name || entry.id, setup() { throw new Error(message); } }, { origin: 'installed' });
+        const record = await pluginHost.register({ id: entry.id, name: entry.name || entry.id, setup() { throw new Error(message); } }, { origin: 'installed' });
+        // Shown even while it's off, so the user knows to remove it.
+        if (!record.error) record.error = `Failed to load: ${message}`;
       } catch { /* a bundled plugin took the id */ }
     }
   }

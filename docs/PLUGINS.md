@@ -60,8 +60,10 @@ the Plugins page (see [Installing a plugin from a file](#installing-a-plugin-fro
 
 **Profile → Plugins → Install a plugin** takes a `.js` file (or pasted code).
 Installing a file with an id that is already installed updates it; a
-built-in plugin's id can't be taken. Installed plugins start turned on and
-have a **Remove** button, which also deletes their settings and storage.
+built-in plugin's id can't be taken. An installed plugin is available to
+every profile on the device but starts turned off; each profile turns it on
+for itself. Installed plugins have a **Remove** button, which removes the
+plugin from the device and deletes its settings and storage in every profile.
 
 An installable file differs from a bundled plugin in two ways:
 
@@ -102,9 +104,10 @@ trust, and read a plugin's code before installing it.
   registered and calls the function `setup` returned, if any. No reload is
   needed either way, so `setup` must not leave anything behind that it
   doesn't clean up.
-- Bundled plugins start turned off unless their definition sets
-  `enabledByDefault: true`. The on/off choice is remembered across launches.
-- Plugins are app-wide: they stay on when you switch profiles.
+- Plugins are installed per device and turned on per profile. Every plugin,
+  bundled or installed, starts turned off, and each profile's on/off choice
+  is remembered across launches. A plugin's settings and `api.storage` are
+  kept per profile too, so switching profiles switches them as well.
 - Errors are contained. A handler that throws, takes longer than 1.5 s or
   returns something the hook can't use is skipped for that call and the
   error is shown on the Plugins page. After 5 errors in a session the plugin
@@ -121,7 +124,6 @@ definePlugin({
   description: 'One line on what it does.',
   author: 'You',
   apiVersion: 1,            // the plugin API it was written for
-  enabledByDefault: false,  // bundled plugins only
   settings: [],             // see Settings
   setup(api) {              // required; may be async
     // register hooks here
