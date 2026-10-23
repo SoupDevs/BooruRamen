@@ -9,6 +9,8 @@ import ProfileView from '../views/ProfileView.vue';
 import ProfileSettingsView from '../views/ProfileSettingsView.vue';
 import ProfileAnalyticsView from '../views/ProfileAnalyticsView.vue';
 import ProfilesView from '../views/ProfilesView.vue';
+import PluginsView from '../views/PluginsView.vue';
+import PluginBrowserView from '../views/PluginBrowserView.vue';
 
 const routes = [
   {
@@ -61,6 +63,16 @@ const routes = [
     path: '/profile/profiles',
     name: 'Profiles',
     component: ProfilesView,
+  },
+  {
+    path: '/profile/plugins',
+    name: 'Plugins',
+    component: PluginsView,
+  },
+  {
+    path: '/profile/plugins/browse',
+    name: 'PluginBrowser',
+    component: PluginBrowserView,
   },
 ];
 

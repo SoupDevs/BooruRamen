@@ -297,6 +297,9 @@
         >
           <MessageCircle class="h-6 w-6" />
         </button>
+
+        <!-- Plugin buttons (api.ui.addToSlot('feed.actions')) -->
+        <PluginSlot name="feed.actions" class="flex flex-col items-center gap-4" :slot-props="{ post: currentPost }" />
       </div>
 
       <!-- Comments Sheet -->
@@ -329,6 +332,9 @@
     <UpdateSplash />
     <AiModelDialog />
     <CloudflareVerifyBanner />
+    <!-- Floating plugin UI and notices -->
+    <PluginSlot name="app.overlay" :slot-props="{ post: currentPost }" />
+    <PluginNotices />
   </div>
 </template>
 
@@ -355,6 +361,8 @@ import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 import AiModelDialog from './components/AiModelDialog.vue';
 import CloudflareVerifyBanner from './components/CloudflareVerifyBanner.vue';
+import PluginSlot from './components/plugins/PluginSlot.vue';
+import PluginNotices from './components/plugins/PluginNotices.vue';
 import aiTagger from './services/AiTaggerService.js';
 import { WatchTimer, MIN_IMPRESSION_MS } from './services/WatchTimer.js';
 
@@ -383,6 +391,8 @@ export default {
     UpdateSplash,
     AiModelDialog,
     CloudflareVerifyBanner,
+    PluginSlot,
+    PluginNotices,
   },
   data() {
     return {
@@ -474,7 +484,7 @@ export default {
         watchTimer.stop();
       }
       // Collapse settings sidebar when navigating to profile pages
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles', 'Plugins', 'PluginBrowser'];
       if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
         this.showSettingsSidebar = false;
       }
@@ -487,7 +497,7 @@ export default {
     },
     showSettingsSidebar(isOpen) {
       if (!isOpen) return;
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles', 'Plugins', 'PluginBrowser'];
       if (hiddenRoutes.includes(this.$route.name)) {
         this.showSettingsSidebar = false;
       }
@@ -588,7 +598,7 @@ export default {
     showSettingsToggle() {
       // Only show settings on feed, history, likes, favorites, and viewer
       const routeName = this.$route.name;
-      return !['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'].includes(routeName);
+      return !['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles', 'Plugins', 'PluginBrowser'].includes(routeName);
     },
     // Chrome Focus mode fades out while the user is idle. The class itself is
     // always present so the opacity transition runs on both directions.

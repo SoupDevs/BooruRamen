@@ -50,6 +50,9 @@
             data-why-chip
           >{{ whyChip.text }}</div>
         </transition>
+        <!-- Plugin overlays (api.ui.addToSlot('feed.post')). Taps reach the
+             post unless a plugin element takes them. -->
+        <PluginSlot name="feed.post" class="absolute inset-0 z-10 pointer-events-none" :slot-props="{ post, current: getCompositeKey(post) === currentPostKey }" />
         <!-- Post media -->
         <div class="relative h-full max-w-full flex items-center justify-center">
           <!-- Feedback for the interaction that was just logged -->
@@ -174,6 +177,7 @@ import {
 } from '../services/videoFramePriming.js';
 import ProgressiveImage from '../components/ProgressiveImage.vue';
 import PostActionBurst from '../components/PostActionBurst.vue';
+import PluginSlot from '../components/plugins/PluginSlot.vue';
 import { Pause, Play } from 'lucide-vue-next';
 import { postGestureMixin } from '../mixins/postGestureMixin';
 import { postKey } from '../services/postKey';
@@ -184,6 +188,8 @@ import { shortcutFor } from '../services/keyboardShortcuts.js';
 import RunwayCache from '../services/RunwayCache.js';
 import { SESSION_IDLE_MS } from '../services/SessionInterest.js';
 import { whyChipText, WHY_CHIP_MS } from '../services/WhyChip.js';
+import { FEED_RATINGS } from '../plugins/contentPolicy.js';
+import { emitPostShown } from '../plugins/feedHooks.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
@@ -197,6 +203,7 @@ export default {
   components: {
     ProgressiveImage,
     PostActionBurst,
+    PluginSlot,
     Pause,
     Play,
   },
@@ -628,8 +635,9 @@ export default {
           
           const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
             postsPerFetch: 20,
-            // Ratings are no longer user-configurable: always query general
-            selectedRatings: ['general'],
+            // Ratings are not user- or plugin-configurable: the content
+            // policy's (General only)
+            selectedRatings: FEED_RATINGS,
             whitelist: activeWhitelist,
             blacklist: activeBlacklist,
             existingPostIds: blockedKeys,
@@ -717,7 +725,7 @@ export default {
       if (!saved) return [];
       const rs = this.recommendationSystem;
       const allowed = posts => excludeDuplicateContent(
-        ReportService.filterPosts(rs.applyClientSideFilters(rs.applyContentFilters(posts, { blacklist, selectedRatings: ['general'] }), { whitelist }), blockSets),
+        ReportService.filterPosts(rs.applyClientSideFilters(rs.applyContentFilters(posts, { blacklist, selectedRatings: FEED_RATINGS }), { whitelist }), blockSets),
         blockedKeys
       );
       const runway = allowed(saved.runway);
@@ -808,6 +816,7 @@ export default {
         if (currentPost) {
           const videoEl = this.videoElements[this.getCompositeKey(currentPost)] || null;
           this.$emit('current-post-changed', currentPost, videoEl);
+          emitPostShown({ post: currentPost, index: calculatedIndex, deepDive: deepDiveState.active });
           
           await StorageService.trackPostView(currentPost.id, currentPost, currentPost.source);
         } else {
