@@ -144,3 +144,30 @@ describe('worker ranking weight', () => {
     expect(core.blendRankingScore(0.5, { ...post(1, 'cat'), _pluginWeight: 'x' })).toBeCloseTo(base);
   });
 });
+
+describe('feed:filters', () => {
+  const mixed = async () => [post(1, 'cat'), post(2, 'cat', 'e'), post(3, 'cat spider')];
+
+  it('keeps the defaults when no plugin changes them', async () => {
+    const sent = [];
+    const feed = await recommendations.getCuratedExploreFeed(async query => { sent.push(query.tags); return mixed(); }, options({ blacklist: ['spider'] }));
+    expect(feed.map(p => p.id)).toEqual([1]);
+    expect(sent[0]).toContain('rating:g');
+  });
+
+  it('lets a plugin change the ratings and the blacklist', async () => {
+    await install(api => api.on('feed:filters', filters => ({ ratings: [...filters.ratings, 'explicit'], blacklist: [] })));
+    const sent = [];
+    const feed = await recommendations.getCuratedExploreFeed(async query => { sent.push(query.tags); return mixed(); }, options({ blacklist: ['spider'] }));
+    expect(feed.map(p => p.id).sort()).toEqual([1, 2, 3]);
+    expect(sent[0]).toContain('rating:g,e');
+    expect(sent[0]).not.toContain('-spider');
+  });
+
+  it('keeps the defaults when a plugin returns something unusable', async () => {
+    const id = await install(api => api.on('feed:filters', () => ({ ratings: ['everything'], blacklist: [] })));
+    const feed = await recommendations.getCuratedExploreFeed(mixed, options({ blacklist: ['spider'] }));
+    expect(feed.map(p => p.id)).toEqual([1]);
+    expect(pluginHost.state.plugins.find(plugin => plugin.id === id).error).toMatch(/ratings must be/);
+  });
+});

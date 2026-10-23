@@ -163,16 +163,35 @@ api.on('feed:queries', (queries, { deepDive }) => {
 
 ### How a feed batch is built
 
+0. The feed's content filters are settled → **`feed:filters`**
 1. The recommendation engine plans its strategy queries → **`feed:queries`**
 2. Each query becomes a booru request (whitelist tags, spare-slot blacklist
    exclusions, rating and file type added) → **`feed:request`**
 3. Each request's results → **`feed:posts`**
 4. The app's content gate drops other ratings, blacklisted tags, seen posts
-   and duplicates. Plugins can't skip this step.
+   and duplicates, using the filters from step 0.
 5. Candidates are ranked → **`feed:score`** multipliers are applied
 6. The batch is assembled (exploration, diversity) → **`feed:batch`**
 7. The content gate runs again, then reported/blocked posts are removed and
    the batch is added to the feed.
+
+### `feed:filters` (waterfall)
+
+The ratings the feed shows and the tags it hides, for the next batch.
+
+- **value**: `{ ratings, blacklist }`, by default `{ ratings: ['general'], blacklist: [...the user's blacklist] }`
+- **context**: `{ deepDive, whitelist }`
+- **return**: a new `{ ratings, blacklist }`. `ratings` is one or more of
+  `'general'`, `'sensitive'`, `'questionable'`, `'explicit'` (or `g`/`s`/`q`/`e`);
+  `blacklist` is a list of tags. Anything else is rejected and the defaults
+  are kept.
+
+The result is what every request's rating metatag and the content gate use
+for that batch.
+
+```js
+api.on('feed:filters', filters => ({ ...filters, ratings: [...filters.ratings, 'sensitive'] }));
+```
 
 ### `feed:queries` (waterfall)
 
@@ -181,7 +200,8 @@ The strategy queries for the next batch.
 - **value**: array of `{ tags, type, intent, reason }`. `tags` is a
   space-separated tag string; `type` names the strategy (shown in the debug
   overlay and used for the "why this post" chip).
-- **context**: `{ deepDive, whitelist, blacklist }`
+- **context**: `{ deepDive, whitelist, blacklist }` (`blacklist` is the one
+  `feed:filters` settled on, as in the hooks below)
 - **return**: a new array. Plain strings are accepted as `{ tags }`. At most
   12 queries are kept, rating metatags (`rating:`, `-rating:`, `is:nsfw`, ...)
   are removed from `tags`, and `type` defaults to `'plugin'`.
@@ -196,7 +216,7 @@ The final tag string of one booru request.
 - **value**: string, e.g. `'meme cat -spider rating:g -filetype:swf'`
 - **context**: `{ deepDive, whitelist, blacklist, strategy, page }`
 - **return**: a new tag string. Rating metatags are removed and the feed's
-  own `rating:g` is added back. Remember the source's tag limit (Danbooru's
+  own rating metatag (from `feed:filters`) is added back. Remember the source's tag limit (Danbooru's
   free tier allows two non-metatag tags); extra tags make the request fail or
   return nothing.
 
