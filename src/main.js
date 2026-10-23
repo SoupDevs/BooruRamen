@@ -14,6 +14,7 @@ import './assets/tailwind.css'
 import router from './router'
 import { cleanupPendingDeletes } from './services/ProfileService'
 import { finishPendingVerification } from './services/cloudflareVerify'
+import { startPlugins } from './plugins'
 
 // Retry profile database deletions that were interrupted by a reload
 cleanupPendingDeletes()
@@ -24,5 +25,10 @@ const app = createApp(App)
 app.use(pinia)
 app.use(router)
 // Coming back from a Cloudflare check: keep the clearance before the feed
-// starts fetching, so its first requests already carry it.
-finishPendingVerification().finally(() => app.mount('#app'))
+// starts fetching, so its first requests already carry it. Plugins start
+// before the feed too, so their hooks shape its first batch. Neither can
+// keep the app from mounting.
+Promise.allSettled([
+  finishPendingVerification(),
+  startPlugins().catch(error => console.error('[Plugins] Start failed:', error)),
+]).finally(() => app.mount('#app'))

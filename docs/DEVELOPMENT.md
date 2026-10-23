@@ -1,7 +1,8 @@
 # Development
 
 Notes for building BooruRamen from source and for working on its internals.
-For a quick overview of the app, see the [README](../README.md).
+For a quick overview of the app, see the [README](../README.md). To extend
+the app without changing its source, see [PLUGINS.md](PLUGINS.md).
 
 ## Requirements
 

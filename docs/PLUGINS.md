@@ -1,0 +1,171 @@
+# Writing plugins
+
+Plugins change how BooruRamen behaves without changing its source: what the
+feed searches for, which fetched posts it keeps, how it ranks them, and what
+the app's screens show. This guide covers everything a plugin can do. For
+building the app itself, see [DEVELOPMENT.md](DEVELOPMENT.md).
+
+- [Quick start](#quick-start)
+- [How plugins work](#how-plugins-work)
+- [The plugin definition](#the-plugin-definition)
+- [The api object](#the-api-object)
+- [Settings](#settings)
+- [Content rules plugins can't change](#content-rules-plugins-cant-change)
+- [Hooks reference](#hooks-reference)
+- [Testing a plugin](#testing-a-plugin)
+
+## Quick start
+
+A plugin is a JavaScript module whose default export is a plugin definition.
+Bundled plugins live in `src/plugins/bundled/<name>/index.js` and are picked
+up automatically:
+
+```js
+// src/plugins/bundled/hello/index.js
+import { definePlugin } from '../../definePlugin.js';
+
+export default definePlugin({
+  id: 'hello',
+  name: 'Hello',
+  description: 'Logs a greeting when it is turned on.',
+  setup(api) {
+    api.log.info('Hello from a plugin');
+    return () => api.log.info('Goodbye');
+  },
+});
+```
+
+Run `npm run dev`, open **Profile → Plugins** and turn it on.
+
+## How plugins work
+
+- The app decides where plugins can take part. Each extension point is a
+  **hook** with a name such as `feed:queries`; a plugin subscribes with
+  `api.on(name, handler)`.
+- A plugin is turned on and off on the Plugins page. Turning it on calls its
+  `setup(api)`; turning it off removes every hook, page and style it
+  registered and calls the function `setup` returned, if any. No reload is
+  needed either way, so `setup` must not leave anything behind that it
+  doesn't clean up.
+- Bundled plugins start turned off unless their definition sets
+  `enabledByDefault: true`. The on/off choice is remembered across launches.
+- Plugins are app-wide: they stay on when you switch profiles.
+- Errors are contained. A handler that throws, takes longer than 1.5 s or
+  returns something the hook can't use is skipped for that call and the
+  error is shown on the Plugins page. After 5 errors in a session the plugin
+  is turned off. A `setup` that throws or takes longer than 5 s leaves the
+  plugin off.
+
+## The plugin definition
+
+```js
+definePlugin({
+  id: 'my-plugin',          // required: 2-64 of a-z 0-9 . _ -, unique
+  name: 'My plugin',        // required: shown on the Plugins page
+  version: '1.0.0',
+  description: 'One line on what it does.',
+  author: 'You',
+  apiVersion: 1,            // the plugin API it was written for
+  enabledByDefault: false,  // bundled plugins only
+  settings: [],             // see Settings
+  setup(api) {              // required; may be async
+    // register hooks here
+    return () => {};        // optional cleanup
+  },
+});
+```
+
+`definePlugin` checks the definition and throws a descriptive error if
+something is wrong. A plugin asking for a newer `apiVersion` than the app
+provides is refused.
+
+## The api object
+
+`setup` receives one `api` object. It is the only thing a plugin needs.
+
+| Member | What it does |
+| --- | --- |
+| `api.id` | The plugin's id. |
+| `api.apiVersion` | The plugin API version the app provides. |
+| `api.on(hook, handler, { priority })` | Subscribe to a hook. Higher `priority` runs first (default 0). Returns an unsubscribe function. |
+| `api.onDispose(fn)` | Run `fn` when the plugin is turned off. |
+| `api.settings.get(key)` / `.all()` / `.set(key, value)` | Read and write the plugin's declared settings. |
+| `api.settings.onChange(fn)` | `fn(key, value)` after a setting changes. |
+| `api.storage.get(key, fallback)` / `.set(key, value)` / `.remove(key)` / `.keys()` | A small JSON key-value store kept per plugin across launches. |
+| `api.log.info/warn/error(...)` | Console logging prefixed with the plugin's id. |
+| `api.policy` | The content rules, read-only (see below). |
+
+Everything registered through `api` is removed automatically when the plugin
+is turned off.
+
+## Settings
+
+Declare settings and the Plugins page renders a form for them while the
+plugin is on. Values are checked against their type before they are stored.
+
+```js
+settings: [
+  { key: 'strength', type: 'number', label: 'Strength', default: 1, min: 0, max: 3, step: 0.1 },
+  { key: 'enabledInDive', type: 'boolean', label: 'Also in Deep Dive', default: false },
+  { key: 'mode', type: 'select', label: 'Mode', options: ['soft', { value: 'hard', label: 'Hard' }] },
+  { key: 'tags', type: 'tags', label: 'Tags', description: 'Comma or space separated' },
+  { key: 'note', type: 'string', label: 'Note' },
+],
+```
+
+| Type | Value | Notes |
+| --- | --- | --- |
+| `boolean` | `true`/`false` | |
+| `number` | number | Clamped to `min`/`max`. |
+| `string` | string | |
+| `select` | one of the option values | `options` is required. |
+| `tags` | array of lowercase tags | Duplicates removed. |
+
+## Content rules plugins can't change
+
+Two rules hold whatever a plugin does:
+
+1. **The feed shows General-rated posts only.**
+2. **A post with a blacklisted tag is never shown.** The blacklist is
+   applied to fetched posts on the device, every time.
+
+The app enforces both after every plugin hook has run, so a plugin can make
+the feed narrower but never wider. `api.policy` lets a plugin read them:
+
+```js
+api.policy.ratings                 // ['general']
+api.policy.blacklistAlwaysFiltered // true
+```
+
+`api.policy` is frozen. Changing either rule means changing
+`src/plugins/contentPolicy.js` in the app itself, which is a decision for the
+project's maintainers, not something a plugin can request.
+
+## Hooks reference
+
+Hooks come in two kinds:
+
+- **waterfall** hooks pass a value through every subscribed plugin in turn.
+  Return a replacement value, or `undefined` to leave it unchanged. Handlers
+  may be async.
+- **event** hooks tell plugins something happened. Their return value is
+  ignored.
+
+_No hooks are defined yet in this version of the API._
+
+## Testing a plugin
+
+The host can be used directly in a [vitest](https://vitest.dev) test, without
+the app:
+
+```js
+import { PluginHost } from '../src/plugins/PluginHost.js';
+import myPlugin from '../src/plugins/bundled/my-plugin/index.js';
+
+const host = new PluginHost();
+await host.start();
+await host.register(myPlugin);
+await host.setEnabled(myPlugin.id, true);
+```
+
+`tests/pluginHost.test.js` shows more.
