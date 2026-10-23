@@ -10,7 +10,7 @@ building the app itself, see [DEVELOPMENT.md](DEVELOPMENT.md).
 - [The plugin definition](#the-plugin-definition)
 - [The api object](#the-api-object)
 - [Settings](#settings)
-- [Content rules plugins can't change](#content-rules-plugins-cant-change)
+- [Content filters](#content-filters)
 - [Hooks reference](#hooks-reference)
 - [Testing a plugin](#testing-a-plugin)
 
@@ -93,7 +93,7 @@ provides is refused.
 | `api.settings.onChange(fn)` | `fn(key, value)` after a setting changes. |
 | `api.storage.get(key, fallback)` / `.set(key, value)` / `.remove(key)` / `.keys()` | A small JSON key-value store kept per plugin across launches. |
 | `api.log.info/warn/error(...)` | Console logging prefixed with the plugin's id. |
-| `api.policy` | The content rules, read-only (see below). |
+| `api.policy` | The feed's default content filters, read-only (see below). |
 | `api.feed.scorePosts(fn, { priority })` | Shorthand for `feed:score`: `fn(post, context)` returns a ranking multiplier. |
 | `api.feed.invalidate()` | Drop queued candidates so the next batch is fetched and ranked afresh, e.g. after a setting changed. |
 
@@ -123,25 +123,21 @@ settings: [
 | `select` | one of the option values | `options` is required. |
 | `tags` | array of lowercase tags | Duplicates removed. |
 
-## Content rules plugins can't change
+## Content filters
 
-Two rules hold whatever a plugin does:
+By default the feed shows **General-rated posts only** and **never shows a
+post with a blacklisted tag**; the blacklist is applied to fetched posts on
+the device. The app applies both after every plugin hook has run, so hooks
+like `feed:posts` and `feed:batch` can't get around them.
 
-1. **The feed shows General-rated posts only.**
-2. **A post with a blacklisted tag is never shown.** The blacklist is
-   applied to fetched posts on the device, every time.
-
-The app enforces both after every plugin hook has run, so a plugin can make
-the feed narrower but never wider. `api.policy` lets a plugin read them:
+Changing them is a deliberate, separate step: the `feed:filters` hook (see
+[Hooks reference](#hooks-reference)). They hold until the user turns on a
+plugin that uses it. `api.policy` holds the defaults, read-only:
 
 ```js
 api.policy.ratings                 // ['general']
 api.policy.blacklistAlwaysFiltered // true
 ```
-
-`api.policy` is frozen. Changing either rule means changing
-`src/plugins/contentPolicy.js` in the app itself, which is a decision for the
-project's maintainers, not something a plugin can request.
 
 ## Hooks reference
 
