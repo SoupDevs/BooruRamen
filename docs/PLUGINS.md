@@ -10,6 +10,7 @@ building the app itself, see [DEVELOPMENT.md](DEVELOPMENT.md).
 - [The plugin definition](#the-plugin-definition)
 - [The api object](#the-api-object)
 - [Settings](#settings)
+- [Adding to the UI](#adding-to-the-ui)
 - [Content rules plugins can't change](#content-rules-plugins-cant-change)
 - [Hooks reference](#hooks-reference)
 - [Testing a plugin](#testing-a-plugin)
@@ -95,6 +96,12 @@ provides is refused.
 | `api.log.info/warn/error(...)` | Console logging prefixed with the plugin's id. |
 | `api.policy` | The content rules, read-only (see below). |
 | `api.feed.scorePosts(fn, { priority })` | Shorthand for `feed:score`: `fn(post, context)` returns a ranking multiplier. |
+| `api.ui.addToSlot(slot, component, { order })` | Render a Vue component in a UI slot. |
+| `api.ui.addPage({ id, title, description, component })` | Add a page, linked from the Plugins page. |
+| `api.ui.addStyle(css)` | Add a stylesheet. |
+| `api.ui.notify(message, { duration })` | Show a short notice. |
+| `api.ui.openPage(id)` | Go to one of the plugin's pages. |
+| `api.vue` | Vue's `h`, `ref`, `reactive`, `computed`, `watch`, `watchEffect`, `onMounted`, `onBeforeUnmount`, `onUnmounted`, `nextTick`, `toRef`, `defineComponent`. |
 | `api.feed.invalidate()` | Drop queued candidates so the next batch is fetched and ranked afresh, e.g. after a setting changed. |
 
 Everything registered through `api` is removed automatically when the plugin
@@ -122,6 +129,73 @@ settings: [
 | `string` | string | |
 | `select` | one of the option values | `options` is required. |
 | `tags` | array of lowercase tags | Duplicates removed. |
+
+## Adding to the UI
+
+Plugin UI is made of ordinary Vue 3 components. Bundled plugins can import
+`.vue` files; any plugin can write a render function with `api.vue.h`, which
+needs no build step. Everything a plugin adds is removed when it is turned
+off. A component that throws while rendering is hidden and the error is
+shown on the Plugins page; the rest of the screen keeps working.
+
+The app's styling is Tailwind, and its classes work in plugin components
+too as long as the class appears somewhere in the app's source. For
+anything else use `style` attributes or `api.ui.addStyle`.
+
+### Slots
+
+| Slot | Where | Props |
+| --- | --- | --- |
+| `feed.post` | Over each post in the feed, covering it | `post`, `current` (is it the post on screen) |
+| `feed.actions` | The feed's right-hand button column, below the built-in buttons | `post` |
+| `feed.sidebar` | The feed's settings sidebar (gear button), below Deep Dive | `post` |
+| `post.details` | The end of the post details sidebar | `post` |
+| `profile.menu` | The Profile page menu, below Plugins | none |
+| `app.overlay` | Above every screen | `post` (the current feed post, or `null`) |
+
+`feed.post` covers the post with `pointer-events: none`, so taps still reach
+the post. Give elements that should take taps `pointer-events: auto` and stop
+the event (`@click.stop`, or `event.stopPropagation()` in a render function)
+so a tap doesn't also count as a tap on the post.
+
+```js
+setup(api) {
+  const { h } = api.vue;
+  api.ui.addToSlot('feed.actions', {
+    props: ['post'],
+    setup(props) {
+      return () => h('button', {
+        class: 'p-3 rounded-full bg-black bg-opacity-70 hover:bg-pink-600 transition-colors backdrop-blur-sm text-xs',
+        onClick: () => api.ui.notify(`Post ${props.post.id} has ${props.post.tag_string.split(' ').length} tags`),
+      }, '#');
+    },
+  });
+}
+```
+
+### Pages
+
+```js
+api.ui.addPage({
+  id: 'stats',                 // lowercase letters, digits and -
+  title: 'My stats',
+  description: 'Shown as the link tooltip',
+  component: { setup: () => () => api.vue.h('p', 'Hello') },
+});
+```
+
+The page lives at `/plugins/<plugin id>/<page id>` and is linked from the
+plugin's card on the Plugins page. `api.ui.openPage('stats')` navigates to
+it. To link it from the Profile menu too, add a component to `profile.menu`.
+
+### Styles and notices
+
+```js
+api.ui.addStyle('.my-plugin-badge { color: hotpink; }');
+api.ui.notify('Saved', { duration: 2000 }); // 1-10 s, default 3 s
+```
+
+Prefix your CSS classes with your plugin id: stylesheets are global.
 
 ## Content rules plugins can't change
 

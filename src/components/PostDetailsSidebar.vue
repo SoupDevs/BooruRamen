@@ -115,6 +115,9 @@
             Report/Block
           </button>
         </div>
+
+        <!-- Plugin sections (api.ui.addToSlot('post.details')) -->
+        <PluginSlot name="post.details" class="space-y-4" :slot-props="{ post }" />
       </div>
     </div>
 
@@ -137,6 +140,7 @@
 
 <script>
 import TagSection from './TagSection.vue';
+import PluginSlot from './plugins/PluginSlot.vue';
 import { Share2 } from 'lucide-vue-next';
 import { isTauri } from '../services/DownloadService';
 import { copyToClipboard, isMobilePlatform } from '../services/ShareService';
@@ -145,7 +149,7 @@ import { useInteractionsStore } from '../stores/interactions';
 
 export default {
   name: 'PostDetailsSidebar',
-  components: { TagSection, Share2 },
+  components: { TagSection, Share2, PluginSlot },
   props: {
     show: Boolean,
     post: Object,

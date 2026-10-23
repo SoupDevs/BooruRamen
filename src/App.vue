@@ -297,6 +297,9 @@
         >
           <MessageCircle class="h-6 w-6" />
         </button>
+
+        <!-- Plugin buttons (api.ui.addToSlot('feed.actions')) -->
+        <PluginSlot name="feed.actions" class="flex flex-col items-center gap-4" :slot-props="{ post: currentPost }" />
       </div>
 
       <!-- Comments Sheet -->
@@ -329,6 +332,9 @@
     <UpdateSplash />
     <AiModelDialog />
     <CloudflareVerifyBanner />
+    <!-- Floating plugin UI and notices -->
+    <PluginSlot name="app.overlay" :slot-props="{ post: currentPost }" />
+    <PluginNotices />
   </div>
 </template>
 
@@ -355,6 +361,8 @@ import ShareSheet from './components/ShareSheet.vue';
 import UpdateSplash from './components/UpdateSplash.vue';
 import AiModelDialog from './components/AiModelDialog.vue';
 import CloudflareVerifyBanner from './components/CloudflareVerifyBanner.vue';
+import PluginSlot from './components/plugins/PluginSlot.vue';
+import PluginNotices from './components/plugins/PluginNotices.vue';
 import aiTagger from './services/AiTaggerService.js';
 import { WatchTimer, MIN_IMPRESSION_MS } from './services/WatchTimer.js';
 
@@ -383,6 +391,8 @@ export default {
     UpdateSplash,
     AiModelDialog,
     CloudflareVerifyBanner,
+    PluginSlot,
+    PluginNotices,
   },
   data() {
     return {

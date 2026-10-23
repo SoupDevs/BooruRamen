@@ -67,6 +67,17 @@
           <span v-for="use in plugin.uses" :key="use" class="text-[11px] px-2 py-0.5 rounded-full bg-gray-900 text-gray-300" :title="use">{{ useLabel(use) }}</span>
         </div>
 
+        <div v-if="plugin.active && pagesOf(plugin).length" class="flex flex-wrap gap-2">
+          <router-link
+            v-for="page in pagesOf(plugin)"
+            :key="page.name"
+            :to="page.path"
+            class="text-sm px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-750 text-pink-400"
+            :title="page.description"
+            data-plugin-page-link
+          >{{ page.title }} →</router-link>
+        </div>
+
         <div v-if="plugin.enabled && plugin.settings.length" class="space-y-2 pt-1 border-t border-gray-700">
           <div
             v-for="setting in plugin.settings"
@@ -131,6 +142,7 @@
 
 <script>
 import { pluginHost } from '../plugins';
+import { uiState } from '../plugins/ui.js';
 
 export default {
   name: 'PluginsView',
@@ -149,7 +161,13 @@ export default {
       return plugin.origin === 'installed' ? 'Installed' : 'Built in';
     },
     useLabel(name) {
+      if (name === 'ui:page') return 'Pages';
+      if (name === 'ui:style') return 'Styles';
+      if (name.startsWith('ui:')) return `UI: ${name.slice(3)}`;
       return pluginHost.hookSpecs.get(name)?.label || name;
+    },
+    pagesOf(plugin) {
+      return uiState.pages.filter(page => page.pluginId === plugin.id);
     },
     inputId(plugin, setting) {
       return `plugin-${plugin.id}-${setting.key}`;
