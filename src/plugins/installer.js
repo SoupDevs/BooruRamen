@@ -61,6 +61,11 @@ export function listInstalled() {
   return readInstalled().map(({ id, name, installedAt }) => ({ id, name, installedAt }));
 }
 
+/** The code an installed plugin was installed from, or null. */
+export function getInstalledSource(id) {
+  return readInstalled().find(entry => entry.id === id)?.code ?? null;
+}
+
 /**
  * Install a plugin from its source, or update it if one with its id is
  * installed. It is installed for every profile on this device and starts

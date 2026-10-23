@@ -30,6 +30,18 @@
         No plugins are installed.
       </div>
 
+      <router-link
+        to="/profile/plugins/browse"
+        class="flex items-center justify-between p-4 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors"
+        data-plugin-browse
+      >
+        <div class="flex flex-col">
+          <span class="font-medium">Browse plugins</span>
+          <span class="text-xs text-gray-400">Find plugins shared on GitHub and install them in one tap.</span>
+        </div>
+        <ChevronRight class="w-5 h-5 text-gray-400 shrink-0" />
+      </router-link>
+
       <!-- Install a plugin from a single .js file, or from pasted code -->
       <div class="p-4 bg-gray-800 rounded-lg space-y-3" data-plugin-install>
         <div class="flex items-center justify-between gap-3">
@@ -214,11 +226,11 @@
 <script>
 import { pluginHost, installPlugin, uninstallPlugin } from '../plugins';
 import { uiState } from '../plugins/ui.js';
-import { ChevronDown, Settings2, Trash2 } from 'lucide-vue-next';
+import { ChevronDown, ChevronRight, Settings2, Trash2 } from 'lucide-vue-next';
 
 export default {
   name: 'PluginsView',
-  components: { ChevronDown, Settings2, Trash2 },
+  components: { ChevronDown, ChevronRight, Settings2, Trash2 },
   data() {
     return {
       plugins: pluginHost.state.plugins,
