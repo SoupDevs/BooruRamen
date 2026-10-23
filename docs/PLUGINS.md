@@ -85,13 +85,36 @@ The file is stored on the device and loaded at every start. If it stops
 loading (say, after an app update), it stays listed with its error so you
 can remove it.
 
+### Sharing a plugin on GitHub
+
+**Profile → Plugins → Browse plugins** lists plugins shared on GitHub and
+installs one in a tap. To list yours:
+
+1. Put each plugin, as an installable file like the one above, directly in a
+   folder named `plugins` at the root of a public repository, e.g.
+   `plugins/hide-tiny-posts.js`. Only `.js` (and `.mjs`) files in that folder
+   are listed, from the repository's default branch.
+2. Add the topic `booruramen-plugins` to the repository (on GitHub: the gear
+   next to **About**, then **Topics**).
+
+The browser shows each file's `name`, `version`, `author` and `description`
+and its source, with links to the file and the repository. It reads those
+fields from the file's text without running it, so write them as plain
+string literals before `setup`. Installing from the browser is the same as
+installing the file: it starts turned off, and installing a newer version of
+the file updates it.
+
+GitHub limits searches made without an account, so the browser keeps what it
+found until the app is closed; the refresh button searches again.
+
 ### Trust
 
 A plugin is JavaScript running inside the app, with the app's own access: it could read
 the user's history, call the network, or reach into the page directly
 instead of going through `api`. The app can't sandbox that, so the Plugins
-page warns before running an installed file, and nothing in the file runs
-until the user presses **Install**. Only install plugins from people you
+page and the plugin browser warn about it, and nothing in a file runs until
+the user presses **Install**. The browser lists other people's plugins
+without reviewing them. Only install plugins from people you
 trust, and read a plugin's code before installing it.
 
 ## How plugins work

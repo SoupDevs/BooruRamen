@@ -484,7 +484,7 @@ export default {
         watchTimer.stop();
       }
       // Collapse settings sidebar when navigating to profile pages
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles', 'Plugins', 'PluginBrowser'];
       if (hiddenRoutes.includes(to.name) && this.showSettingsSidebar) {
         this.showSettingsSidebar = false;
       }
@@ -497,7 +497,7 @@ export default {
     },
     showSettingsSidebar(isOpen) {
       if (!isOpen) return;
-      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'];
+      const hiddenRoutes = ['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles', 'Plugins', 'PluginBrowser'];
       if (hiddenRoutes.includes(this.$route.name)) {
         this.showSettingsSidebar = false;
       }
@@ -598,7 +598,7 @@ export default {
     showSettingsToggle() {
       // Only show settings on feed, history, likes, favorites, and viewer
       const routeName = this.$route.name;
-      return !['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles'].includes(routeName);
+      return !['Profile', 'ProfileSettings', 'ProfileAnalytics', 'Profiles', 'Plugins', 'PluginBrowser'].includes(routeName);
     },
     // Chrome Focus mode fades out while the user is idle. The class itself is
     // always present so the opacity transition runs on both directions.
