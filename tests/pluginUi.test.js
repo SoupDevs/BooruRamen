@@ -21,6 +21,7 @@ const installed = [];
 async function install(setup) {
   const id = `ui-test-${++ids}`;
   await pluginHost.register({ id, name: id, setup }, { origin: 'installed' });
+  await pluginHost.setEnabled(id, true);
   installed.push(id);
   return id;
 }

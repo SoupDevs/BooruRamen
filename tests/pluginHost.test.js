@@ -14,10 +14,17 @@ async function startedHost() {
   return host;
 }
 
+// Plugins start off, so tests that need one running turn it on.
+async function registerOn(host, definition, options) {
+  const record = await host.register(definition, options);
+  await host.setEnabled(record.id, true);
+  return record;
+}
+
 describe('definePlugin', () => {
   it('fills in defaults', () => {
     const def = definePlugin({ id: 'my-plugin', name: ' Mine ', setup() {} });
-    expect(def).toMatchObject({ name: 'Mine', version: '0.0.0', apiVersion: PLUGIN_API_VERSION, enabledByDefault: false, settings: [] });
+    expect(def).toMatchObject({ name: 'Mine', version: '0.0.0', apiVersion: PLUGIN_API_VERSION, settings: [] });
     expect(Object.isFrozen(def)).toBe(true);
   });
 
@@ -41,7 +48,7 @@ describe('PluginHost lifecycle', () => {
     const host = await startedHost();
     const id = uniqueId();
     const cleanup = vi.fn();
-    await host.register({ id, name: 'Doubler', enabledByDefault: true, setup(api) { api.on('test:value', value => value * 2); return cleanup; } });
+    await registerOn(host, { id, name: 'Doubler', setup(api) { api.on('test:value', value => value * 2); return cleanup; } });
     expect(await host.run('test:value', 3)).toBe(6);
     expect(host.state.plugins.find(plugin => plugin.id === id).uses).toEqual(['test:value']);
 
@@ -51,27 +58,27 @@ describe('PluginHost lifecycle', () => {
     expect(await host.run('test:value', 3)).toBe(3);
   });
 
-  it('remembers turning a plugin off across hosts', async () => {
+  it('starts every plugin off, bundled or installed', async () => {
+    const host = await startedHost();
+    expect((await host.register({ id: uniqueId(), name: 'Bundled', setup() {} })).active).toBe(false);
+    expect((await host.register({ id: uniqueId(), name: 'Installed', setup() {} }, { origin: 'installed' })).active).toBe(false);
+  });
+
+  it('remembers turning a plugin on and off across hosts', async () => {
     const id = uniqueId();
-    const definition = { id, name: 'Remembered', enabledByDefault: true, setup() {} };
+    const definition = { id, name: 'Remembered', setup() {} };
     const first = await startedHost();
-    await first.register(definition);
+    await registerOn(first, definition);
+    expect((await (await startedHost()).register(definition)).active).toBe(true);
     await first.setEnabled(id, false);
-    const second = await startedHost();
-    const record = await second.register(definition);
+    const record = await (await startedHost()).register(definition);
     expect(record.enabled).toBe(false);
     expect(record.active).toBe(false);
   });
 
-  it('leaves bundled plugins off unless they say otherwise; installed ones start on', async () => {
-    const host = await startedHost();
-    expect((await host.register({ id: uniqueId(), name: 'Off', setup() {} })).active).toBe(false);
-    expect((await host.register({ id: uniqueId(), name: 'Installed', setup() {} }, { origin: 'installed' })).active).toBe(true);
-  });
-
   it('records a setup failure without breaking the host', async () => {
     const host = await startedHost();
-    const record = await host.register({ id: uniqueId(), name: 'Broken', enabledByDefault: true, setup(api) { api.on('test:value', () => 1); throw new Error('boom'); } });
+    const record = await registerOn(host, { id: uniqueId(), name: 'Broken', setup(api) { api.on('test:value', () => 1); throw new Error('boom'); } });
     expect(record.active).toBe(false);
     expect(record.error).toMatch(/boom/);
     expect(host.hasHandlers('test:value')).toBe(false);
@@ -86,7 +93,7 @@ describe('PluginHost lifecycle', () => {
 
   it('rejects unknown hooks', async () => {
     const host = await startedHost();
-    const record = await host.register({ id: uniqueId(), name: 'Typo', enabledByDefault: true, setup(api) { api.on('test:valeu', () => 1); } });
+    const record = await registerOn(host, { id: uniqueId(), name: 'Typo', setup(api) { api.on('test:valeu', () => 1); } });
     expect(record.error).toMatch(/Unknown hook/);
   });
 });
@@ -94,15 +101,15 @@ describe('PluginHost lifecycle', () => {
 describe('PluginHost hooks', () => {
   it('runs higher priority first and passes each result on', async () => {
     const host = await startedHost();
-    await host.register({ id: uniqueId(), name: 'Add', enabledByDefault: true, setup(api) { api.on('test:value', value => value + 1); } });
-    await host.register({ id: uniqueId(), name: 'Times', enabledByDefault: true, setup(api) { api.on('test:value', value => value * 10, { priority: 5 }); } });
+    await registerOn(host, { id: uniqueId(), name: 'Add', setup(api) { api.on('test:value', value => value + 1); } });
+    await registerOn(host, { id: uniqueId(), name: 'Times', setup(api) { api.on('test:value', value => value * 10, { priority: 5 }); } });
     expect(await host.run('test:value', 1)).toBe(11);
   });
 
   it('keeps the previous value when a result fails sanitizing or a handler throws', async () => {
     const host = await startedHost();
-    const bad = await host.register({ id: uniqueId(), name: 'Bad', enabledByDefault: true, setup(api) { api.on('test:value', () => 'nope'); } });
-    await host.register({ id: uniqueId(), name: 'Thrower', enabledByDefault: true, setup(api) { api.on('test:value', () => { throw new Error('oops'); }); } });
+    const bad = await registerOn(host, { id: uniqueId(), name: 'Bad', setup(api) { api.on('test:value', () => 'nope'); } });
+    await registerOn(host, { id: uniqueId(), name: 'Thrower', setup(api) { api.on('test:value', () => { throw new Error('oops'); }); } });
     expect(await host.run('test:value', 4)).toBe(4);
     expect(bad.errorCount).toBe(1);
     expect(bad.error).toMatch(/not a number/);
@@ -112,7 +119,7 @@ describe('PluginHost hooks', () => {
     vi.useFakeTimers();
     try {
       const host = await startedHost();
-      await host.register({ id: uniqueId(), name: 'Slow', enabledByDefault: true, setup(api) { api.on('test:value', () => new Promise(() => {})); } });
+      await registerOn(host, { id: uniqueId(), name: 'Slow', setup(api) { api.on('test:value', () => new Promise(() => {})); } });
       const result = host.run('test:value', 7);
       await vi.advanceTimersByTimeAsync(HOOK_TIMEOUT_MS + 1);
       expect(await result).toBe(7);
@@ -123,7 +130,7 @@ describe('PluginHost hooks', () => {
 
   it('turns a plugin off after repeated errors', async () => {
     const host = await startedHost();
-    const record = await host.register({ id: uniqueId(), name: 'Flaky', enabledByDefault: true, setup(api) { api.on('test:value', () => { throw new Error('flaky'); }); } });
+    const record = await registerOn(host, { id: uniqueId(), name: 'Flaky', setup(api) { api.on('test:value', () => { throw new Error('flaky'); }); } });
     for (let i = 0; i < MAX_PLUGIN_ERRORS; i++) await host.run('test:value', 1);
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(record.enabled).toBe(false);
@@ -134,8 +141,8 @@ describe('PluginHost hooks', () => {
   it('delivers events without letting a handler error escape', async () => {
     const host = await startedHost();
     const seen = [];
-    await host.register({ id: uniqueId(), name: 'Listener', enabledByDefault: true, setup(api) { api.on('test:event', payload => seen.push(payload)); } });
-    await host.register({ id: uniqueId(), name: 'Crasher', enabledByDefault: true, setup(api) { api.on('test:event', () => { throw new Error('x'); }); } });
+    await registerOn(host, { id: uniqueId(), name: 'Listener', setup(api) { api.on('test:event', payload => seen.push(payload)); } });
+    await registerOn(host, { id: uniqueId(), name: 'Crasher', setup(api) { api.on('test:event', () => { throw new Error('x'); }); } });
     host.emit('test:event', { a: 1 });
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(seen).toEqual([{ a: 1 }]);
@@ -147,8 +154,8 @@ describe('PluginHost settings, storage and extensions', () => {
     const host = await startedHost();
     const id = uniqueId();
     const changes = [];
-    await host.register({
-      id, name: 'Settings', enabledByDefault: true,
+    await registerOn(host, {
+      id, name: 'Settings',
       settings: [
         { key: 'boost', type: 'number', default: 1, min: 0, max: 3 },
         { key: 'tags', type: 'tags' },
@@ -168,8 +175,8 @@ describe('PluginHost settings, storage and extensions', () => {
   it('keeps each plugin\'s storage apart', async () => {
     const host = await startedHost();
     let a, b;
-    await host.register({ id: uniqueId(), name: 'A', enabledByDefault: true, setup(api) { a = api; } });
-    await host.register({ id: uniqueId(), name: 'B', enabledByDefault: true, setup(api) { b = api; } });
+    await registerOn(host, { id: uniqueId(), name: 'A', setup(api) { a = api; } });
+    await registerOn(host, { id: uniqueId(), name: 'B', setup(api) { b = api; } });
     a.storage.set('count', 2);
     expect(a.storage.get('count')).toBe(2);
     expect(b.storage.get('count', 0)).toBe(0);
@@ -182,7 +189,7 @@ describe('PluginHost settings, storage and extensions', () => {
     host.extendApi('things', ({ track }) => ({ add: () => track(removed) }));
     await host.start();
     const id = uniqueId();
-    await host.register({ id, name: 'Things', enabledByDefault: true, setup(api) { api.things.add(); } });
+    await registerOn(host, { id, name: 'Things', setup(api) { api.things.add(); } });
     await host.setEnabled(id, false);
     expect(removed).toHaveBeenCalledOnce();
   });
@@ -190,10 +197,59 @@ describe('PluginHost settings, storage and extensions', () => {
   it('exposes the content policy read-only', async () => {
     const host = await startedHost();
     let api;
-    await host.register({ id: uniqueId(), name: 'Reader', enabledByDefault: true, setup(received) { api = received; } });
+    await registerOn(host, { id: uniqueId(), name: 'Reader', setup(received) { api = received; } });
     expect(api.policy).toBe(CONTENT_POLICY);
     expect(() => { 'use strict'; api.policy.ratings.push('explicit'); }).toThrow();
     expect(CONTENT_POLICY.ratings).toEqual(['general']);
+  });
+});
+
+describe('PluginHost profiles', () => {
+  const hostFor = async profileId => {
+    const host = await startedHost();
+    host.setScope(profileId);
+    return host;
+  };
+
+  it('keeps on/off, settings and storage separate for each profile', async () => {
+    const id = uniqueId();
+    let api;
+    const definition = { id, name: 'Per profile', settings: [{ key: 'level', type: 'number', default: 1 }], setup(received) { api = received; } };
+    const alice = await hostFor('alice');
+    await registerOn(alice, definition);
+    alice.setSetting(id, 'level', 5);
+    api.storage.set('seen', 3);
+
+    const bob = await hostFor('bob');
+    let bobApi;
+    const bobRecord = await bob.register({ ...definition, setup(received) { bobApi = received; } });
+    expect(bobRecord.active).toBe(false);
+    await bob.setEnabled(id, true);
+    expect(bob.getSettings(id)).toEqual({ level: 1 });
+    expect(bobApi.storage.get('seen', 0)).toBe(0);
+
+    const aliceAgain = await hostFor('alice');
+    expect((await aliceAgain.register(definition)).active).toBe(true);
+    expect(aliceAgain.getSettings(id)).toEqual({ level: 5 });
+    expect(api.storage.get('seen')).toBe(3);
+  });
+
+  it('clears a plugin\'s data from every profile', async () => {
+    const id = uniqueId();
+    const apis = {};
+    for (const profile of ['alice', 'bob']) {
+      const host = await hostFor(profile);
+      await registerOn(host, { id, name: 'Cleared', settings: [{ key: 'x', type: 'number' }], setup(api) { apis[profile] = api; } });
+      host.setSetting(id, 'x', 2);
+      apis[profile].storage.set('k', 1);
+    }
+    (await hostFor('alice')).clearPluginData(id);
+    for (const profile of ['alice', 'bob']) {
+      const host = await hostFor(profile);
+      expect((await host.register({ id, name: 'Cleared', settings: [{ key: 'x', type: 'number' }], setup() {} })).enabled).toBe(false);
+      expect(host.getSettings(id)).toEqual({ x: 0 });
+      expect(apis[profile].storage.keys()).toEqual([]);
+    }
   });
 });
 

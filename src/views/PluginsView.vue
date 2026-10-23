@@ -23,6 +23,7 @@
       <p class="text-sm text-gray-400 px-1">
         Plugins can change the feed's searches and ranking and add to the app's screens.
         The feed shows General-rated posts and hides blacklisted tags unless a plugin you turn on changes those filters.
+        Plugins are off until you turn them on, and each profile has its own choices and plugin settings.
       </p>
 
       <div v-if="!plugins.length" class="p-4 bg-gray-800 rounded-lg text-sm text-gray-400" data-plugins-empty>
@@ -34,7 +35,7 @@
         <div class="flex items-center justify-between gap-3">
           <div class="flex flex-col">
             <span class="font-medium">Install a plugin</span>
-            <span class="text-xs text-gray-400">From a plugin .js file. Installing one with the same id updates it.</span>
+            <span class="text-xs text-gray-400">From a plugin .js file. It's added for every profile on this device and starts off; turn it on below. Installing one with the same id updates it.</span>
           </div>
           <div class="flex gap-2 shrink-0">
             <button type="button" class="text-sm px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-700" data-plugin-install-file @click="$refs.fileInput.click()">Choose file</button>

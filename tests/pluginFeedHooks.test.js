@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/services/StorageService', () => ({ default: {} }));
 vi.mock('../src/services/BooruService', () => ({ default: { getTagLimit: () => 2 } }));
-vi.mock('../src/services/ProfileService', () => ({ getActiveProfileDbName: () => 'test' }));
+vi.mock('../src/services/ProfileService', () => ({ getActiveProfileDbName: () => 'test', getActiveProfile: () => ({ id: 'test' }) }));
 vi.mock('../src/services/ImageAnalysisService.js', () => ({ default: { subscribe() {} } }));
 vi.mock('../src/services/ImageAnalysisCache.js', () => ({ hydrateImageAnalysis: async () => {} }));
 vi.mock('../src/stores/settings.js', () => ({ useSettingsStore: () => ({ aiTaggingEnabled: false }) }));
@@ -34,6 +34,7 @@ const installed = [];
 async function install(setup) {
   const id = `feed-test-${++ids}`;
   await pluginHost.register({ id, name: id, setup }, { origin: 'installed' });
+  await pluginHost.setEnabled(id, true);
   installed.push(id);
   return id;
 }

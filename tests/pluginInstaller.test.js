@@ -51,10 +51,11 @@ describe('evaluatePluginSource', () => {
 });
 
 describe('installing', () => {
-  it('installs, turns on, survives a restart and uninstalls', async () => {
+  it('installs turned off, remembers being turned on across a restart, and uninstalls', async () => {
     const record = await installPlugin(source('kept', "api.on('feed:posts', posts => posts);"));
-    expect(record).toMatchObject({ origin: 'installed', enabled: true, active: true });
+    expect(record).toMatchObject({ origin: 'installed', enabled: false, active: false });
     expect(listInstalled().map(entry => entry.id)).toEqual(['kept']);
+    await pluginHost.setEnabled('kept', true);
 
     // A new start loads it from storage.
     await pluginHost.unregister('kept');
@@ -84,12 +85,13 @@ describe('installing', () => {
     await loadInstalledPlugins();
     const record = pluginHost.state.plugins.find(plugin => plugin.id === 'broken');
     expect(record.active).toBe(false);
-    expect(record.error).toMatch(/Failed to start/);
+    expect(record.error).toMatch(/Failed to (load|start)/);
     await uninstallPlugin('broken');
   });
 
   it('removes what an uninstalled plugin stored', async () => {
     await installPlugin(source('storer', "api.storage.set('x', 1);"));
+    await pluginHost.setEnabled('storer', true);
     expect([...store.keys()].some(key => key.includes('storer:x'))).toBe(true);
     await uninstallPlugin('storer');
     expect([...store.keys()].some(key => key.includes('storer'))).toBe(false);
@@ -114,7 +116,7 @@ describe('Tag Spotlight example', () => {
     expect([...record.uses]).toEqual(expect.arrayContaining(['feed:queries', 'feed:score', 'feed:postShown', 'post:interaction', 'ui:feed.post', 'ui:post.details', 'ui:page']));
 
     pluginHost.emit('feed:postShown', { post: posts[0] });
-    await vi.waitFor(() => expect(JSON.parse(store.get('booruRamen_plugin_data:tag-spotlight:tally'))).toEqual({ cat: { shown: 1, liked: 0 } }));
+    await vi.waitFor(() => expect(JSON.parse(store.get(`booruRamen_plugin_data:${pluginHost.scope}:tag-spotlight:tally`))).toEqual({ cat: { shown: 1, liked: 0 } }));
     await pluginHost.unregister('tag-spotlight');
   });
 });

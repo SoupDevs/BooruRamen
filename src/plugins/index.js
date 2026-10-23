@@ -20,6 +20,7 @@ import './feedHooks.js';
 // Gives plugins api.ui and api.vue.
 import './ui.js';
 import { loadInstalledPlugins } from './installer.js';
+import { getActiveProfile } from '../services/ProfileService.js';
 
 export { default as pluginHost } from './PluginHost.js';
 export { definePlugin, PLUGIN_API_VERSION } from './definePlugin.js';
@@ -30,11 +31,12 @@ export { installPlugin, uninstallPlugin, evaluatePluginSource } from './installe
 const bundled = import.meta.glob('./bundled/*/index.js', { eager: true });
 
 /**
- * Register the bundled and installed plugins and turn on the ones that
- * should be on.
+ * Register the bundled and installed plugins and turn on the ones the
+ * active profile turned on.
  * A plugin that fails to load is logged and skipped; the app still starts.
  */
 export async function startPlugins() {
+  pluginHost.setScope(getActiveProfile().id);
   for (const [path, module] of Object.entries(bundled)) {
     try {
       await pluginHost.register(module.default, { origin: 'bundled' });

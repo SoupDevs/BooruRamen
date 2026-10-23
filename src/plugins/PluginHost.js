@@ -21,6 +21,10 @@
  *
  * Everything a plugin registers is tracked, so turning it off removes all of
  * it without a reload.
+ *
+ * Plugins are available on the whole device, but each user profile turns
+ * them on for itself and keeps its own plugin settings and storage. Every
+ * plugin starts turned off.
  */
 import { reactive, markRaw } from 'vue';
 import { definePlugin, PLUGIN_API_VERSION } from './definePlugin.js';
@@ -99,6 +103,8 @@ export function coerceSetting(setting, value) {
 
 export class PluginHost {
   constructor() {
+    // The user profile whose on/off choices, settings and storage are used.
+    this.scope = 'default';
     /** Reactive list the Plugins page renders. */
     this.state = reactive({ plugins: [] });
     this.records = new Map();
@@ -107,6 +113,15 @@ export class PluginHost {
     this.apiExtensions = new Map();
     this.started = false;
   }
+
+  /** Use this profile's plugin choices. Call before start(). */
+  setScope(profileId) {
+    this.scope = String(profileId || 'default');
+  }
+
+  stateKey() { return `${STATE_KEY}:${this.scope}`; }
+  settingsKey(id) { return `${SETTINGS_PREFIX}${this.scope}:${id}`; }
+  dataPrefix(id) { return `${STORAGE_PREFIX}${this.scope}:${id}:`; }
 
   // ---- extension points (used by the app, not by plugins) ----
 
@@ -175,15 +190,15 @@ export class PluginHost {
   // ---- registration and lifecycle ----
 
   /**
-   * Add a plugin. It is turned on now if it was left on (or is on by
-   * default) and the host has started.
+   * Add a plugin. It is turned on now if this profile turned it on before
+   * and the host has started; otherwise it stays off.
    * @param {Object} definition see definePlugin
    * @param {{ origin?: 'bundled'|'installed' }} [options]
    */
   async register(definition, { origin = 'bundled' } = {}) {
     const def = definePlugin(definition);
     if (this.records.has(def.id)) throw new Error(`A plugin with id "${def.id}" is already loaded`);
-    const saved = readJson(STATE_KEY, {}).enabled || {};
+    const saved = readJson(this.stateKey(), {}).enabled || {};
     const record = reactive({
       id: def.id,
       name: def.name,
@@ -192,7 +207,7 @@ export class PluginHost {
       author: def.author,
       origin,
       settings: def.settings,
-      enabled: def.id in saved ? !!saved[def.id] : (origin === 'installed' || def.enabledByDefault),
+      enabled: !!saved[def.id],
       active: false,
       error: '',
       errorCount: 0,
@@ -226,8 +241,8 @@ export class PluginHost {
     const entry = this.records.get(id);
     if (!entry) throw new Error(`No plugin "${id}"`);
     entry.record.enabled = !!enabled;
-    const state = readJson(STATE_KEY, {});
-    storage.set(STATE_KEY, JSON.stringify({ ...state, enabled: { ...(state.enabled || {}), [id]: !!enabled } }));
+    const state = readJson(this.stateKey(), {});
+    storage.set(this.stateKey(), JSON.stringify({ ...state, enabled: { ...(state.enabled || {}), [id]: !!enabled } }));
     if (enabled) {
       entry.record.errorCount = 0;
       await this.activate(id);
@@ -285,7 +300,7 @@ export class PluginHost {
   getSettings(id) {
     const entry = this.records.get(id);
     if (!entry) return {};
-    const saved = readJson(SETTINGS_PREFIX + id, {});
+    const saved = readJson(this.settingsKey(id), {});
     return Object.fromEntries(entry.def.settings.map(setting => [setting.key, setting.key in saved ? coerceSetting(setting, saved[setting.key]) : setting.default]));
   }
 
@@ -294,7 +309,7 @@ export class PluginHost {
     const setting = entry?.def.settings.find(item => item.key === key);
     if (!setting) throw new Error(`Plugin "${id}" has no setting "${key}"`);
     const coerced = coerceSetting(setting, value);
-    storage.set(SETTINGS_PREFIX + id, JSON.stringify({ ...readJson(SETTINGS_PREFIX + id, {}), [key]: coerced }));
+    storage.set(this.settingsKey(id), JSON.stringify({ ...readJson(this.settingsKey(id), {}), [key]: coerced }));
     for (const listener of [...(entry.settingListeners || [])]) {
       try { listener(key, coerced); } catch (error) { this.reportError(id, `settings.onChange: ${error?.message || error}`); }
     }
@@ -315,7 +330,7 @@ export class PluginHost {
       };
     };
     const use = feature => { if (!record.uses.includes(feature)) record.uses.push(feature); };
-    const dataKey = key => `${STORAGE_PREFIX}${id}:${key}`;
+    const dataKey = key => `${this.dataPrefix(id)}${key}`;
     const api = {
       id,
       apiVersion: PLUGIN_API_VERSION,
@@ -360,7 +375,7 @@ export class PluginHost {
         get: (key, fallback = null) => readJson(dataKey(key), fallback),
         set: (key, value) => storage.set(dataKey(key), JSON.stringify(value)),
         remove: key => storage.remove(dataKey(key)),
-        keys: () => storage.keys().filter(key => key?.startsWith(`${STORAGE_PREFIX}${id}:`)).map(key => key.slice(`${STORAGE_PREFIX}${id}:`.length)),
+        keys: () => storage.keys().filter(key => key?.startsWith(this.dataPrefix(id))).map(key => key.slice(this.dataPrefix(id).length)),
       },
     };
     for (const [name, factory] of this.apiExtensions) {
@@ -369,10 +384,20 @@ export class PluginHost {
     return Object.freeze(api);
   }
 
-  /** Remove everything a plugin stored (settings and storage). */
+  /** Remove everything a plugin stored, in every profile (on/off, settings, storage). */
   clearPluginData(id) {
-    storage.remove(SETTINGS_PREFIX + id);
-    for (const key of storage.keys()) if (key?.startsWith(`${STORAGE_PREFIX}${id}:`)) storage.remove(key);
+    for (const key of storage.keys()) {
+      if (!key) continue;
+      if (key.startsWith(SETTINGS_PREFIX) && key.endsWith(`:${id}`)) storage.remove(key);
+      else if (key.startsWith(STORAGE_PREFIX) && key.slice(STORAGE_PREFIX.length).split(':')[1] === id) storage.remove(key);
+      else if (key.startsWith(`${STATE_KEY}:`)) {
+        const state = readJson(key, {});
+        if (state.enabled && id in state.enabled) {
+          delete state.enabled[id];
+          storage.set(key, JSON.stringify(state));
+        }
+      }
+    }
   }
 }
 
