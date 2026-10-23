@@ -33,6 +33,7 @@ Promise.allSettled([
   finishPendingVerification(),
   startPlugins()
     // Opened straight onto a plugin page: its route exists only now.
+    .then(() => router.isReady())
     .then(() => { if (!router.currentRoute.value.matched.length) return router.replace(router.currentRoute.value.fullPath) })
     .catch(error => console.error('[Plugins] Start failed:', error)),
 ]).finally(() => app.mount('#app'))
