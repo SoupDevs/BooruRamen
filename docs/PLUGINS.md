@@ -6,6 +6,8 @@ the app's screens show. This guide covers everything a plugin can do. For
 building the app itself, see [DEVELOPMENT.md](DEVELOPMENT.md).
 
 - [Quick start](#quick-start)
+- [Examples](#examples)
+- [Installing a plugin from a file](#installing-a-plugin-from-a-file)
 - [How plugins work](#how-plugins-work)
 - [The plugin definition](#the-plugin-definition)
 - [The api object](#the-api-object)
@@ -37,6 +39,60 @@ export default definePlugin({
 ```
 
 Run `npm run dev`, open **Profile → Plugins** and turn it on.
+
+Or, without touching the app at all, write a single file and install it from
+the Plugins page (see [Installing a plugin from a file](#installing-a-plugin-from-a-file)).
+
+## Examples
+
+- [`src/plugins/bundled/tag-spotlight`](../src/plugins/bundled/tag-spotlight/index.js):
+  the bundled example, off by default. It ranks posts with your spotlight
+  tags higher (`feed:score`), searches for them (`feed:queries`), marks them
+  in the feed (`feed.post` slot), lets you spotlight a tag from post details
+  (`post.details` slot), counts how they did (`feed:postShown`,
+  `post:interaction`, `api.storage`) and shows the tally on its own page
+  written as a `.vue` file.
+- [`docs/examples/tag-count.plugin.js`](examples/tag-count.plugin.js): an
+  installable single-file plugin. It drops sparsely tagged posts
+  (`feed:posts`) and adds a button to the feed's action column.
+
+## Installing a plugin from a file
+
+**Profile → Plugins → Install a plugin** takes a `.js` file (or pasted code).
+Installing a file with an id that is already installed updates it; a
+built-in plugin's id can't be taken. Installed plugins start turned on and
+have a **Remove** button, which also deletes their settings and storage.
+
+An installable file differs from a bundled plugin in two ways:
+
+1. **No imports.** `definePlugin` is already in scope, and Vue comes from
+   `api.vue`. Write components with `api.vue.h` render functions.
+2. **One `export default`**, of the plugin definition. No other exports.
+
+```js
+export default definePlugin({
+  id: 'hide-tiny-posts',
+  name: 'Hide tiny posts',
+  setup(api) {
+    api.on('feed:posts', posts => posts.filter(post => (post.image_width || 0) >= 500));
+  },
+});
+```
+
+The file is stored on the device and loaded at every start. If it stops
+loading (say, after an app update), it stays listed with its error so you
+can remove it.
+
+### Trust
+
+The API is designed so a plugin can't widen what the feed shows (see
+[Content rules](#content-rules-plugins-cant-change)). But a plugin is
+JavaScript running inside the app, with the app's own access: it could read
+the user's history, call the network, or reach into the page directly
+instead of going through `api`. The app can't sandbox that, so the Plugins
+page warns before running an installed file, and nothing in the file runs
+until the user presses **Install**. Only install plugins from people you
+trust, and read a plugin's code before installing it.
 
 ## How plugins work
 
@@ -205,8 +261,8 @@ Two rules hold whatever a plugin does:
 2. **A post with a blacklisted tag is never shown.** The blacklist is
    applied to fetched posts on the device, every time.
 
-The app enforces both after every plugin hook has run, so a plugin can make
-the feed narrower but never wider. `api.policy` lets a plugin read them:
+The app enforces both after every plugin hook has run, so a plugin using the
+API can make the feed narrower but never wider. `api.policy` lets a plugin read them:
 
 ```js
 api.policy.ratings                 // ['general']
@@ -350,19 +406,36 @@ Posts are normalized across sources. The fields plugins usually need:
 | `_strategy` | The query type that found the post. |
 | `_score` | The engine's score (set at assembly). |
 
+## Checklist for a good plugin
+
+- Return `undefined` from a waterfall hook when you have nothing to change;
+  it's cheaper than returning a copy.
+- Keep hooks fast. They run on every batch, and one over 1.5 s is skipped.
+- Leave Deep Dive alone unless your plugin is about it (`context.deepDive`).
+- Call `api.feed.invalidate()` from `api.settings.onChange` if your settings
+  change what the feed fetches or how it ranks.
+- Prefix annotations on posts (`post._myPlugin`), CSS classes and storage
+  keys you share with anything else with your plugin id.
+- Clean up anything you create outside `api` in the function `setup`
+  returns or with `api.onDispose`.
+
 ## Testing a plugin
 
 The host can be used directly in a [vitest](https://vitest.dev) test, without
 the app:
 
 ```js
-import { PluginHost } from '../src/plugins/PluginHost.js';
+import { pluginHost } from '../src/plugins/index.js'; // declares the app's hooks
 import myPlugin from '../src/plugins/bundled/my-plugin/index.js';
 
-const host = new PluginHost();
-await host.start();
-await host.register(myPlugin);
-await host.setEnabled(myPlugin.id, true);
+await pluginHost.start();
+await pluginHost.register(myPlugin);
+await pluginHost.setEnabled(myPlugin.id, true);
+const queries = await pluginHost.run('feed:queries', [], { deepDive: false });
 ```
 
-`tests/pluginHost.test.js` shows more.
+`pluginHost.run(hook, value, context)` runs a waterfall hook exactly as the
+feed does, sanitizing included. `tests/pluginInstaller.test.js` tests the
+Tag Spotlight example this way; `tests/pluginFeedHooks.test.js` runs real
+feed batches with plugins and a stand-in worker. An installable file can be
+checked with `evaluatePluginSource(code)` from `src/plugins/installer.js`.

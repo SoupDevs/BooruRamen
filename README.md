@@ -62,6 +62,13 @@ Open http://localhost:5173 to use the app in your browser. To build the
 desktop or Android app, see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md), which
 also explains how the recommendation engine works.
 
+## Plugins
+
+Plugins can change what the feed searches for, how it ranks posts, and what
+the app's screens show. Manage them under **Profile → Plugins**, where you can
+also install one from a single `.js` file. To write one, see
+[docs/PLUGINS.md](docs/PLUGINS.md).
+
 ## License
 
 BooruRamen is free software released under the [GPLv3](LICENSE).
