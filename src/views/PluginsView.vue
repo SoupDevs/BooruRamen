@@ -22,7 +22,7 @@
     <div class="max-w-2xl mx-auto space-y-3 pb-24">
       <p class="text-sm text-gray-400 px-1">
         Plugins can change the feed's searches and ranking and add to the app's screens.
-        Whatever a plugin does, the feed only shows General-rated posts and never shows a post with a blacklisted tag.
+        The feed shows General-rated posts and hides blacklisted tags unless a plugin you turn on changes those filters.
       </p>
 
       <div v-if="!plugins.length" class="p-4 bg-gray-800 rounded-lg text-sm text-gray-400" data-plugins-empty>

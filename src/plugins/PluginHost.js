@@ -318,7 +318,7 @@ export class PluginHost {
     const api = {
       id,
       apiVersion: PLUGIN_API_VERSION,
-      /** The app's content rules, read-only. Plugins can't change them. */
+      /** The feed's default content filters, read-only. */
       policy: CONTENT_POLICY,
       log: {
         info: (...args) => console.log(`[Plugin ${id}]`, ...args),
