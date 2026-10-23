@@ -184,6 +184,8 @@ import { shortcutFor } from '../services/keyboardShortcuts.js';
 import RunwayCache from '../services/RunwayCache.js';
 import { SESSION_IDLE_MS } from '../services/SessionInterest.js';
 import { whyChipText, WHY_CHIP_MS } from '../services/WhyChip.js';
+import { FEED_RATINGS } from '../plugins/contentPolicy.js';
+import { emitPostShown } from '../plugins/feedHooks.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
@@ -628,8 +630,9 @@ export default {
           
           const batch = await this.recommendationSystem.getCuratedExploreFeed(fetchFunction, {
             postsPerFetch: 20,
-            // Ratings are no longer user-configurable: always query general
-            selectedRatings: ['general'],
+            // Ratings are not user- or plugin-configurable: the content
+            // policy's (General only)
+            selectedRatings: FEED_RATINGS,
             whitelist: activeWhitelist,
             blacklist: activeBlacklist,
             existingPostIds: blockedKeys,
@@ -717,7 +720,7 @@ export default {
       if (!saved) return [];
       const rs = this.recommendationSystem;
       const allowed = posts => excludeDuplicateContent(
-        ReportService.filterPosts(rs.applyClientSideFilters(rs.applyContentFilters(posts, { blacklist, selectedRatings: ['general'] }), { whitelist }), blockSets),
+        ReportService.filterPosts(rs.applyClientSideFilters(rs.applyContentFilters(posts, { blacklist, selectedRatings: FEED_RATINGS }), { whitelist }), blockSets),
         blockedKeys
       );
       const runway = allowed(saved.runway);
@@ -808,6 +811,7 @@ export default {
         if (currentPost) {
           const videoEl = this.videoElements[this.getCompositeKey(currentPost)] || null;
           this.$emit('current-post-changed', currentPost, videoEl);
+          emitPostShown({ post: currentPost, index: calculatedIndex, deepDive: deepDiveState.active });
           
           await StorageService.trackPostView(currentPost.id, currentPost, currentPost.source);
         } else {
