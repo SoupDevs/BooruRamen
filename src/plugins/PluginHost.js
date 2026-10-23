@@ -129,8 +129,9 @@ export class PluginHost {
   /**
    * Add a namespace to the api object every plugin receives.
    * @param {string} name e.g. 'ui' gives plugins api.ui
-   * @param {(context: { record: Object, track: (dispose: Function) => Function, host: PluginHost }) => Object} factory
-   *   track() registers cleanup that runs when the plugin is turned off.
+   * @param {(context: { api: Object, record: Object, track: (dispose: Function) => Function, use: (feature: string) => void, host: PluginHost }) => Object} factory
+   *   api is the plugin's api so far; track() registers cleanup that runs
+   *   when the plugin is turned off; use() lists a feature on the Plugins page.
    */
   extendApi(name, factory) {
     this.apiExtensions.set(name, factory);
@@ -363,7 +364,7 @@ export class PluginHost {
       },
     };
     for (const [name, factory] of this.apiExtensions) {
-      api[name] = factory({ record, track, use, host: this });
+      api[name] = factory({ api, record, track, use, host: this });
     }
     return Object.freeze(api);
   }

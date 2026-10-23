@@ -21,6 +21,8 @@ import { excludeDuplicateContent } from './contentIdentity.js';
 import { useSettingsStore } from '../stores/settings.js';
 import { reactive } from 'vue';
 import { postKey } from './postKey.js';
+import { FEED_RATINGS } from '../plugins/contentPolicy.js';
+import { runQueryHook, runRequestHook, runPostsHook, applyScoreHook, runBatchHook, emitInteraction, onFeedInvalidated } from '../plugins/feedHooks.js';
 
 export const deepDiveState = reactive({ active: false, anchorKey: null, anchorId: null, busy: false, error: '', generation: 0 });
 
@@ -108,6 +110,9 @@ class RecommendationSystem {
         if (deepDiveState.active) this.sessionListeners.forEach(listener => listener());
       } catch (error) { console.warn('[Recommendation] Visual update failed:', error.message); }
     });
+
+    // A plugin changed how it shapes the feed: rank afresh.
+    onFeedInvalidated(() => this.clearPool());
 
     // Local session state for strategy pagination cursors
     this.strategyCursors = {};
@@ -223,7 +228,9 @@ class RecommendationSystem {
   }
 
   async trackInteraction(postId, interactionType, value, postData, updateImmediately = false, context = null) {
-    const result = await this.callWorker('trackInteraction', { postId, interactionType, value, postData, updateImmediately, context: context || { deepDive: deepDiveState.active } });
+    const interactionContext = context || { deepDive: deepDiveState.active };
+    emitInteraction({ postId, type: interactionType, value, post: postData || null, deepDive: !!interactionContext.deepDive });
+    const result = await this.callWorker('trackInteraction', { postId, interactionType, value, postData, updateImmediately, context: interactionContext });
     if (postData && (value || interactionType === 'timeSpent')) this.sessionListeners.forEach(listener => listener());
     return result;
   }
@@ -290,7 +297,7 @@ class RecommendationSystem {
     return this.callWorker('getQueryableTagsWithScores');
   }
 
-  async generateMultiStrategyQueries(selectedRatings = ['general'], whitelist = []) {
+  async generateMultiStrategyQueries(selectedRatings = FEED_RATINGS, whitelist = []) {
     return this.callWorker('generateMultiStrategyQueries', { selectedRatings, whitelist });
   }
 
@@ -349,7 +356,7 @@ class RecommendationSystem {
     const {
       postsPerFetch = 20,
       maxTotal = 10,
-      selectedRatings = ['general'],
+      selectedRatings = FEED_RATINGS,
       whitelist = [],
       blacklist = [],
       existingPostIds = new Set(),
@@ -365,8 +372,18 @@ class RecommendationSystem {
     // current profile and session. While the pool is deep the network is
     // skipped entirely, so refilling the runway is near-instant.
     const skipFetch = this.candidatePool.length >= maxTotal * POOL_SKIP_FETCH_FACTOR;
-    const queries = skipFetch ? [] : await this.generateMultiStrategyQueries(selectedRatings, whitelist);
+    const hookContext = { deepDive: deepDiveState.active, whitelist: [...whitelist], blacklist: [...blacklist] };
+    const queries = skipFetch ? [] : await runQueryHook(await this.generateMultiStrategyQueries(selectedRatings, whitelist), hookContext);
+    if (modeGeneration !== deepDiveState.generation) return [];
     console.log("Explore queries:", queries);
+
+    // Plugins may rewrite each request's tags. Rating metatags are stripped
+    // from what they return and the feed's own rating is added back.
+    const ratingTag = selectedRatings.length ? `rating:${selectedRatings.map(r => RATING_CODES[r] || r).join(',')}` : '';
+    const requestTags = async (tags, strategy, page) => {
+      const result = await runRequestHook(tags, { ...hookContext, strategy, page });
+      return result === tags ? tags : `${result} ${ratingTag}`.trim();
+    };
 
     const buildHybridQuery = (baseQuery) => {
       let apiTags = baseQuery.tags ? baseQuery.tags.split(' ') : [];
@@ -451,10 +468,13 @@ class RecommendationSystem {
         const limit = clientSideFilterNeeded ? 100 : postsPerFetch;
 
         apiQuery.page = currentPage;
+        const send = async () => {
+          apiQuery.tags = await requestTags(apiQuery.tags, query.type || 'unknown', currentPage);
+          console.log(`Processing query: "${apiQuery.tags}" Page: ${currentPage} (ClientFilter: ${clientSideFilterNeeded})`);
+          return fetchFunction(apiQuery, limit);
+        };
 
-        console.log(`Processing query: "${apiQuery.tags}" Page: ${currentPage} (ClientFilter: ${clientSideFilterNeeded})`);
-
-        return fetchFunction(apiQuery, limit)
+        return send()
           .then(async posts => {
             if (!posts || posts.length === 0) {
               this.callWorker('updateExhausted', query.tags);
@@ -462,7 +482,7 @@ class RecommendationSystem {
               return [];
             }
 
-            let processedPosts = posts;
+            let processedPosts = await runPostsHook(posts, { ...hookContext, strategy: query.type || 'unknown', tags: apiQuery.tags });
 
             if (clientSideFilterNeeded) {
               const beforeCount = processedPosts.length;
@@ -579,10 +599,12 @@ class RecommendationSystem {
         const { apiQuery, clientSideFilterNeeded } = buildHybridQuery({ tags });
         const page = this.strategyCursors[cursorKey] || 1;
         apiQuery.page = page;
+        apiQuery.tags = await requestTags(apiQuery.tags, 'fallback', page);
         console.log(`Running fallback query: "${apiQuery.tags}" Page: ${page}`);
-        const posts = await fetchFunction(apiQuery, clientSideFilterNeeded ? 100 : postsPerFetch);
-        if (!posts || posts.length === 0) return [];
+        const fetched = await fetchFunction(apiQuery, clientSideFilterNeeded ? 100 : postsPerFetch);
+        if (!fetched || fetched.length === 0) return [];
         this.strategyCursors[cursorKey] = page + 1;
+        const posts = await runPostsHook(fetched, { ...hookContext, strategy: 'fallback', tags: apiQuery.tags });
         const filtered = clientSideFilterNeeded ? this.applyClientSideFilters(posts, { whitelist, blacklist }) : posts;
         return filtered.map(post => Object.assign(post, {
           _strategy: 'fallback',
@@ -613,8 +635,14 @@ class RecommendationSystem {
       }
       console.log(`Found ${uniquePosts.length} unique posts after deduplication`);
 
-      // Scoring, exploration and diversity all live in the worker.
-      const { feed, rest } = await this.callWorker('assembleFeed', { posts: uniquePosts, options: { maxTotal, context: contextPosts.slice(-5) } });
+      // Scoring, exploration and diversity all live in the worker; plugin
+      // ranking multipliers ride along on each post.
+      await applyScoreHook(uniquePosts, { ...hookContext, recent: contextPosts.slice(-5) });
+      const assembled = await this.callWorker('assembleFeed', { posts: uniquePosts, options: { maxTotal, context: contextPosts.slice(-5) } });
+      const { rest } = assembled;
+      // Plugins may reorder or drop posts from the batch, never add to it,
+      // and the content gate runs once more on what is left.
+      const feed = this.applyContentFilters(await runBatchHook(assembled.feed, hookContext), { blacklist, selectedRatings });
       if (modeGeneration !== deepDiveState.generation || poolEpoch !== this.poolEpoch) return [];
       const arrivedLate = this.candidatePool.slice(poolSize);
       this.candidatePool = [...rest, ...arrivedLate].slice(0, POOL_CAP);
