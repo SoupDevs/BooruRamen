@@ -75,10 +75,10 @@
       <div
         v-for="plugin in plugins"
         :key="plugin.id"
-        class="p-4 bg-gray-800 rounded-lg space-y-3"
+        class="bg-gray-800 rounded-lg overflow-hidden"
         :data-plugin="plugin.id"
       >
-        <div class="flex items-start justify-between gap-3">
+        <div class="flex items-start justify-between gap-3 p-4">
           <div class="min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
               <span class="font-medium">{{ plugin.name }}</span>
@@ -87,6 +87,7 @@
             </div>
             <div v-if="plugin.author" class="text-xs text-gray-500">by {{ plugin.author }}</div>
             <div v-if="plugin.description" class="text-sm text-gray-400 mt-1">{{ plugin.description }}</div>
+            <div v-if="plugin.error" class="text-xs text-red-400 break-words mt-1" data-plugin-error>{{ plugin.error }}</div>
           </div>
           <button
             type="button"
@@ -104,84 +105,105 @@
           </button>
         </div>
 
-        <div v-if="plugin.error" class="text-xs text-red-400 break-words" data-plugin-error>{{ plugin.error }}</div>
+        <!-- Configuration lives in a dropdown so the tile stays small -->
+        <button
+          v-if="hasDetails(plugin)"
+          type="button"
+          class="w-full flex items-center justify-between px-4 py-2 border-t border-gray-700 text-sm text-gray-300 hover:text-white hover:bg-gray-700/40"
+          :aria-expanded="isOpen(plugin)"
+          data-plugin-configure
+          @click="toggleOpen(plugin)"
+        >
+          <span class="flex items-center gap-2"><Settings2 class="w-4 h-4" /> Configure</span>
+          <ChevronDown class="w-4 h-4 transition-transform" :class="{ 'rotate-180': isOpen(plugin) }" />
+        </button>
 
-        <div v-if="plugin.origin === 'installed'" class="flex justify-end">
-          <button type="button" class="text-xs px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-900/30" data-plugin-remove @click="remove(plugin)">
-            {{ removing === plugin.id ? 'Tap again to remove' : 'Remove' }}
-          </button>
-        </div>
+        <div v-if="isOpen(plugin)" class="px-4 pb-4 space-y-3" data-plugin-details>
+          <div v-if="plugin.settings.length" class="space-y-2">
+            <div
+              v-for="setting in plugin.settings"
+              :key="setting.key"
+              class="flex items-center justify-between gap-3 p-3 rounded-lg bg-gray-900"
+              :data-plugin-setting="setting.key"
+            >
+              <div class="flex flex-col min-w-0">
+                <label class="text-sm font-medium" :for="inputId(plugin, setting)">{{ setting.label }}</label>
+                <span v-if="setting.description" class="text-xs text-gray-400">{{ setting.description }}</span>
+              </div>
 
-        <div v-if="plugin.active && plugin.uses.length" class="flex flex-wrap gap-1">
-          <span v-for="use in plugin.uses" :key="use" class="text-[11px] px-2 py-0.5 rounded-full bg-gray-900 text-gray-300" :title="use">{{ useLabel(use) }}</span>
-        </div>
+              <button
+                v-if="setting.type === 'boolean'"
+                :id="inputId(plugin, setting)"
+                type="button"
+                class="relative inline-flex h-6 w-11 items-center rounded-full shrink-0"
+                :class="value(plugin, setting) ? 'bg-pink-600' : 'bg-gray-600'"
+                :aria-pressed="!!value(plugin, setting)"
+                @click="update(plugin, setting, !value(plugin, setting))"
+              >
+                <span class="inline-block h-4 w-4 transform rounded-full bg-white transition" :class="value(plugin, setting) ? 'translate-x-6' : 'translate-x-1'"></span>
+              </button>
 
-        <div v-if="plugin.active && pagesOf(plugin).length" class="flex flex-wrap gap-2">
-          <router-link
-            v-for="page in pagesOf(plugin)"
-            :key="page.name"
-            :to="page.path"
-            class="text-sm px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-750 text-pink-400"
-            :title="page.description"
-            data-plugin-page-link
-          >{{ page.title }} →</router-link>
-        </div>
+              <input
+                v-else-if="setting.type === 'number'"
+                :id="inputId(plugin, setting)"
+                type="number"
+                class="w-24 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-right"
+                :min="setting.min"
+                :max="setting.max"
+                :step="setting.step || 'any'"
+                :value="value(plugin, setting)"
+                @change="update(plugin, setting, $event.target.value)"
+              />
 
-        <div v-if="plugin.enabled && plugin.settings.length" class="space-y-2 pt-1 border-t border-gray-700">
-          <div
-            v-for="setting in plugin.settings"
-            :key="setting.key"
-            class="flex items-center justify-between gap-3 p-3 rounded-lg bg-gray-900"
-            :data-plugin-setting="setting.key"
-          >
-            <div class="flex flex-col min-w-0">
-              <label class="text-sm font-medium" :for="inputId(plugin, setting)">{{ setting.label }}</label>
-              <span v-if="setting.description" class="text-xs text-gray-400">{{ setting.description }}</span>
+              <select
+                v-else-if="setting.type === 'select'"
+                :id="inputId(plugin, setting)"
+                class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm"
+                :value="optionIndex(plugin, setting)"
+                @change="update(plugin, setting, setting.options[$event.target.value].value)"
+              >
+                <option v-for="(option, index) in setting.options" :key="index" :value="index">{{ option.label }}</option>
+              </select>
+
+              <input
+                v-else
+                :id="inputId(plugin, setting)"
+                type="text"
+                class="w-40 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm"
+                :placeholder="setting.type === 'tags' ? 'tag_one, tag_two' : ''"
+                :value="setting.type === 'tags' ? value(plugin, setting).join(', ') : value(plugin, setting)"
+                @change="update(plugin, setting, $event.target.value)"
+              />
             </div>
+          </div>
+          <p v-else class="text-xs text-gray-500">This plugin has no settings.</p>
 
+          <div v-if="plugin.active && plugin.uses.length" class="flex flex-wrap gap-1">
+            <span v-for="use in plugin.uses" :key="use" class="text-[11px] px-2 py-0.5 rounded-full bg-gray-900 text-gray-300" :title="use">{{ useLabel(use) }}</span>
+          </div>
+
+          <div v-if="plugin.active && pagesOf(plugin).length" class="flex flex-wrap gap-2">
+            <router-link
+              v-for="page in pagesOf(plugin)"
+              :key="page.name"
+              :to="page.path"
+              class="text-sm px-3 py-1.5 rounded-lg bg-gray-900 hover:bg-gray-700 text-pink-400"
+              :title="page.description"
+              data-plugin-page-link
+            >{{ page.title }} →</router-link>
+          </div>
+
+          <div v-if="plugin.origin === 'installed'" class="flex justify-end">
             <button
-              v-if="setting.type === 'boolean'"
-              :id="inputId(plugin, setting)"
               type="button"
-              class="relative inline-flex h-6 w-11 items-center rounded-full shrink-0"
-              :class="value(plugin, setting) ? 'bg-pink-600' : 'bg-gray-600'"
-              :aria-pressed="!!value(plugin, setting)"
-              @click="update(plugin, setting, !value(plugin, setting))"
+              class="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg transition-colors"
+              :class="removing === plugin.id ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-200'"
+              data-plugin-remove
+              @click="remove(plugin)"
             >
-              <span class="inline-block h-4 w-4 transform rounded-full bg-white transition" :class="value(plugin, setting) ? 'translate-x-6' : 'translate-x-1'"></span>
+              <Trash2 class="w-4 h-4" />
+              {{ removing === plugin.id ? 'Tap again to remove' : 'Remove' }}
             </button>
-
-            <input
-              v-else-if="setting.type === 'number'"
-              :id="inputId(plugin, setting)"
-              type="number"
-              class="w-24 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm text-right"
-              :min="setting.min"
-              :max="setting.max"
-              :step="setting.step || 'any'"
-              :value="value(plugin, setting)"
-              @change="update(plugin, setting, $event.target.value)"
-            />
-
-            <select
-              v-else-if="setting.type === 'select'"
-              :id="inputId(plugin, setting)"
-              class="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm"
-              :value="optionIndex(plugin, setting)"
-              @change="update(plugin, setting, setting.options[$event.target.value].value)"
-            >
-              <option v-for="(option, index) in setting.options" :key="index" :value="index">{{ option.label }}</option>
-            </select>
-
-            <input
-              v-else
-              :id="inputId(plugin, setting)"
-              type="text"
-              class="w-40 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-sm"
-              :placeholder="setting.type === 'tags' ? 'tag_one, tag_two' : ''"
-              :value="setting.type === 'tags' ? value(plugin, setting).join(', ') : value(plugin, setting)"
-              @change="update(plugin, setting, $event.target.value)"
-            />
           </div>
         </div>
       </div>
@@ -192,9 +214,11 @@
 <script>
 import { pluginHost, installPlugin, uninstallPlugin } from '../plugins';
 import { uiState } from '../plugins/ui.js';
+import { ChevronDown, Settings2, Trash2 } from 'lucide-vue-next';
 
 export default {
   name: 'PluginsView',
+  components: { ChevronDown, Settings2, Trash2 },
   data() {
     return {
       plugins: pluginHost.state.plugins,
@@ -208,6 +232,8 @@ export default {
       installError: '',
       // Removing asks for a second tap.
       removing: null,
+      // Ids of the tiles whose configuration is open.
+      open: {},
     };
   },
 
@@ -226,6 +252,18 @@ export default {
     },
     pagesOf(plugin) {
       return uiState.pages.filter(page => page.pluginId === plugin.id);
+    },
+    // Every tile has something to configure except a built-in plugin
+    // without settings that isn't running.
+    hasDetails(plugin) {
+      return plugin.settings.length > 0 || plugin.origin === 'installed' || plugin.active;
+    },
+    isOpen(plugin) {
+      return !!this.open[plugin.id];
+    },
+    toggleOpen(plugin) {
+      this.open[plugin.id] = !this.open[plugin.id];
+      if (!this.open[plugin.id] && this.removing === plugin.id) this.removing = null;
     },
     inputId(plugin, setting) {
       return `plugin-${plugin.id}-${setting.key}`;
@@ -276,6 +314,7 @@ export default {
       this.removing = null;
       await uninstallPlugin(plugin.id);
       delete this.values[plugin.id];
+      delete this.open[plugin.id];
     },
     update(plugin, setting, raw) {
       const stored = pluginHost.setSetting(plugin.id, setting.key, raw);
