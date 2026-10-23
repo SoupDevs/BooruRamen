@@ -14,6 +14,8 @@
  * whose default export is a plugin definition is loaded at start.
  */
 import pluginHost from './PluginHost.js';
+// Declares the feed's hooks before any plugin subscribes.
+import './feedHooks.js';
 
 export { default as pluginHost } from './PluginHost.js';
 export { definePlugin, PLUGIN_API_VERSION } from './definePlugin.js';

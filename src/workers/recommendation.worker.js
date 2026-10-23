@@ -4,6 +4,7 @@ import { MLScorer, TRAIN_THRESHOLD } from '../services/MLScorer';
 import { BanditExplorer } from '../services/BanditExplorer';
 import { hydrateImageAnalysis } from '../services/ImageAnalysisCache.js';
 import { learningPost } from '../services/imageFeatures.js';
+import { MAX_SCORE_WEIGHT } from '../plugins/limits.js';
 import { postKey } from '../services/postKey.js';
 import { SessionInterest, interactionSignal, PROFILE_HALF_LIFE_HOURS } from '../services/SessionInterest.js';
 import { DeepDiveInterest } from '../services/DeepDiveInterest.js';
@@ -740,9 +741,12 @@ export class RecommendationWorkerCore {
 
   blendRankingScore(score, post) {
     const blended = this.deepDive.blend(this.sessionInterest.blend(score, post, this.avoidedTags), post, this.avoidedTags, tagEmbedding);
+    // Ranking multiplier from plugins (feedHooks.applyScoreHook), already
+    // clamped there; checked again since it arrives on the post.
+    const weight = Number.isFinite(post._pluginWeight) ? Math.min(MAX_SCORE_WEIGHT, Math.max(0, post._pluginWeight)) : 1;
     // A dive asks for more of the same; normal browsing tires of repeats.
-    if (this.deepDive.active) return blended;
-    return blended * (1 - SATIATION_WEIGHT * this.sessionInterest.satiation(post, this.avoidedTags));
+    if (this.deepDive.active) return blended * weight;
+    return blended * weight * (1 - SATIATION_WEIGHT * this.sessionInterest.satiation(post, this.avoidedTags));
   }
 
   /**
