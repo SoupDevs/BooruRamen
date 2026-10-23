@@ -14,6 +14,7 @@ use std::{
 use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 
+mod cloudflare;
 mod updater;
 
 #[cfg(target_os = "android")]
@@ -151,9 +152,17 @@ fn prune_booru_cache(cache_dir: &Path, preserve: &Path) {
   }
 }
 
+/// A Cloudflare clearance to send with a media request: the `Cookie` header
+/// value and the User-Agent the clearance was issued to.
+struct Clearance {
+  cookie: String,
+  user_agent: String,
+}
+
 async fn download_booru_media(
   url: &str,
   referer: &str,
+  clearance: Option<&Clearance>,
   cache_dir: &Path,
 ) -> Result<PathBuf, String> {
   use std::io::Write;
@@ -177,10 +186,14 @@ async fn download_booru_media(
     .redirect(tauri_plugin_http::reqwest::redirect::Policy::limited(5))
     .build()
     .map_err(|e| e.to_string())?;
-  let mut response = client
-    .get(parsed)
-    .header("User-Agent", "BooruRamen")
-    .header("Referer", referer)
+  let mut request = client.get(parsed).header("Referer", referer);
+  request = match clearance {
+    Some(clearance) => request
+      .header("Cookie", &clearance.cookie)
+      .header("User-Agent", &clearance.user_agent),
+    None => request.header("User-Agent", "BooruRamen"),
+  };
+  let mut response = request
     .send()
     .await
     .map_err(|e| e.to_string())?;
@@ -240,18 +253,27 @@ async fn download_booru_media(
 /// it through Tauri's range-capable asset protocol. The webview cannot set a
 /// Referer itself, so hotlink-protected boorus (which may be any host the user
 /// configured) are only loadable through this path.
+///
+/// It also carries a Cloudflare clearance (`cookie` and `user_agent`, from a
+/// check the user passed in the WebView) for networks where Cloudflare
+/// blocks the WebView's own media requests.
 #[tauri::command]
 async fn cache_booru_media(
   app: tauri::AppHandle,
   url: String,
   referer: String,
+  cookie: Option<String>,
+  user_agent: Option<String>,
 ) -> Result<String, String> {
+  let clearance = cookie
+    .zip(user_agent)
+    .map(|(cookie, user_agent)| Clearance { cookie, user_agent });
   let cache_dir = app
     .path()
     .app_cache_dir()
     .map_err(|e| e.to_string())?
     .join(BOORU_MEDIA_CACHE_DIR);
-  let path = download_booru_media(&url, &referer, &cache_dir).await?;
+  let path = download_booru_media(&url, &referer, clearance.as_ref(), &cache_dir).await?;
   Ok(path.to_string_lossy().into_owned())
 }
 
@@ -405,7 +427,11 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .plugin(tauri_plugin_notification::init())
     .plugin(tauri_plugin_opener::init())
+    .manage(cloudflare::PendingVerification::default())
+    .on_page_load(|webview, payload| cloudflare::on_page_load(webview, payload.url(), payload.event()))
     .invoke_handler(tauri::generate_handler![
+      cloudflare::cloudflare_verify,
+      cloudflare::cloudflare_cookies,
       cache_booru_media,
       download_file,
       clear_downloads,
@@ -490,6 +516,7 @@ mod tests {
       let result = tauri::async_runtime::block_on(download_booru_media(
         url,
         "https://gelbooru.com/",
+        None,
         &cache_dir,
       ));
       let path = result.expect("booru media download should succeed");

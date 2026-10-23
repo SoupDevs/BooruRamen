@@ -13,7 +13,7 @@
  */
 
 import { gelbooruTagCache } from './GelbooruTagCache.js';
-import { httpFetch } from './httpClient.js';
+import { httpFetch, httpError } from './httpClient.js';
 
 /**
  * Hosts the dev server has a dedicated proxy for, keyed by the URL fragment the
@@ -260,9 +260,10 @@ export class DanbooruAdapter extends BooruAdapter {
             }
 
             if (!response.ok) {
+                const error = await httpError(response);
                 return {
                     success: false,
-                    message: `Authentication failed: HTTP ${response.status}`
+                    message: `Authentication failed: ${error.message.replace(/^HTTP error! status: /, 'HTTP ')}`
                 };
             }
 
@@ -332,7 +333,7 @@ export class DanbooruAdapter extends BooruAdapter {
         try {
             console.log(`[Danbooru] Fetching: ${url}`);
             const response = await httpFetch(url, { timeoutMs: POST_REQUEST_TIMEOUT_MS });
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            if (!response.ok) throw await httpError(response);
             const data = await response.json();
             // Attach actual query for debugging
             const normalizedPosts = data.filter(post => post.id && (post.file_url || post.large_file_url))

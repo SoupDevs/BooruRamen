@@ -218,10 +218,10 @@
           <div 
             v-for="(tag, index) in whitelistTags" 
             :key="index"
-            class="bg-gray-700 px-2 py-1 rounded text-xs flex items-center"
+            class="bg-gray-700 px-2 py-1 rounded text-xs flex items-center max-w-full min-w-0"
           >
-            {{ tag }}
-            <button @click="removeWhitelistTag(index)" class="ml-1.5 text-gray-400 hover:text-white">
+            <span class="truncate" :title="tag">{{ tag }}</span>
+            <button @click="removeWhitelistTag(index)" class="ml-1.5 shrink-0 text-gray-400 hover:text-white" :aria-label="`Remove ${tag}`">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
           </div>
@@ -275,10 +275,10 @@
           <div 
             v-for="(tag, index) in blacklistTags" 
             :key="index"
-            class="bg-gray-700 px-2 py-1 rounded text-xs flex items-center"
+            class="bg-gray-700 px-2 py-1 rounded text-xs flex items-center max-w-full min-w-0"
           >
-            {{ tag }}
-            <button @click="removeBlacklistTag(index)" class="ml-1.5 text-gray-400 hover:text-white">
+            <span class="truncate" :title="tag">{{ tag }}</span>
+            <button @click="removeBlacklistTag(index)" class="ml-1.5 shrink-0 text-gray-400 hover:text-white" :aria-label="`Remove ${tag}`">
               <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
           </div>
