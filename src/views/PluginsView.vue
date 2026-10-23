@@ -29,6 +29,48 @@
         No plugins are installed.
       </div>
 
+      <!-- Install a plugin from a single .js file, or from pasted code -->
+      <div class="p-4 bg-gray-800 rounded-lg space-y-3" data-plugin-install>
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex flex-col">
+            <span class="font-medium">Install a plugin</span>
+            <span class="text-xs text-gray-400">From a plugin .js file. Installing one with the same id updates it.</span>
+          </div>
+          <div class="flex gap-2 shrink-0">
+            <button type="button" class="text-sm px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-700" data-plugin-install-file @click="$refs.fileInput.click()">Choose file</button>
+            <button type="button" class="text-sm px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600" data-plugin-install-paste @click="pasting = !pasting">Paste</button>
+          </div>
+          <input ref="fileInput" type="file" accept=".js,.mjs,text/javascript" class="hidden" @change="onFileChosen" />
+        </div>
+
+        <div v-if="pasting && !pending" class="space-y-2">
+          <textarea
+            v-model="pastedCode"
+            rows="6"
+            class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono"
+            placeholder="export default definePlugin({ id: 'my-plugin', name: 'My plugin', setup(api) { } })"
+            data-plugin-paste
+          ></textarea>
+          <button type="button" class="text-sm px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600" :disabled="!pastedCode.trim()" @click="review(pastedCode)">Review</button>
+        </div>
+
+        <div v-if="installError" class="text-xs text-red-400 break-words" data-plugin-install-error>{{ installError }}</div>
+
+        <!-- Confirm before running someone else's code. Nothing in the file
+             runs until Install is pressed. -->
+        <div v-if="pending" class="p-3 rounded-lg bg-gray-900 space-y-2" data-plugin-install-confirm>
+          <div class="font-medium break-all">{{ pending.label }} <span class="text-xs text-gray-500">{{ pending.size }}</span></div>
+          <p class="text-xs text-yellow-300">
+            An installed plugin runs with the same access as BooruRamen itself: it can read your history and settings and reach the network.
+            Only install plugins from people you trust.
+          </p>
+          <div class="flex gap-2">
+            <button type="button" class="text-sm px-3 py-1.5 rounded-lg bg-pink-600 hover:bg-pink-700" data-plugin-install-confirm-button @click="confirmInstall">Install</button>
+            <button type="button" class="text-sm px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600" @click="cancelInstall">Cancel</button>
+          </div>
+        </div>
+      </div>
+
       <div
         v-for="plugin in plugins"
         :key="plugin.id"
@@ -62,6 +104,12 @@
         </div>
 
         <div v-if="plugin.error" class="text-xs text-red-400 break-words" data-plugin-error>{{ plugin.error }}</div>
+
+        <div v-if="plugin.origin === 'installed'" class="flex justify-end">
+          <button type="button" class="text-xs px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-900/30" data-plugin-remove @click="remove(plugin)">
+            {{ removing === plugin.id ? 'Tap again to remove' : 'Remove' }}
+          </button>
+        </div>
 
         <div v-if="plugin.active && plugin.uses.length" class="flex flex-wrap gap-1">
           <span v-for="use in plugin.uses" :key="use" class="text-[11px] px-2 py-0.5 rounded-full bg-gray-900 text-gray-300" :title="use">{{ useLabel(use) }}</span>
@@ -141,7 +189,7 @@
 </template>
 
 <script>
-import { pluginHost } from '../plugins';
+import { pluginHost, installPlugin, uninstallPlugin } from '../plugins';
 import { uiState } from '../plugins/ui.js';
 
 export default {
@@ -151,8 +199,17 @@ export default {
       plugins: pluginHost.state.plugins,
       // Current setting values per plugin; storage isn't reactive.
       values: {},
+      pasting: false,
+      pastedCode: '',
+      // A plugin file waiting for the user's go-ahead; not yet run.
+      pending: null,
+      pendingSource: '',
+      installError: '',
+      // Removing asks for a second tap.
+      removing: null,
     };
   },
+
   created() {
     for (const plugin of this.plugins) this.values[plugin.id] = pluginHost.getSettings(plugin.id);
   },
@@ -181,6 +238,43 @@ export default {
     async toggle(plugin) {
       await pluginHost.setEnabled(plugin.id, !plugin.enabled);
       this.values[plugin.id] = pluginHost.getSettings(plugin.id);
+    },
+    async onFileChosen(event) {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (!file) return;
+      this.review(await file.text(), file.name);
+    },
+    review(source, label = 'Pasted code') {
+      this.installError = '';
+      this.pending = { label, size: `${Math.max(1, Math.round(source.length / 1024))} KB` };
+      this.pendingSource = source;
+    },
+    async confirmInstall() {
+      try {
+        const record = await installPlugin(this.pendingSource);
+        this.values[record.id] = pluginHost.getSettings(record.id);
+        this.pending = null;
+        this.pendingSource = '';
+        this.pastedCode = '';
+        this.pasting = false;
+      } catch (error) {
+        this.installError = `Not installed: ${error.message}`;
+        this.pending = null;
+      }
+    },
+    cancelInstall() {
+      this.pending = null;
+      this.pendingSource = '';
+    },
+    async remove(plugin) {
+      if (this.removing !== plugin.id) {
+        this.removing = plugin.id;
+        return;
+      }
+      this.removing = null;
+      await uninstallPlugin(plugin.id);
+      delete this.values[plugin.id];
     },
     update(plugin, setting, raw) {
       const stored = pluginHost.setSetting(plugin.id, setting.key, raw);
