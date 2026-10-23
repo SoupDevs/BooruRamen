@@ -16,10 +16,13 @@
 import pluginHost from './PluginHost.js';
 // Declares the feed's hooks before any plugin subscribes.
 import './feedHooks.js';
+// Gives plugins api.ui and api.vue.
+import './ui.js';
 
 export { default as pluginHost } from './PluginHost.js';
 export { definePlugin, PLUGIN_API_VERSION } from './definePlugin.js';
 export { CONTENT_POLICY, FEED_RATINGS } from './contentPolicy.js';
+export { setUiRouter, UI_SLOTS } from './ui.js';
 
 const bundled = import.meta.glob('./bundled/*/index.js', { eager: true });
 

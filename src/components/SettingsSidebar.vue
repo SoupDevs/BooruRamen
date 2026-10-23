@@ -6,6 +6,8 @@
   <div class="p-4" style="padding-top: calc(1rem + env(safe-area-inset-top, 0)); padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0));">
       <h2 class="text-xl font-bold mb-4">Settings</h2>
       <DeepDiveControls :post="post" @started="$emit('deep-dive-started')" />
+      <!-- Plugin controls (api.ui.addToSlot('feed.sidebar')) -->
+      <PluginSlot name="feed.sidebar" class="mb-4 space-y-4" :slot-props="{ post }" />
       
       <!-- Auto-scroll toggle -->
       <div class="mb-4">
@@ -303,10 +305,11 @@ import { useSettingsStore } from '../stores/settings';
 import { usePlayerStore } from '../stores/player';
 import tagSuggestion from '../services/TagSuggestionService';
 import DeepDiveControls from './DeepDiveControls.vue';
+import PluginSlot from './plugins/PluginSlot.vue';
 
 export default {
   name: 'SettingsSidebar',
-  components: { DeepDiveControls },
+  components: { DeepDiveControls, PluginSlot },
   props: {
     show: Boolean,
     post: { type: Object, default: null },

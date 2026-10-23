@@ -133,6 +133,9 @@
         </svg>
       </router-link>
 
+      <!-- Plugin menu entries (api.ui.addToSlot('profile.menu')) -->
+      <PluginSlot name="profile.menu" class="space-y-2" />
+
       <router-link
         to="/profile/profiles"
         class="w-full flex items-center justify-between p-4 bg-gray-800 hover:bg-gray-750 rounded-lg transition-colors group"
@@ -166,8 +169,11 @@
 </template>
 
 <script>/* global __APP_VERSION__ */
+import PluginSlot from '../components/plugins/PluginSlot.vue';
+
 export default {
   name: 'ProfileView',
+  components: { PluginSlot },
   computed: {
     appVersion() {
       return __APP_VERSION__;

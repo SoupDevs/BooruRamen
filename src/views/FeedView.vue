@@ -50,6 +50,9 @@
             data-why-chip
           >{{ whyChip.text }}</div>
         </transition>
+        <!-- Plugin overlays (api.ui.addToSlot('feed.post')). Taps reach the
+             post unless a plugin element takes them. -->
+        <PluginSlot name="feed.post" class="absolute inset-0 z-10 pointer-events-none" :slot-props="{ post, current: getCompositeKey(post) === currentPostKey }" />
         <!-- Post media -->
         <div class="relative h-full max-w-full flex items-center justify-center">
           <!-- Feedback for the interaction that was just logged -->
@@ -174,6 +177,7 @@ import {
 } from '../services/videoFramePriming.js';
 import ProgressiveImage from '../components/ProgressiveImage.vue';
 import PostActionBurst from '../components/PostActionBurst.vue';
+import PluginSlot from '../components/plugins/PluginSlot.vue';
 import { Pause, Play } from 'lucide-vue-next';
 import { postGestureMixin } from '../mixins/postGestureMixin';
 import { postKey } from '../services/postKey';
@@ -199,6 +203,7 @@ export default {
   components: {
     ProgressiveImage,
     PostActionBurst,
+    PluginSlot,
     Pause,
     Play,
   },
