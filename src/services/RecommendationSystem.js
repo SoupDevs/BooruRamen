@@ -22,7 +22,7 @@ import { useSettingsStore } from '../stores/settings.js';
 import { reactive } from 'vue';
 import { postKey } from './postKey.js';
 import { FEED_RATINGS } from '../plugins/contentPolicy.js';
-import { runQueryHook, runRequestHook, runPostsHook, applyScoreHook, runBatchHook, emitInteraction, onFeedInvalidated } from '../plugins/feedHooks.js';
+import { runFiltersHook, runQueryHook, runRequestHook, runPostsHook, applyScoreHook, runBatchHook, emitInteraction, onFeedInvalidated } from '../plugins/feedHooks.js';
 
 export const deepDiveState = reactive({ active: false, anchorKey: null, anchorId: null, busy: false, error: '', generation: 0 });
 
@@ -356,12 +356,19 @@ class RecommendationSystem {
     const {
       postsPerFetch = 20,
       maxTotal = 10,
-      selectedRatings = FEED_RATINGS,
+      selectedRatings: defaultRatings = FEED_RATINGS,
       whitelist = [],
-      blacklist = [],
+      blacklist: defaultBlacklist = [],
       existingPostIds = new Set(),
       contextPosts = []
     } = options;
+
+    // The feed's content filters: the defaults, unless a plugin the user
+    // turned on changes them through 'feed:filters'.
+    const { ratings: selectedRatings, blacklist } = await runFiltersHook(
+      { ratings: [...defaultRatings], blacklist: [...defaultBlacklist] },
+      { deepDive: deepDiveState.active, whitelist: [...whitelist] }
+    );
 
     // Only rebuilds when interactions arrived since the last build: the feed
     // can call this many times while filling one runway.

@@ -12,11 +12,12 @@
  * The feed's plugin hooks: what it searches for, which fetched posts it
  * keeps, how it ranks them, the order of each batch, and what the user did.
  *
- * None of them can widen what the feed shows. Rating metatags are stripped
- * from plugin searches and the app's own rating is added back; every post,
- * including one a plugin adds, passes the app's content gate (rating and
- * blacklist) after these hooks run; and a batch can only be reordered or
- * shortened, never given posts it didn't contain.
+ * The feed's content filters (ratings and blacklist) are applied after all
+ * of the other hooks: rating metatags are stripped from plugin searches and
+ * the feed's own rating is added back; every post, including one a plugin
+ * adds, passes the content gate; and a batch can only be reordered or
+ * shortened. The filters themselves are the defaults unless a plugin
+ * changes them through 'feed:filters'.
  */
 import pluginHost from './PluginHost.js';
 import { stripRatingMetatags } from './contentPolicy.js';
@@ -27,6 +28,24 @@ export { MAX_PLUGIN_QUERIES, MAX_SCORE_WEIGHT };
 
 const isPlainObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const clampWeight = weight => Math.min(MAX_SCORE_WEIGHT, Math.max(0, weight));
+
+const RATING_NAMES = ['general', 'sensitive', 'questionable', 'explicit'];
+const RATING_ALIASES = { g: 'general', s: 'sensitive', q: 'questionable', e: 'explicit' };
+
+function sanitizeFilters(result) {
+  if (!isPlainObject(result) || !Array.isArray(result.ratings) || !Array.isArray(result.blacklist)) {
+    throw new Error('must return { ratings, blacklist }');
+  }
+  const ratings = [...new Set(result.ratings.map(rating => {
+    const name = String(rating).toLowerCase();
+    return RATING_ALIASES[name] || name;
+  }))];
+  if (!ratings.length || ratings.some(rating => !RATING_NAMES.includes(rating))) {
+    throw new Error(`ratings must be one or more of ${RATING_NAMES.join(', ')}`);
+  }
+  const blacklist = [...new Set(result.blacklist.map(tag => String(tag).trim().toLowerCase()).filter(Boolean))];
+  return { ratings, blacklist };
+}
 
 function sanitizeQueries(result) {
   if (!Array.isArray(result)) throw new Error('must return an array of queries');
@@ -74,6 +93,12 @@ function sanitizeBatch(result, previous) {
   return kept;
 }
 
+pluginHost.defineHook('feed:filters', {
+  kind: 'waterfall',
+  label: 'Content filters',
+  description: 'The ratings the feed shows and the tags it hides.',
+  sanitize: sanitizeFilters,
+});
 pluginHost.defineHook('feed:queries', {
   kind: 'waterfall',
   label: 'Feed searches',
@@ -139,6 +164,12 @@ pluginHost.extendApi('feed', ({ api }) => Object.freeze({
     return next;
   }, options),
 }));
+
+/** The feed's ratings and blacklist after plugins. */
+export async function runFiltersHook(filters, context) {
+  if (!pluginHost.hasHandlers('feed:filters')) return filters;
+  return pluginHost.run('feed:filters', filters, Object.freeze({ ...context }));
+}
 
 /** The strategy queries after plugins. */
 export async function runQueryHook(queries, context) {

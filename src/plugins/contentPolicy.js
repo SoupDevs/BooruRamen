@@ -9,21 +9,21 @@
  */
 /**
  * contentPolicy.js
- * The content rules plugins can read but never change.
+ * The feed's default content filters.
  *
- * The feed is General-rated only, and a post with a blacklisted tag is never
- * shown. Both are enforced by the app after every plugin hook has run, so a
- * plugin can narrow what is shown but not widen it. Changing either rule is
- * a change to this file, not something a plugin can ask for.
+ * By default the feed is General-rated only, and a post with a blacklisted
+ * tag is never shown. The app applies these after every plugin hook has run.
+ * The only way to change them is the 'feed:filters' hook, so they hold until
+ * the user turns on a plugin that changes them.
  */
 
-/** Ratings the feed may show. */
+/** Ratings the feed shows by default. */
 export const FEED_RATINGS = Object.freeze(['general']);
 
 export const CONTENT_POLICY = Object.freeze({
   ratings: FEED_RATINGS,
-  // The blacklist is always applied to fetched posts on this device, after
-  // plugins, whatever the booru query said.
+  // The blacklist is applied to fetched posts on this device, after plugins,
+  // whatever the booru query said.
   blacklistAlwaysFiltered: true,
 });
 

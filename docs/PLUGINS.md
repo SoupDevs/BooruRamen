@@ -11,7 +11,7 @@ building the app itself, see [DEVELOPMENT.md](DEVELOPMENT.md).
 - [The api object](#the-api-object)
 - [Settings](#settings)
 - [Adding to the UI](#adding-to-the-ui)
-- [Content rules plugins can't change](#content-rules-plugins-cant-change)
+- [Content filters](#content-filters)
 - [Hooks reference](#hooks-reference)
 - [Testing a plugin](#testing-a-plugin)
 
@@ -94,7 +94,7 @@ provides is refused.
 | `api.settings.onChange(fn)` | `fn(key, value)` after a setting changes. |
 | `api.storage.get(key, fallback)` / `.set(key, value)` / `.remove(key)` / `.keys()` | A small JSON key-value store kept per plugin across launches. |
 | `api.log.info/warn/error(...)` | Console logging prefixed with the plugin's id. |
-| `api.policy` | The content rules, read-only (see below). |
+| `api.policy` | The feed's default content filters, read-only (see below). |
 | `api.feed.scorePosts(fn, { priority })` | Shorthand for `feed:score`: `fn(post, context)` returns a ranking multiplier. |
 | `api.ui.addToSlot(slot, component, { order })` | Render a Vue component in a UI slot. |
 | `api.ui.addPage({ id, title, description, component })` | Add a page, linked from the Plugins page. |
@@ -197,25 +197,21 @@ api.ui.notify('Saved', { duration: 2000 }); // 1-10 s, default 3 s
 
 Prefix your CSS classes with your plugin id: stylesheets are global.
 
-## Content rules plugins can't change
+## Content filters
 
-Two rules hold whatever a plugin does:
+By default the feed shows **General-rated posts only** and **never shows a
+post with a blacklisted tag**; the blacklist is applied to fetched posts on
+the device. The app applies both after every plugin hook has run, so hooks
+like `feed:posts` and `feed:batch` can't get around them.
 
-1. **The feed shows General-rated posts only.**
-2. **A post with a blacklisted tag is never shown.** The blacklist is
-   applied to fetched posts on the device, every time.
-
-The app enforces both after every plugin hook has run, so a plugin can make
-the feed narrower but never wider. `api.policy` lets a plugin read them:
+Changing them is a deliberate, separate step: the `feed:filters` hook (see
+[Hooks reference](#hooks-reference)). They hold until the user turns on a
+plugin that uses it. `api.policy` holds the defaults, read-only:
 
 ```js
 api.policy.ratings                 // ['general']
 api.policy.blacklistAlwaysFiltered // true
 ```
-
-`api.policy` is frozen. Changing either rule means changing
-`src/plugins/contentPolicy.js` in the app itself, which is a decision for the
-project's maintainers, not something a plugin can request.
 
 ## Hooks reference
 
@@ -241,16 +237,35 @@ api.on('feed:queries', (queries, { deepDive }) => {
 
 ### How a feed batch is built
 
+0. The feed's content filters are settled → **`feed:filters`**
 1. The recommendation engine plans its strategy queries → **`feed:queries`**
 2. Each query becomes a booru request (whitelist tags, spare-slot blacklist
    exclusions, rating and file type added) → **`feed:request`**
 3. Each request's results → **`feed:posts`**
 4. The app's content gate drops other ratings, blacklisted tags, seen posts
-   and duplicates. Plugins can't skip this step.
+   and duplicates, using the filters from step 0.
 5. Candidates are ranked → **`feed:score`** multipliers are applied
 6. The batch is assembled (exploration, diversity) → **`feed:batch`**
 7. The content gate runs again, then reported/blocked posts are removed and
    the batch is added to the feed.
+
+### `feed:filters` (waterfall)
+
+The ratings the feed shows and the tags it hides, for the next batch.
+
+- **value**: `{ ratings, blacklist }`, by default `{ ratings: ['general'], blacklist: [...the user's blacklist] }`
+- **context**: `{ deepDive, whitelist }`
+- **return**: a new `{ ratings, blacklist }`. `ratings` is one or more of
+  `'general'`, `'sensitive'`, `'questionable'`, `'explicit'` (or `g`/`s`/`q`/`e`);
+  `blacklist` is a list of tags. Anything else is rejected and the defaults
+  are kept.
+
+The result is what every request's rating metatag and the content gate use
+for that batch.
+
+```js
+api.on('feed:filters', filters => ({ ...filters, ratings: [...filters.ratings, 'sensitive'] }));
+```
 
 ### `feed:queries` (waterfall)
 
@@ -259,7 +274,8 @@ The strategy queries for the next batch.
 - **value**: array of `{ tags, type, intent, reason }`. `tags` is a
   space-separated tag string; `type` names the strategy (shown in the debug
   overlay and used for the "why this post" chip).
-- **context**: `{ deepDive, whitelist, blacklist }`
+- **context**: `{ deepDive, whitelist, blacklist }` (`blacklist` is the one
+  `feed:filters` settled on, as in the hooks below)
 - **return**: a new array. Plain strings are accepted as `{ tags }`. At most
   12 queries are kept, rating metatags (`rating:`, `-rating:`, `is:nsfw`, ...)
   are removed from `tags`, and `type` defaults to `'plugin'`.
@@ -274,7 +290,7 @@ The final tag string of one booru request.
 - **value**: string, e.g. `'meme cat -spider rating:g -filetype:swf'`
 - **context**: `{ deepDive, whitelist, blacklist, strategy, page }`
 - **return**: a new tag string. Rating metatags are removed and the feed's
-  own `rating:g` is added back. Remember the source's tag limit (Danbooru's
+  own rating metatag (from `feed:filters`) is added back. Remember the source's tag limit (Danbooru's
   free tier allows two non-metatag tags); extra tags make the request fail or
   return nothing.
 
