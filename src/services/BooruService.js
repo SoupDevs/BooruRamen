@@ -15,6 +15,7 @@
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from './BooruAdapters';
 import { registerRefererMediaSources } from './mediaUrl.js';
 import StorageService from './StorageService';
+import { applyNeverInclude } from './overrideRules.js';
 
 // Archives and Flash can't be shown. Danbooru ugoira arrive as webm (see
 // DanbooruAdapter.normalizePost); any zip still left came from a source
@@ -130,6 +131,18 @@ class BooruService {
         return result;
     }
 
+    /**
+     * The user's Never Include rules that apply to fetched posts rather than
+     * to the query, as a filter. Applied to every fetch, whatever the source
+     * returned for the query.
+     * @returns {Promise<(posts: object[]) => object[]>}
+     */
+    async overrideRuleFilter() {
+        const saved = await StorageService.loadAppSettings();
+        const neverInclude = saved && saved.settings ? saved.settings.overrideNeverInclude : [];
+        return posts => applyNeverInclude(posts, neverInclude);
+    }
+
     async getPosts(params) {
         this.activePostRequests++;
         try { return await this.fetchPosts(params); }
@@ -138,26 +151,30 @@ class BooruService {
 
     async fetchPosts(params) {
         if (this.adapters.length === 0) await this.initialize();
+        // The sources this request was made against, even if they change
+        // while the overrides load.
+        const adapters = this.adapters;
 
-        params = { ...params, tags: await this.applyTagOverrides(params.tags) };
+        const [tags, enforce] = await Promise.all([this.applyTagOverrides(params.tags), this.overrideRuleFilter()]);
+        params = { ...params, tags };
 
         // If only one adapter, behave simply
-        if (this.adapters.length === 1) {
-            return playable(await this.adapters[0].getPosts(params));
+        if (adapters.length === 1) {
+            return enforce(playable(await adapters[0].getPosts(params)));
         }
 
         // Multiple adapters: Fetch from all in parallel
         // We strictly use the same page number for all (simple strategy)
         // or we could track state, but stateless is safer for this 'getPosts' interface.
 
-        console.log(`Fetching from ${this.adapters.length} sources...`);
+        console.log(`Fetching from ${adapters.length} sources...`);
 
         // One failing source must not sink the others, but if every source
         // failed the caller has to see an error: an empty result reads as
         // "this search has no more posts".
-        const settled = await Promise.allSettled(this.adapters.map(adapter => adapter.getPosts(params)));
+        const settled = await Promise.allSettled(adapters.map(adapter => adapter.getPosts(params)));
         settled.forEach((result, index) => {
-            if (result.status === 'rejected') console.error(`Fetch failed for ${this.adapters[index].baseUrl}:`, result.reason);
+            if (result.status === 'rejected') console.error(`Fetch failed for ${adapters[index].baseUrl}:`, result.reason);
         });
         if (settled.every(result => result.status === 'rejected')) throw settled[0].reason;
         const results = settled.map(result => result.status === 'fulfilled' ? result.value : []);
@@ -190,7 +207,7 @@ class BooruService {
             [mergedPosts[i], mergedPosts[j]] = [mergedPosts[j], mergedPosts[i]];
         }
 
-        return playable(mergedPosts);
+        return enforce(playable(mergedPosts));
     }
 
     /**

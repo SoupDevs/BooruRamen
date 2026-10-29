@@ -22,6 +22,7 @@ import { useSettingsStore } from '../stores/settings.js';
 import { reactive } from 'vue';
 import { postKey } from './postKey.js';
 import { FEED_RATINGS } from '../plugins/contentPolicy.js';
+import { withoutNeverIncluded } from './overrideRules.js';
 import { runFiltersHook, runQueryHook, runRequestHook, runPostsHook, applyScoreHook, runBatchHook, emitInteraction, onFeedInvalidated } from '../plugins/feedHooks.js';
 
 export const deepDiveState = reactive({ active: false, anchorKey: null, anchorId: null, busy: false, error: '', generation: 0 });
@@ -365,10 +366,15 @@ class RecommendationSystem {
 
     // The feed's content filters: the defaults, unless a plugin the user
     // turned on changes them through 'feed:filters'.
-    const { ratings: selectedRatings, blacklist } = await runFiltersHook(
+    const { ratings: filterRatings, blacklist } = await runFiltersHook(
       { ratings: [...defaultRatings], blacklist: [...defaultBlacklist] },
       { deepDive: deepDiveState.active, whitelist: [...whitelist] }
     );
+    // The user's Never Include override rules narrow the result further. If
+    // they leave nothing, the feed shows nothing rather than an unfiltered
+    // query.
+    const selectedRatings = withoutNeverIncluded(filterRatings, useSettingsStore().overrideNeverInclude);
+    if (filterRatings.length > 0 && selectedRatings.length === 0) return [];
 
     // Only rebuilds when interactions arrived since the last build: the feed
     // can call this many times while filling one runway.

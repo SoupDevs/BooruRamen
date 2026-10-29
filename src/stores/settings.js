@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import StorageService from '../services/StorageService'
 import { applyTheme, DEFAULT_CUSTOM_THEME } from '../services/ThemeService'
+import { sanitizeNeverInclude } from '../services/overrideRules.js'
 
 export const useSettingsStore = defineStore('settings', {
     state: () => ({
@@ -39,6 +40,8 @@ export const useSettingsStore = defineStore('settings', {
         // Tag query overrides: applied to every outgoing search query
         tagAlwaysInclude: [],
         tagNeverInclude: [],
+        // Never Include rules checked on every fetched post
+        overrideNeverInclude: [],
         whitelistTags: ['meme'],
         blacklistTags: [],
         activeSource: { type: 'danbooru', url: 'https://danbooru.donmai.us', name: 'Danbooru' },
@@ -86,6 +89,7 @@ export const useSettingsStore = defineStore('settings', {
                     ratings: ['general'],
                     tagAlwaysInclude: saved.settings && Array.isArray(saved.settings.tagAlwaysInclude) ? saved.settings.tagAlwaysInclude : this.tagAlwaysInclude,
                     tagNeverInclude: saved.settings && Array.isArray(saved.settings.tagNeverInclude) ? saved.settings.tagNeverInclude : this.tagNeverInclude,
+                    overrideNeverInclude: sanitizeNeverInclude(saved.settings && saved.settings.overrideNeverInclude),
                     downloadLocation: saved.settings && saved.settings.downloadLocation !== undefined ? saved.settings.downloadLocation : this.downloadLocation,
                     downloadLiked: saved.settings && saved.settings.downloadLiked !== undefined ? saved.settings.downloadLiked : this.downloadLiked,
                     downloadFavorited: saved.settings && saved.settings.downloadFavorited !== undefined ? saved.settings.downloadFavorited : this.downloadFavorited,
@@ -106,9 +110,10 @@ export const useSettingsStore = defineStore('settings', {
             this.saveSettings()
         },
 
-        setTagOverrides({ alwaysInclude, neverInclude }) {
+        setTagOverrides({ alwaysInclude, neverInclude, neverIncludeOptions }) {
             if (Array.isArray(alwaysInclude)) this.tagAlwaysInclude = alwaysInclude
             if (Array.isArray(neverInclude)) this.tagNeverInclude = neverInclude
+            if (Array.isArray(neverIncludeOptions)) this.overrideNeverInclude = sanitizeNeverInclude(neverIncludeOptions)
             this.saveSettings()
         },
 
@@ -193,6 +198,7 @@ export const useSettingsStore = defineStore('settings', {
                     ratings: this.ratings,
                     tagAlwaysInclude: this.tagAlwaysInclude,
                     tagNeverInclude: this.tagNeverInclude,
+                    overrideNeverInclude: [...this.overrideNeverInclude],
                     whitelistTags: this.whitelistTags,
                     blacklistTags: this.blacklistTags,
                     activeSource: this.activeSource,
