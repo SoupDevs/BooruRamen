@@ -20,6 +20,12 @@ import { reactive } from 'vue';
 const VERIFIED_KEY = 'cloudflareVerifiedOrigins';
 const PENDING_KEY = 'cloudflarePendingOrigin';
 const COOKIE_CACHE_MS = 30 * 1000;
+// The page the check opens. Cloudflare challenges every path on a site alike,
+// but once the check passes it shows the page that was asked for; a path the
+// site doesn't have shows its "not found" page, so even if that flashes up
+// before the app returns, none of the site's posts (unfiltered by the app's
+// content filters) are on it.
+const VERIFY_PATH = '/booruramen-cloudflare-check';
 
 /** Sites Cloudflare is currently blocking, for the banner that offers the check. */
 export const cloudflareState = reactive({ blocked: [] });
@@ -101,7 +107,7 @@ export function verifiedOriginList() {
  */
 export async function startCloudflareVerification(origin) {
     writeJson(PENDING_KEY, origin);
-    await invoke('cloudflare_verify', { url: `${origin}/` });
+    await invoke('cloudflare_verify', { url: `${origin}${VERIFY_PATH}` });
 }
 
 /**

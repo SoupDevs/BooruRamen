@@ -182,22 +182,25 @@ pub async fn cloudflare_cookies<R: tauri::Runtime>(webview: Webview<R>, url: Str
   cookie_header(&webview, &url)
 }
 
-/// Page-load hook: while a verification is pending and the site has loaded,
-/// go back to the app once the clearance cookie exists; until then show a
-/// bar with a way back.
+/// Page-load hook: while a verification is pending, go back to the app as
+/// soon as the clearance cookie exists; until then show a bar with a way back.
+///
+/// Once the check passes, Cloudflare reloads the site's own page. Checking
+/// when that load starts, not only when it finishes, returns to the app
+/// before the page paints, so the user never sees the site unfiltered.
 pub fn on_page_load<R: tauri::Runtime>(webview: &Webview<R>, url: &Url, event: PageLoadEvent) {
-  if !matches!(event, PageLoadEvent::Finished) {
-    return;
-  }
+  let finished = matches!(event, PageLoadEvent::Finished);
   // Cookie reads wait on the UI thread, which is the thread running this hook.
   let webview = webview.clone();
   let url = url.clone();
-  tauri::async_runtime::spawn(async move { after_page_load(&webview, &url) });
+  tauri::async_runtime::spawn(async move { after_page_load(&webview, &url, finished) });
 }
 
-fn after_page_load<R: tauri::Runtime>(webview: &Webview<R>, url: &Url) {
+fn after_page_load<R: tauri::Runtime>(webview: &Webview<R>, url: &Url, finished: bool) {
   #[cfg(target_os = "android")]
-  allow_third_party_cookies(webview);
+  if finished {
+    allow_third_party_cookies(webview);
+  }
 
   let state = webview.state::<PendingVerification>();
   let Some(Pending { site, back, stale_clearance }) = state.0.lock().unwrap().clone() else {
@@ -209,8 +212,13 @@ fn after_page_load<R: tauri::Runtime>(webview: &Webview<R>, url: &Url) {
 
   let current = clearance(webview, &site);
   if current.is_some() && current != stale_clearance {
-    *state.0.lock().unwrap() = None;
-    let _ = webview.navigate(back);
+    // Both the start and the finish of a load can get here; go back once.
+    if state.0.lock().unwrap().take().is_some() {
+      let _ = webview.navigate(back);
+    }
+    return;
+  }
+  if !finished {
     return;
   }
 
