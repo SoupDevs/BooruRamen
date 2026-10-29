@@ -15,7 +15,7 @@
  */
 
 /* global __APP_VERSION__ */
-import { clearanceHeaders, noteCloudflareBlock } from './cloudflareVerify.js';
+import { clearanceHeaders, clearanceOrigins, noteCloudflareBlock } from './cloudflareVerify.js';
 
 // Sent on native (Tauri) requests. Without it the HTTP plugin identifies us as
 // "tauri-plugin-http/x.y.z", a generic library agent that Danbooru's bot
@@ -133,21 +133,26 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
 
     if (tauriFetchFn) {
         const origin = originOf(url);
+        let triedClearance = false;
 
-        // A site the user passed Cloudflare's check for: send the WebView's
-        // clearance cookie and User-Agent, which the clearance is tied to.
-        const clearance = await clearanceHeaders(origin);
-        if (clearance) {
-            const headers = new Headers(options.headers || {});
-            for (const [name, value] of Object.entries(clearance)) headers.set(name, value);
-            const response = await tauriFetchFn(url, { ...options, headers });
-            if (isCloudflareBlock(response)) noteCloudflareBlock(origin);
-            return response;
+        // A site that only answered with the clearance earlier this session
+        // (a network Cloudflare blocks, typically a VPN): keep sending it.
+        // When that stops working the network may have changed, so go back
+        // to the plain request before asking for a new check.
+        if (clearanceOrigins.has(origin)) {
+            const response = await fetchWithClearance(tauriFetchFn, url, options, origin);
+            if (response && !isCloudflareBlock(response)) return response;
+            clearanceOrigins.delete(origin);
+            triedClearance = true;
         }
 
         if (webviewOrigins.has(origin)) return browserFetch(url, options);
 
-        // Use Tauri's HTTP plugin fetch (bypasses CORS)
+        // Use Tauri's HTTP plugin fetch (bypasses CORS). This comes first
+        // even for a site the user verified before: a clearance is bound to
+        // the IP it was issued on, so sending it from another network (the
+        // VPN turned off) earns a fresh challenge that the plain request
+        // would not have got.
         const response = await tauriFetchFn(url, { ...options, headers: withAppUserAgent(options.headers) });
         if (!isCloudflareBlock(response)) return response;
 
@@ -158,7 +163,7 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
         // CORS (Danbooru does) answer it. Remember the origin so later
         // requests skip the refused attempt; keep the plugin's 403 when CORS
         // rules the WebView out or Cloudflare refuses the WebView too (the
-        // network itself is flagged), and offer the user the check.
+        // network itself is flagged).
         try {
             const retry = await browserFetch(url, options);
             if (retry.status !== 403) {
@@ -169,6 +174,18 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
         } catch (e) {
             if (options.signal?.aborted) throw e;
         }
+
+        // Last, the clearance from a check the user passed, sent with the
+        // WebView's cookies and User-Agent, which the clearance is tied to.
+        if (!triedClearance) {
+            const retry = await fetchWithClearance(tauriFetchFn, url, options, origin);
+            if (retry && !isCloudflareBlock(retry)) {
+                clearanceOrigins.add(origin);
+                return retry;
+            }
+        }
+
+        // Nothing got through: offer the user the check.
         noteCloudflareBlock(origin);
         return response;
     }
@@ -179,6 +196,18 @@ export async function httpFetch(url, { timeoutMs, ...options } = {}) {
 
 // Origins whose native requests Cloudflare blocks; see httpFetch.
 const webviewOrigins = new Set();
+
+/**
+ * Send a request with `origin`'s Cloudflare clearance, or null when the user
+ * never passed the check for it or the clearance is gone.
+ */
+async function fetchWithClearance(tauriFetchFn, url, options, origin) {
+    const clearance = await clearanceHeaders(origin);
+    if (!clearance) return null;
+    const headers = new Headers(options.headers || {});
+    for (const [name, value] of Object.entries(clearance)) headers.set(name, value);
+    return tauriFetchFn(url, { ...options, headers });
+}
 
 function originOf(url) {
     try {

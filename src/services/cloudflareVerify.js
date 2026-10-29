@@ -26,6 +26,14 @@ export const cloudflareState = reactive({ blocked: [] });
 
 const cookieCache = new Map();
 
+/**
+ * Sites whose requests only got through with the clearance this session.
+ * Everything else, a verified site included, goes out as a plain request:
+ * off the network Cloudflare blocked, the clearance is not needed, and its
+ * media loads faster straight in the WebView (see mediaUrl.js).
+ */
+export const clearanceOrigins = new Set();
+
 function readJson(key, fallback) {
     try {
         const value = localStorage.getItem(key);
@@ -63,6 +71,7 @@ function hasClearance(cookies) {
  */
 export function noteCloudflareBlock(origin) {
     cookieCache.delete(origin);
+    clearanceOrigins.delete(origin);
     if (!cloudflareState.blocked.includes(origin)) cloudflareState.blocked.push(origin);
 }
 

@@ -159,6 +159,24 @@ struct Clearance {
   user_agent: String,
 }
 
+/// One client for every media download, so a feed's files reuse pooled
+/// connections instead of paying a fresh TLS handshake each (slow on mobile
+/// and over a VPN). The timeouts keep a stalled transfer from leaving its post
+/// blank forever; the caller then lets the WebView try the file itself.
+fn media_client() -> Result<&'static tauri_plugin_http::reqwest::Client, String> {
+  static CLIENT: std::sync::OnceLock<tauri_plugin_http::reqwest::Client> = std::sync::OnceLock::new();
+  if let Some(client) = CLIENT.get() {
+    return Ok(client);
+  }
+  let client = tauri_plugin_http::reqwest::Client::builder()
+    .redirect(tauri_plugin_http::reqwest::redirect::Policy::limited(5))
+    .connect_timeout(std::time::Duration::from_secs(15))
+    .read_timeout(std::time::Duration::from_secs(30))
+    .build()
+    .map_err(|e| e.to_string())?;
+  Ok(CLIENT.get_or_init(|| client))
+}
+
 async fn download_booru_media(
   url: &str,
   referer: &str,
@@ -182,11 +200,8 @@ async fn download_booru_media(
     std::process::id()
   ));
 
-  let client = tauri_plugin_http::reqwest::Client::builder()
-    .redirect(tauri_plugin_http::reqwest::redirect::Policy::limited(5))
-    .build()
-    .map_err(|e| e.to_string())?;
-  let mut request = client.get(parsed).header("Referer", referer);
+  let mut request = media_client()?
+    .get(parsed).header("Referer", referer);
   request = match clearance {
     Some(clearance) => request
       .header("Cookie", &clearance.cookie)
