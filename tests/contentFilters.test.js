@@ -5,7 +5,8 @@ vi.mock('../src/services/BooruService', () => ({ default: { getTagLimit: () => 2
 vi.mock('../src/services/ProfileService', () => ({ getActiveProfileDbName: () => 'test' }));
 vi.mock('../src/services/ImageAnalysisService.js', () => ({ default: { subscribe() {} } }));
 vi.mock('../src/services/ImageAnalysisCache.js', () => ({ hydrateImageAnalysis: async () => {} }));
-vi.mock('../src/stores/settings.js', () => ({ useSettingsStore: () => ({ aiTaggingEnabled: false }) }));
+const settingsStore = vi.hoisted(() => ({ aiTaggingEnabled: false, overrideNeverInclude: [] }));
+vi.mock('../src/stores/settings.js', () => ({ useSettingsStore: () => settingsStore }));
 
 // Minimal stand-in for the recommendation worker: one strategy query, and
 // feed assembly that returns every candidate it is given.
@@ -64,5 +65,28 @@ describe('content filters', () => {
     const posts = [post(6, 'a', 'g'), post(7, 'a', 's'), post(8, 'a', 'e'), post(9, 'a', undefined)];
     const kept = recommendations.applyContentFilters(posts, { selectedRatings: ['general'] });
     expect(kept.map(p => p.id)).toEqual([6, 9]);
+  });
+
+  it('narrows the query to what the override rules allow', async () => {
+    recommendations.resetExploreSession();
+    strategies.queries = [{ tags: 'cat', type: 'anchor' }];
+    settingsStore.overrideNeverInclude = ['sensitive'];
+    const sent = [];
+    const fetch = async (query) => { sent.push(query.tags); return [post(13, 'cat', 'g'), post(14, 'cat', 's')]; };
+    const feed = await recommendations.getCuratedExploreFeed(fetch, options({ selectedRatings: ['general', 'sensitive'] }));
+    expect(sent[0]).toContain('rating:g');
+    expect(sent[0]).not.toContain('rating:g,s');
+    expect(feed.map(p => p.id)).toEqual([13]);
+    settingsStore.overrideNeverInclude = [];
+  });
+
+  it('fetches nothing when the override rules leave nothing to show', async () => {
+    recommendations.resetExploreSession();
+    settingsStore.overrideNeverInclude = ['general'];
+    const fetch = vi.fn(async () => [post(15, 'cat', 'g')]);
+    const feed = await recommendations.getCuratedExploreFeed(fetch, options());
+    expect(feed).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+    settingsStore.overrideNeverInclude = [];
   });
 });
