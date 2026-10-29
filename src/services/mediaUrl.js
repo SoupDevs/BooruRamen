@@ -23,7 +23,7 @@
  * as-is.
  */
 
-import { clearanceHeaders, verifiedOriginList } from './cloudflareVerify.js';
+import { clearanceHeaders, clearanceOrigins } from './cloudflareVerify.js';
 
 // Built-in booru whose media is known to need a Referer. Kept permanent so
 // media already in a feed keeps working even if the source is disabled.
@@ -164,18 +164,20 @@ function isTauri() {
 }
 
 /**
- * The Cloudflare clearance for this media URL's site, if the user passed the
- * check for it. Media often lives on a separate host (cdn.donmai.us for
- * danbooru.donmai.us), so any verified origin on the same site counts.
+ * The Cloudflare clearance for this media URL's site, if the site's requests
+ * needed it this session. Media often lives on a separate host (cdn.donmai.us
+ * for danbooru.donmai.us), so any such origin on the same site counts.
  * On a network Cloudflare blocks, the WebView's own <img>/<video> requests
  * are refused even after the check, so those files are fetched natively with
- * the clearance instead (see the cache_booru_media command).
+ * the clearance instead (see the cache_booru_media command). Anywhere else
+ * the WebView loads them itself, which streams and runs in parallel, so a
+ * site verified on a VPN is not slowed down once the VPN is off.
  * @returns {Promise<{referer: string, cookie: string, userAgent: string}|null>}
  */
 async function clearanceFor(url) {
     if (!isTauri() || !/^https:\/\//i.test(url || '')) return null;
     const host = safeHost(url);
-    const origin = verifiedOriginList().find(o => hostsShareSite(host, safeHost(o)));
+    const origin = [...clearanceOrigins].find(o => hostsShareSite(host, safeHost(o)));
     if (!origin) return null;
     const headers = await clearanceHeaders(origin);
     if (!headers) return null;
@@ -190,8 +192,14 @@ export async function getDisplayableMediaUrl(url) {
     const clearance = await clearanceFor(url);
     if (clearance) {
         const { convertFileSrc, invoke } = await import('@tauri-apps/api/core');
-        const cachedPath = await invoke('cache_booru_media', { url, ...clearance });
-        return convertFileSrc(cachedPath);
+        try {
+            const cachedPath = await invoke('cache_booru_media', { url, ...clearance });
+            return convertFileSrc(cachedPath);
+        } catch (error) {
+            // The native fetch was refused or timed out: let the WebView try
+            // the file itself rather than leave the post blank.
+            console.warn('[mediaUrl] Fetching media with the clearance failed:', url, error);
+        }
     }
 
     const source = refererSourceFor(url);

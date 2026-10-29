@@ -26,8 +26,14 @@ describe('media on a site the user passed the Cloudflare check for', () => {
         vi.doUnmock('@tauri-apps/api/core');
     });
 
-    it('fetches CDN files natively with the clearance', async () => {
+    async function clearanceNeeded() {
+        const { clearanceOrigins } = await import('../src/services/cloudflareVerify.js');
+        clearanceOrigins.add('https://danbooru.donmai.us');
+    }
+
+    it('fetches CDN files natively with the clearance when the site needed it', async () => {
         invoke.mockImplementation(async command => (command === 'cloudflare_cookies' ? 'cf_clearance=abc' : 'cache/1.jpg'));
+        await clearanceNeeded();
         const { getDisplayableMediaUrl } = await import('../src/services/mediaUrl.js');
 
         const url = 'https://cdn.donmai.us/original/aa/bb/aabb.jpg';
@@ -40,8 +46,31 @@ describe('media on a site the user passed the Cloudflare check for', () => {
         });
     });
 
+    it('leaves a verified site to the WebView when its requests get through without the clearance', async () => {
+        invoke.mockImplementation(async command => (command === 'cloudflare_cookies' ? 'cf_clearance=abc' : 'cache/1.jpg'));
+        const { getDisplayableMediaUrl } = await import('../src/services/mediaUrl.js');
+
+        const url = 'https://cdn.donmai.us/original/aa/bb/aabb.jpg';
+        expect(await getDisplayableMediaUrl(url)).toBe(url);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the WebView when the native fetch fails', async () => {
+        invoke.mockImplementation(async command => {
+            if (command === 'cloudflare_cookies') return 'cf_clearance=abc';
+            throw new Error('Media request returned HTTP 403 Forbidden');
+        });
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        await clearanceNeeded();
+        const { getDisplayableMediaUrl } = await import('../src/services/mediaUrl.js');
+
+        const url = 'https://cdn.donmai.us/original/aa/bb/aabb.jpg';
+        expect(await getDisplayableMediaUrl(url)).toBe(url);
+    });
+
     it('leaves other sites, and a site whose clearance is gone, to the WebView', async () => {
         invoke.mockResolvedValue('');
+        await clearanceNeeded();
         const { getDisplayableMediaUrl } = await import('../src/services/mediaUrl.js');
 
         expect(await getDisplayableMediaUrl('https://files.yande.re/image/a.jpg')).toBe('https://files.yande.re/image/a.jpg');
