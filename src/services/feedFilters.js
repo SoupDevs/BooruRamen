@@ -32,3 +32,18 @@ export function feedFilterSignature(settings = {}, plugins = []) {
     plugins: sorted((plugins || []).filter(plugin => plugin && plugin.enabled).map(plugin => plugin.id)),
   });
 }
+
+/** Mark posts with the filters they were fetched under. */
+export function stampFilters(posts, signature) {
+  for (const post of posts || []) if (post) post._filters = signature;
+  return posts;
+}
+
+/**
+ * False for a post fetched under other filters. Posts are held in several
+ * places before they are shown (the candidate pool, reserve picks, the
+ * saved runway), and any of them can outlive a filter change.
+ */
+export function fetchedUnder(post, signature) {
+  return !post || !post._filters || post._filters === signature;
+}

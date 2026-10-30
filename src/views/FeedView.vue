@@ -191,7 +191,7 @@ import { whyChipText, WHY_CHIP_MS } from '../services/WhyChip.js';
 import { FEED_RATINGS } from '../plugins/contentPolicy.js';
 import { emitPostShown } from '../plugins/feedHooks.js';
 import pluginHost from '../plugins/PluginHost.js';
-import { feedFilterSignature } from '../services/feedFilters.js';
+import { feedFilterSignature, fetchedUnder } from '../services/feedFilters.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
@@ -430,7 +430,9 @@ export default {
         if (!pick || this.posts !== posts || this.currentPostIndex !== index) return;
         const seen = new Set([...(this._historyKeys || []), ...posts.flatMap(post => [this.getCompositeKey(post), ...contentKeys(post)])]);
         // Reports made since the pick was set aside still apply.
-        const allowed = excludeDuplicateContent(ReportService.filterPosts([pick], await ReportService.getBlockSets()), seen);
+        // So do changed filters: the pick may have been held under old ones.
+        const filters = this.currentFilterSignature();
+        const allowed = excludeDuplicateContent(ReportService.filterPosts([pick], await ReportService.getBlockSets()), seen).filter(post => fetchedUnder(post, filters));
         if (!allowed.length || this.posts !== posts || this.currentPostIndex !== index) return;
         this.posts = [...posts.slice(0, index + 1), pick, ...posts.slice(index + 1)];
       } catch (error) { console.warn('[Feed] Recovery pick unavailable:', error.message); }
@@ -680,7 +682,8 @@ export default {
           emptyAttempts = batch.length > 0 ? 0 : emptyAttempts + 1;
           if (batch.length > 0) {
             // Drop anything blocked via Report/Block (post, artist, or uploader)
-            const allowedBatch = excludeDuplicateContent(ReportService.filterPosts(batch, blockSets), blockedKeys);
+            const filters = this.currentFilterSignature();
+            const allowedBatch = excludeDuplicateContent(ReportService.filterPosts(batch, blockSets), blockedKeys).filter(post => fetchedUnder(post, filters));
             newPosts = [...newPosts, ...allowedBatch];
             batch.forEach(p => blockedKeys.add(this.getCompositeKey(p)));
             batch.forEach(p => contentKeys(p).forEach(key => blockedKeys.add(key)));
@@ -753,10 +756,11 @@ export default {
       const saved = await RunwayCache.takeRunway(this.runwayContext());
       if (!saved) return [];
       const rs = this.recommendationSystem;
+      const filters = this.currentFilterSignature();
       const allowed = posts => excludeDuplicateContent(
         ReportService.filterPosts(rs.applyClientSideFilters(rs.applyContentFilters(posts, { blacklist, selectedRatings: FEED_RATINGS }), { whitelist }), blockSets),
         blockedKeys
-      );
+      ).filter(post => fetchedUnder(post, filters));
       const runway = allowed(saved.runway);
       for (const post of runway) {
         blockedKeys.add(this.getCompositeKey(post));
