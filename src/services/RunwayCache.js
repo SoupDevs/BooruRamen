@@ -19,7 +19,8 @@
  * blacklist, reports and view history before showing anything.
  *
  * An entry is only used for the feed it was saved from (same sources,
- * whitelist and media filter) and only within RUNWAY_MAX_AGE_MS, so media
+ * whitelist, blacklist, media filter, override rules and enabled plugins,
+ * as they were when its posts were fetched) and only within RUNWAY_MAX_AGE_MS, so media
  * URLs and trends stay fresh. Deep Dive runways are never saved.
  */
 import db from './db.js';
