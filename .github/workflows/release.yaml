@@ -15,11 +15,18 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.get_version.outputs.version }}
+      build: ${{ steps.build.outputs.build }}
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.ADMIN_PAT }}
           fetch-depth: 0
+
+      - name: Build number
+        id: build
+        # One past the last test build of the merged release branch, worked
+        # out from the merge commit before the bump commits land on top.
+        run: echo "build=$(scripts/ci/build-number.sh --release "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
       - name: Automated Version Bump
         id: bump
@@ -77,6 +84,8 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Build Windows App
+        env:
+          BOORURAMEN_BUILD: ${{ needs.prepare.outputs.build }}
         run: npm run tauri build -- --target x86_64-pc-windows-msvc
 
       - name: Find Windows Artifacts
@@ -103,6 +112,7 @@ jobs:
     uses: ./.github/workflows/android-build.yaml
     with:
       ref: master
+      build: ${{ needs.prepare.outputs.build }}
     secrets: inherit
 
   release:

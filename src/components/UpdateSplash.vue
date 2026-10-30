@@ -18,6 +18,7 @@
           <h3 class="text-xl font-bold">Checking for updates…</h3>
         </div>
         <p class="text-gray-400 text-sm">You're on v{{ appVersion }}</p>
+        <p v-if="appBuild" class="text-gray-600 text-xs">Build #{{ appBuild }}</p>
       </div>
 
       <!-- Update available -->
@@ -28,9 +29,10 @@
           </div>
           <h3 class="text-xl font-bold">Update available</h3>
         </div>
-        <p class="text-gray-300 mb-3">
+        <p class="text-gray-300" :class="appBuild ? 'mb-1' : 'mb-3'">
           BooruRamen v{{ updater.latestVersion }} is available. You're on v{{ updater.currentVersion }}.
         </p>
+        <p v-if="appBuild" class="text-gray-600 text-xs mb-3">Build #{{ appBuild }}</p>
         <div v-if="updater.releaseNotes" class="bg-gray-900 rounded-md p-3 mb-4 max-h-40 overflow-y-auto">
           <p class="text-xs text-gray-400 whitespace-pre-wrap">{{ updater.releaseNotes }}</p>
         </div>
@@ -130,7 +132,8 @@
           </div>
           <h3 class="text-xl font-bold">You're up to date</h3>
         </div>
-        <p class="text-gray-300 mb-6">BooruRamen v{{ updater.currentVersion || appVersion }} is the latest version.</p>
+        <p class="text-gray-300" :class="appBuild ? 'mb-1' : 'mb-6'">BooruRamen v{{ updater.currentVersion || appVersion }} is the latest version.</p>
+        <p v-if="appBuild" class="text-gray-600 text-xs mb-6">Build #{{ appBuild }}</p>
         <button
           @click="updater.dismiss()"
           class="w-full px-4 py-2 bg-pink-600 hover:bg-pink-700 rounded text-white font-medium transition"
@@ -163,7 +166,7 @@
   </div>
 </template>
 
-<script>/* global __APP_VERSION__ */
+<script>/* global __APP_VERSION__, __APP_BUILD__ */
 import { RefreshCw, ArrowDownToLine, Check, AlertCircle, ShieldAlert } from 'lucide-vue-next';
 import { useUpdaterStore } from '../stores/updater';
 import { isAndroid } from '../services/DownloadService';
@@ -177,6 +180,9 @@ export default {
     },
     appVersion() {
       return __APP_VERSION__;
+    },
+    appBuild() {
+      return __APP_BUILD__;
     },
     isAndroid() {
       return isAndroid();

@@ -58,6 +58,8 @@ const config = {
   worker: { format: 'es' },
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
+    // Dev build number within the version, set by CI; empty for local builds.
+    __APP_BUILD__: JSON.stringify(process.env.BOORURAMEN_BUILD || ''),
   },
   resolve: {
     alias: {
