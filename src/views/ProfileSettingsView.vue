@@ -947,6 +947,7 @@
     <!-- About/License Note -->
     <div class="mt-16 pb-8 text-center border-t border-gray-800 pt-8 opacity-40">
       <p class="text-sm font-semibold text-gray-400">BooruRamen v{{ appVersion }}</p>
+      <p v-if="appBuild" class="text-xs text-gray-600">Build #{{ appBuild }}</p>
       <p class="text-xs text-gray-500 mt-1">
         Licensed under <span class="text-pink-500/80 uppercase">GPL-3.0</span>
       </p>
@@ -955,7 +956,7 @@
   </div>
 </template>
 
-<script>/* global __APP_VERSION__ */
+<script>/* global __APP_VERSION__, __APP_BUILD__ */
 import { mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { useInteractionsStore } from '../stores/interactions';
@@ -1092,6 +1093,9 @@ export default {
     },
     appVersion() {
       return __APP_VERSION__;
+    },
+    appBuild() {
+      return __APP_BUILD__;
     },
     isAndroid() {
       return DownloadService.isAndroid();
