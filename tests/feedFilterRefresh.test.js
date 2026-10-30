@@ -134,3 +134,33 @@ describe('feed refresh on filter changes', () => {
     settings.tagAlwaysInclude = [];
   });
 });
+
+describe('posts held from before a filter change', () => {
+  it('drops a reserve pick fetched under other filters', async () => {
+    const { vm } = feed();
+    vm.posts = [post(1), post(2)];
+    vm.currentPostIndex = 0;
+    const stale = { ...post(9), _filters: 'old filters' };
+    vm.recommendationSystem.takeRecoveryPick = async () => stale;
+    await vm.insertRecoveryPick();
+    expect(vm.posts.map(p => p.id)).toEqual([1, 2]);
+
+    const current = { ...post(9), _filters: vm.currentFilterSignature() };
+    vm.recommendationSystem.takeRecoveryPick = async () => current;
+    await vm.insertRecoveryPick();
+    expect(vm.posts.map(p => p.id)).toEqual([1, 9, 2]);
+  });
+
+  it('drops batch and restored posts fetched under other filters', async () => {
+    const { vm, calls } = feed();
+    const now = vm.currentFilterSignature();
+    cache.saved = { context: vm.runwayContext(), runway: [{ ...post(1), _filters: 'old filters' }, { ...post(2), _filters: now }], pool: [] };
+    vm.runwayRestoreTried = false;
+    vm.fetchPosts(true);
+    await flush();
+    expect(vm.posts.map(p => p.id)).toEqual([2]);
+    calls[0]([{ ...post(3), _filters: 'old filters' }, ...[4, 5, 6, 7, 8].map(id => ({ ...post(id), _filters: now }))]);
+    await flush();
+    expect(vm.posts.map(p => p.id)).toEqual([2, 4, 5, 6, 7, 8]);
+  });
+});

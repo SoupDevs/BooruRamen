@@ -23,6 +23,8 @@ import { reactive } from 'vue';
 import { postKey } from './postKey.js';
 import { FEED_RATINGS } from '../plugins/contentPolicy.js';
 import { withoutNeverIncluded } from './overrideRules.js';
+import { feedFilterSignature, stampFilters, fetchedUnder } from './feedFilters.js';
+import pluginHost from '../plugins/PluginHost.js';
 import { runFiltersHook, runQueryHook, runRequestHook, runPostsHook, applyScoreHook, runBatchHook, emitInteraction, onFeedInvalidated } from '../plugins/feedHooks.js';
 
 export const deepDiveState = reactive({ active: false, anchorKey: null, anchorId: null, busy: false, error: '', generation: 0 });
@@ -173,9 +175,9 @@ class RecommendationSystem {
    * pass the same content gate as everything else and wait in the pool;
    * seen-filtering and scoring happen when the next batch draws on it.
    */
-  absorbLatePosts(posts, { epoch, modeGeneration, blacklist, selectedRatings }) {
+  absorbLatePosts(posts, { epoch, modeGeneration, blacklist, selectedRatings, filterSignature }) {
     if (!posts?.length || epoch !== this.poolEpoch || modeGeneration !== deepDiveState.generation) return;
-    const allowed = this.applyContentFilters(posts, { blacklist, selectedRatings });
+    const allowed = stampFilters(this.applyContentFilters(posts, { blacklist, selectedRatings }), filterSignature);
     if (!deepDiveState.active) this.callWorker('observeCandidates', allowed).catch(() => {});
     const inPool = new Set(this.candidatePool.map(candidateKey));
     for (const post of allowed) {
@@ -354,6 +356,9 @@ class RecommendationSystem {
   async getCuratedExploreFeed(fetchFunction, options = {}) {
     const modeGeneration = deepDiveState.generation;
     const poolEpoch = this.poolEpoch;
+    // Override rules and plugins this batch is fetched under; its posts carry
+    // it so the feed can drop any that outlive a change.
+    const filterSignature = feedFilterSignature(useSettingsStore(), pluginHost.state.plugins);
     const {
       postsPerFetch = 20,
       maxTotal = 10,
@@ -572,7 +577,7 @@ class RecommendationSystem {
       fetchPromises.forEach((promise, index) => {
         if (done[index]) return;
         console.log(`Query [${(plannedQueries[index].query.type || 'UNKNOWN').toUpperCase()}] "${plannedQueries[index].query.tags}" still running; its posts go to the pool`);
-        promise.then(posts => this.absorbLatePosts(posts, { epoch: poolEpoch, modeGeneration, blacklist, selectedRatings }));
+        promise.then(posts => this.absorbLatePosts(posts, { epoch: poolEpoch, modeGeneration, blacklist, selectedRatings, filterSignature }));
       });
 
       let allPosts = [];
@@ -582,7 +587,7 @@ class RecommendationSystem {
 
         if (posts && posts.length) {
           console.log(`Query [${queryType}] "${queryTags}" returned ${posts.length} posts`);
-          allPosts = [...allPosts, ...posts];
+          allPosts = [...allPosts, ...stampFilters(posts, filterSignature)];
         } else {
           console.warn(`Query [${queryType}] "${queryTags}" returned NO posts`);
         }
@@ -594,7 +599,7 @@ class RecommendationSystem {
           const key = candidateKey(post);
           if (!uniqueMap.has(key)) uniqueMap.set(key, post);
         });
-        let unique = this.applyContentFilters(Array.from(uniqueMap.values()), { blacklist, selectedRatings });
+        let unique = this.applyContentFilters(Array.from(uniqueMap.values()).filter(post => fetchedUnder(post, filterSignature)), { blacklist, selectedRatings });
         await hydrateImageAnalysis(unique, { includeAi: useSettingsStore().aiTaggingEnabled });
         unique = excludeDuplicateContent(unique, existingPostIds);
         if (existingPostIds.size > 0) {
@@ -644,10 +649,13 @@ class RecommendationSystem {
           return [];
         })))).flat();
         if (modeGeneration !== deepDiveState.generation || poolEpoch !== this.poolEpoch) return [];
-        if (extra.length) uniquePosts = await prepare([...uniquePosts, ...extra]);
+        if (extra.length) uniquePosts = await prepare([...uniquePosts, ...stampFilters(extra, filterSignature)]);
       }
       console.log(`Found ${uniquePosts.length} unique posts after deduplication`);
 
+      // A batch from a search that was replaced while it fetched must not
+      // reach the worker, which would hold some of it back as reserve picks.
+      if (modeGeneration !== deepDiveState.generation || poolEpoch !== this.poolEpoch) return [];
       // Scoring, exploration and diversity all live in the worker; plugin
       // ranking multipliers ride along on each post.
       await applyScoreHook(uniquePosts, { ...hookContext, recent: contextPosts.slice(-5) });
