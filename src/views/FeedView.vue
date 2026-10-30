@@ -190,6 +190,8 @@ import { SESSION_IDLE_MS } from '../services/SessionInterest.js';
 import { whyChipText, WHY_CHIP_MS } from '../services/WhyChip.js';
 import { FEED_RATINGS } from '../plugins/contentPolicy.js';
 import { emitPostShown } from '../plugins/feedHooks.js';
+import pluginHost from '../plugins/PluginHost.js';
+import { feedFilterSignature, fetchedUnder } from '../services/feedFilters.js';
 
 // How long the play glyph lingers while popping out after an unpause: the
 // 380ms pop-out plus a margin before the element is dropped.
@@ -253,6 +255,10 @@ export default {
       // A new search requested while a fetch was running; it runs once that
       // fetch returns. The generation retires the running fetch's results.
       pendingNewSearch: false,
+      // Override rules and plugins the current search started with, and the
+      // runway context it was fetched under.
+      searchFilterSignature: null,
+      searchContext: null,
       searchGeneration: 0,
       sessionRankTimer: null,
       historyContentKeys: new Set(),
@@ -294,6 +300,11 @@ export default {
     },
     ...mapState(useSettingsStore, ['autoScroll', 'autoScrollSeconds', 'autoScrollWaitForVideo', 'disableScrollAnimation', 'autoplayVideos', 'loopVideos', 'debugMode', 'whitelistTags', 'blacklistTags', 'mediaType', 'aiTaggingEnabled', 'showWhyChips', 'focusMode', 'avoidedTags']),
     ...mapState(usePlayerStore, ['volume', 'muted', 'defaultMuted']),
+    // Override rules and enabled plugins; the watcher refills the feed when
+    // they change.
+    filterSignature() {
+      return this.currentFilterSignature();
+    },
 
     // Container style that adjusts height for comments sheet
     feedContainerStyle() {
@@ -419,7 +430,9 @@ export default {
         if (!pick || this.posts !== posts || this.currentPostIndex !== index) return;
         const seen = new Set([...(this._historyKeys || []), ...posts.flatMap(post => [this.getCompositeKey(post), ...contentKeys(post)])]);
         // Reports made since the pick was set aside still apply.
-        const allowed = excludeDuplicateContent(ReportService.filterPosts([pick], await ReportService.getBlockSets()), seen);
+        // So do changed filters: the pick may have been held under old ones.
+        const filters = this.currentFilterSignature();
+        const allowed = excludeDuplicateContent(ReportService.filterPosts([pick], await ReportService.getBlockSets()), seen).filter(post => fetchedUnder(post, filters));
         if (!allowed.length || this.posts !== posts || this.currentPostIndex !== index) return;
         this.posts = [...posts.slice(0, index + 1), pick, ...posts.slice(index + 1)];
       } catch (error) { console.warn('[Feed] Recovery pick unavailable:', error.message); }
@@ -507,6 +520,13 @@ export default {
         }
       }
     },
+    currentFilterSignature() {
+      return feedFilterSignature(useSettingsStore(), pluginHost.state.plugins);
+    },
+    /** Identifies a search: the route's filters plus the override rules and plugins. */
+    searchKey() {
+      return JSON.stringify([this.$route.query, this.currentFilterSignature()]);
+    },
     async fetchPosts(newSearch = false) {
       if (this.feedDisposed) return;
       if (this.isFetching) {
@@ -515,13 +535,13 @@ export default {
         // fetch and start the search as soon as it returns.
         // A repeat of the search already running (mount and the route
         // watcher both start the first one) is not a new search.
-        if (newSearch && this.runningSearchQuery !== JSON.stringify(this.$route.query)) {
+        if (newSearch && this.runningSearchQuery !== this.searchKey()) {
           this.pendingNewSearch = true;
           this.searchGeneration++;
         }
         return;
       }
-      this.runningSearchQuery = newSearch ? JSON.stringify(this.$route.query) : null;
+      this.runningSearchQuery = newSearch ? this.searchKey() : null;
       const modeGeneration = deepDiveState.generation;
       const searchGeneration = this.searchGeneration;
       const superseded = () => this.feedDisposed || modeGeneration !== deepDiveState.generation || searchGeneration !== this.searchGeneration;
@@ -530,6 +550,15 @@ export default {
         // Settings load asynchronously at app startup; the first fetch must wait for
         // them or it runs against defaults and ignores the saved media filter (#150)
         await useSettingsStore().initialize();
+        if (newSearch) {
+          // Read after the settings load, so the saved rules count as the
+          // starting point rather than a change.
+          this.searchFilterSignature = this.currentFilterSignature();
+          // The runway is saved under the filters it was fetched with: Apply
+          // updates the route before this feed unmounts, and saving under
+          // the new filters would bring the old posts straight back.
+          this.searchContext = this.runwayContext();
+        }
         if (newSearch || this.posts.length === 0) {
           this.loading = true;
         }
@@ -653,7 +682,8 @@ export default {
           emptyAttempts = batch.length > 0 ? 0 : emptyAttempts + 1;
           if (batch.length > 0) {
             // Drop anything blocked via Report/Block (post, artist, or uploader)
-            const allowedBatch = excludeDuplicateContent(ReportService.filterPosts(batch, blockSets), blockedKeys);
+            const filters = this.currentFilterSignature();
+            const allowedBatch = excludeDuplicateContent(ReportService.filterPosts(batch, blockSets), blockedKeys).filter(post => fetchedUnder(post, filters));
             newPosts = [...newPosts, ...allowedBatch];
             batch.forEach(p => blockedKeys.add(this.getCompositeKey(p)));
             batch.forEach(p => contentKeys(p).forEach(key => blockedKeys.add(key)));
@@ -702,6 +732,8 @@ export default {
       const settings = useSettingsStore();
       return JSON.stringify({
         whitelist: query.whitelist ? query.whitelist.split(',') : (this.whitelistTags || []),
+        blacklist: query.blacklist ? query.blacklist.split(',') : (this.blacklistTags || []),
+        filters: this.currentFilterSignature(),
         images: 'images' in query ? query.images === '1' : !!this.mediaType.images,
         videos: 'videos' in query ? query.videos === '1' : !!this.mediaType.videos,
         sources: [settings.activeSource, ...(settings.customSources || [])].filter(Boolean).map(source => [source.type, source.url, source.enabled !== false]),
@@ -710,7 +742,7 @@ export default {
     /** Save the unseen posts ahead of the current one for the next launch. */
     saveRunway() {
       if (deepDiveState.active || !this.recommendationSystem || !this.posts.length) return;
-      RunwayCache.saveRunway(this.runwayContext(), this.posts.slice(Math.max(0, this.currentPostIndex + 1)), this.recommendationSystem.candidatePool);
+      RunwayCache.saveRunway(this.searchContext || this.runwayContext(), this.posts.slice(Math.max(0, this.currentPostIndex + 1)), this.recommendationSystem.candidatePool);
     },
     onPageHidden(event) {
       if (event.type === 'pagehide' || document.hidden) this.saveRunway();
@@ -724,10 +756,11 @@ export default {
       const saved = await RunwayCache.takeRunway(this.runwayContext());
       if (!saved) return [];
       const rs = this.recommendationSystem;
+      const filters = this.currentFilterSignature();
       const allowed = posts => excludeDuplicateContent(
         ReportService.filterPosts(rs.applyClientSideFilters(rs.applyContentFilters(posts, { blacklist, selectedRatings: FEED_RATINGS }), { whitelist }), blockSets),
         blockedKeys
-      );
+      ).filter(post => fetchedUnder(post, filters));
       const runway = allowed(saved.runway);
       for (const post of runway) {
         blockedKeys.add(this.getCompositeKey(post));
@@ -1377,6 +1410,14 @@ export default {
     },
     aiTaggingEnabled(enabled) {
       if (enabled) this.analyzeUpcomingImages();
+    },
+    // Changed override rules or a plugin turned on or off: posts queued
+    // under the old rules no longer apply, so start a new search. Nothing
+    // to do before the first search has read the saved settings.
+    filterSignature(signature) {
+      if (this.searchFilterSignature === null || signature === this.searchFilterSignature) return;
+      this.searchFilterSignature = signature;
+      this.fetchPosts(true);
     },
     '$route.query': {
       handler(newQuery, oldQuery) {

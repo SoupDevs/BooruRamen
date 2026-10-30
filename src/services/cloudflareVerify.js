@@ -20,11 +20,25 @@ import { reactive } from 'vue';
 const VERIFIED_KEY = 'cloudflareVerifiedOrigins';
 const PENDING_KEY = 'cloudflarePendingOrigin';
 const COOKIE_CACHE_MS = 30 * 1000;
+// The page the check opens. Cloudflare challenges every path on a site alike,
+// but once the check passes it shows the page that was asked for; a path the
+// site doesn't have shows its "not found" page, so even if that flashes up
+// before the app returns, none of the site's posts (unfiltered by the app's
+// content filters) are on it.
+const VERIFY_PATH = '/booruramen-cloudflare-check';
 
 /** Sites Cloudflare is currently blocking, for the banner that offers the check. */
 export const cloudflareState = reactive({ blocked: [] });
 
 const cookieCache = new Map();
+
+/**
+ * Sites whose requests only got through with the clearance this session.
+ * Everything else, a verified site included, goes out as a plain request:
+ * off the network Cloudflare blocked, the clearance is not needed, and its
+ * media loads faster straight in the WebView (see mediaUrl.js).
+ */
+export const clearanceOrigins = new Set();
 
 function readJson(key, fallback) {
     try {
@@ -63,6 +77,7 @@ function hasClearance(cookies) {
  */
 export function noteCloudflareBlock(origin) {
     cookieCache.delete(origin);
+    clearanceOrigins.delete(origin);
     if (!cloudflareState.blocked.includes(origin)) cloudflareState.blocked.push(origin);
 }
 
@@ -92,7 +107,7 @@ export function verifiedOriginList() {
  */
 export async function startCloudflareVerification(origin) {
     writeJson(PENDING_KEY, origin);
-    await invoke('cloudflare_verify', { url: `${origin}/` });
+    await invoke('cloudflare_verify', { url: `${origin}${VERIFY_PATH}` });
 }
 
 /**

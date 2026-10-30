@@ -368,8 +368,8 @@
               <div class="mb-3">
                 <label class="font-medium">Tag Query Overrides</label>
                 <p class="text-xs text-gray-400 mt-1">
-                  Modify every search query right before it is sent to the booru source.
-                  Separate tags with spaces.
+                  Modify every search query right before it is sent to the booru source,
+                  and check every post that comes back. Separate tags with spaces.
                 </p>
               </div>
               <div class="mb-3">
@@ -391,6 +391,23 @@
                   placeholder="e.g. meme comic..."
                   @keydown.space.stop
                 ></textarea>
+              </div>
+              <div class="mb-3">
+                <label class="text-sm font-medium">Never Include Classifications</label>
+                <p class="text-xs text-gray-500 mt-0.5 mb-1">Posts the source classifies this way are never shown.</p>
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    v-for="option in neverIncludeOptions"
+                    :key="option"
+                    type="button"
+                    @click="toggleNeverIncludeOption(option)"
+                    :aria-pressed="neverIncludeSelection.includes(option)"
+                    :class="neverIncludeSelection.includes(option) ? 'bg-pink-600 border-pink-500 text-white' : 'bg-gray-900 border-gray-700 text-gray-300 hover:border-gray-500'"
+                    class="px-3 py-1 rounded-full border text-xs capitalize transition"
+                  >
+                    {{ option }}
+                  </button>
+                </div>
               </div>
               <div class="flex justify-end">
                 <button
@@ -930,6 +947,7 @@
     <!-- About/License Note -->
     <div class="mt-16 pb-8 text-center border-t border-gray-800 pt-8 opacity-40">
       <p class="text-sm font-semibold text-gray-400">BooruRamen v{{ appVersion }}</p>
+      <p v-if="appBuild" class="text-xs text-gray-600">Build #{{ appBuild }}</p>
       <p class="text-xs text-gray-500 mt-1">
         Licensed under <span class="text-pink-500/80 uppercase">GPL-3.0</span>
       </p>
@@ -938,7 +956,7 @@
   </div>
 </template>
 
-<script>/* global __APP_VERSION__ */
+<script>/* global __APP_VERSION__, __APP_BUILD__ */
 import { mapWritableState, mapActions } from 'pinia';
 import { useSettingsStore } from '../stores/settings';
 import { useInteractionsStore } from '../stores/interactions';
@@ -949,6 +967,7 @@ import ReportService from '../services/ReportService';
 import RecommendationSystem, { COMMON_TAGS } from '../services/RecommendationSystem';
 
 import BooruService from '../services/BooruService';
+import { NEVER_INCLUDE_OPTIONS } from '../services/overrideRules.js';
 import { DanbooruAdapter, GelbooruAdapter, MoebooruAdapter } from '../services/BooruAdapters';
 import { detectBooruEngine } from '../services/BooruEngineDetector';
 import DownloadService from '../services/DownloadService';
@@ -979,6 +998,8 @@ export default {
       // Tag query overrides
       alwaysIncludeInput: '',
       neverIncludeInput: '',
+      neverIncludeOptions: NEVER_INCLUDE_OPTIONS,
+      neverIncludeSelection: [],
       overrideSaveMessage: '',
 
       // Navigation
@@ -1036,7 +1057,7 @@ export default {
   computed: {
     ...mapWritableState(useSettingsStore, [
       'disableHistory', 'debugMode', 'customSources', 'activeSource',
-      'tagAlwaysInclude', 'tagNeverInclude',
+      'tagAlwaysInclude', 'tagNeverInclude', 'overrideNeverInclude',
       'doubleTapToLike', 'showLikeAnimation', 'showDislikeAnimation', 'showFavoriteAnimation', 'showWhyChips',
       'showLikeButton', 'showDislikeButton', 'showFavoriteButton',
       'swipeRightToFavorite', 'swipeLeftToDislike', 'holdToSeek',
@@ -1073,6 +1094,9 @@ export default {
     appVersion() {
       return __APP_VERSION__;
     },
+    appBuild() {
+      return __APP_BUILD__;
+    },
     isAndroid() {
       return DownloadService.isAndroid();
     },
@@ -1099,6 +1123,7 @@ export default {
     await useSettingsStore().initialize();
     this.alwaysIncludeInput = (this.tagAlwaysInclude || []).join(' ');
     this.neverIncludeInput = (this.tagNeverInclude || []).join(' ');
+    this.neverIncludeSelection = [...(this.overrideNeverInclude || [])];
 
     const preferences = await StorageService.getPreferences();
 
@@ -1164,13 +1189,18 @@ export default {
     },
 
     // Tag query overrides
+    toggleNeverIncludeOption(option) {
+      this.neverIncludeSelection = this.neverIncludeSelection.includes(option)
+        ? this.neverIncludeSelection.filter(selected => selected !== option)
+        : [...this.neverIncludeSelection, option];
+    },
     saveTagOverrides() {
       const parseTags = (input) => [...new Set(
         input.split(/[\s,]+/).map(t => t.trim()).filter(t => t.length > 0)
       )];
       const alwaysInclude = parseTags(this.alwaysIncludeInput);
       const neverInclude = parseTags(this.neverIncludeInput);
-      this.setTagOverrides({ alwaysInclude, neverInclude });
+      this.setTagOverrides({ alwaysInclude, neverInclude, neverIncludeOptions: this.neverIncludeSelection });
       this.alwaysIncludeInput = alwaysInclude.join(' ');
       this.neverIncludeInput = neverInclude.join(' ');
       this.overrideSaveMessage = 'Overrides saved!';

@@ -18,6 +18,10 @@ on:
         description: Version to stamp into the build (empty = keep package.json's)
         type: string
         default: ''
+      build:
+        description: Dev build number to show beside the version (empty = none)
+        type: string
+        default: ''
 
 jobs:
   build-android:
@@ -47,6 +51,15 @@ jobs:
           npm pkg set version="$VERSION"
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" src-tauri/tauri.conf.json
           grep '"version"' package.json src-tauri/tauri.conf.json
+
+      - name: Set build number
+        if: ${{ inputs.build != '' }}
+        env:
+          BUILD: ${{ inputs.build }}
+        run: |
+          # Read by vite.config.mjs when Tauri runs the frontend build.
+          echo "BOORURAMEN_BUILD=$BUILD" >> "$GITHUB_ENV"
+          echo "Build #$BUILD"
 
       - name: Setup Java
         uses: actions/setup-java@v4

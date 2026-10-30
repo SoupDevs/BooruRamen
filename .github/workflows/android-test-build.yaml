@@ -6,7 +6,8 @@ name: "Android Test Build"
 # from the run's "android-test-apk" artifact. It is signed with the release
 # key, so it installs over the store-less release build and keeps app data.
 # On a release/vX.Y.Z branch the build is labelled X.Y.Z, the version that
-# branch will ship as.
+# branch will ship as, plus a build number (scripts/ci/build-number.sh)
+# that counts up with each push and starts again at 1 on the next version.
 
 on:
   push:
@@ -23,7 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.build.outputs.build }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: build
+        run: echo "build=$(scripts/ci/build-number.sh)" >> "$GITHUB_OUTPUT"
+
       - id: version
         env:
           BRANCH: ${{ github.ref_name }}
@@ -40,4 +49,5 @@ jobs:
     with:
       artifact-name: android-test-apk
       version: ${{ needs.version.outputs.version }}
+      build: ${{ needs.version.outputs.build }}
     secrets: inherit

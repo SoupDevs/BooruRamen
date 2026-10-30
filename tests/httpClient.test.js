@@ -97,7 +97,7 @@ describe('httpFetch in Tauri', () => {
         expect(tauriFetch).toHaveBeenCalledTimes(2);
     });
 
-    it('sends the WebView clearance cookie and User-Agent once the site is verified', async () => {
+    async function verify(cookies = 'cf_clearance=abc; other=1') {
         const store = new Map([['cloudflarePendingOrigin', JSON.stringify('https://danbooru.donmai.us')]]);
         vi.stubGlobal('localStorage', {
             getItem: k => (store.has(k) ? store.get(k) : null),
@@ -105,23 +105,63 @@ describe('httpFetch in Tauri', () => {
             removeItem: k => store.delete(k),
         });
         vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (Linux; Android 14; wv) Chrome/130' });
-        const invoke = vi.fn().mockResolvedValue('cf_clearance=abc; other=1');
-        vi.doMock('@tauri-apps/api/core', () => ({ invoke }));
-
-        const { finishPendingVerification } = await import('../src/services/cloudflareVerify.js');
-        const { httpFetch } = await import('../src/services/httpClient.js');
-        expect(await finishPendingVerification()).toBe('https://danbooru.donmai.us');
+        vi.doMock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(cookies) }));
+        const verify = await import('../src/services/cloudflareVerify.js');
+        expect(await verify.finishPendingVerification()).toBe('https://danbooru.donmai.us');
         expect(store.has('cloudflarePendingOrigin')).toBe(false);
+        return verify;
+    }
 
-        tauriFetch.mockResolvedValue(ok());
-        await httpFetch('https://danbooru.donmai.us/posts.json');
-        const headers = tauriFetch.mock.calls[0][1].headers;
+    it('sends the WebView clearance cookie and User-Agent when nothing else gets through', async () => {
+        const { clearanceOrigins } = await verify();
+        const { httpFetch } = await import('../src/services/httpClient.js');
+        tauriFetch.mockResolvedValueOnce(blocked()).mockResolvedValue(ok());
+        browserFetch.mockResolvedValue(new Response('<html></html>', { status: 403 }));
+
+        expect((await httpFetch('https://danbooru.donmai.us/posts.json')).status).toBe(200);
+        const headers = tauriFetch.mock.calls[1][1].headers;
         expect(headers.get('Cookie')).toBe('cf_clearance=abc; other=1');
         expect(headers.get('User-Agent')).toMatch(/Android/);
+        expect(clearanceOrigins.has('https://danbooru.donmai.us')).toBe(true);
+
+        // Later requests go straight to the clearance.
+        await httpFetch('https://danbooru.donmai.us/tags.json');
+        expect(tauriFetch).toHaveBeenCalledTimes(3);
+        expect(tauriFetch.mock.calls[2][1].headers.get('Cookie')).toBe('cf_clearance=abc; other=1');
 
         // Other sites are untouched.
         await httpFetch('https://yande.re/post.json');
-        expect(tauriFetch.mock.calls[1][1].headers.get('Cookie')).toBeNull();
+        expect(tauriFetch.mock.calls[3][1].headers.get('Cookie')).toBeNull();
+        vi.doUnmock('@tauri-apps/api/core');
+    });
+
+    it('does not send a verified site\'s clearance, or ask for a check, when the plain request works', async () => {
+        const { clearanceOrigins, cloudflareState } = await verify();
+        const { httpFetch } = await import('../src/services/httpClient.js');
+        tauriFetch.mockResolvedValue(ok());
+
+        expect((await httpFetch('https://danbooru.donmai.us/posts.json')).status).toBe(200);
+        expect(tauriFetch.mock.calls[0][1].headers.get('Cookie')).toBeNull();
+        expect(tauriFetch.mock.calls[0][1].headers.get('User-Agent')).toMatch(/^BooruRamen\//);
+        expect(clearanceOrigins.size).toBe(0);
+        expect(cloudflareState.blocked).toEqual([]);
+        vi.doUnmock('@tauri-apps/api/core');
+    });
+
+    it('goes back to the plain request when the clearance stops working', async () => {
+        const { clearanceOrigins, cloudflareState } = await verify();
+        const { httpFetch } = await import('../src/services/httpClient.js');
+        browserFetch.mockResolvedValue(new Response('<html></html>', { status: 403 }));
+        tauriFetch.mockResolvedValueOnce(blocked()).mockResolvedValueOnce(ok());
+        await httpFetch('https://danbooru.donmai.us/posts.json');
+        expect(clearanceOrigins.size).toBe(1);
+
+        // The VPN went off: the clearance is refused, the plain request works.
+        tauriFetch.mockResolvedValueOnce(blocked()).mockResolvedValueOnce(ok());
+        expect((await httpFetch('https://danbooru.donmai.us/posts.json')).status).toBe(200);
+        expect(tauriFetch.mock.calls[3][1].headers.get('Cookie')).toBeNull();
+        expect(clearanceOrigins.size).toBe(0);
+        expect(cloudflareState.blocked).toEqual([]);
         vi.doUnmock('@tauri-apps/api/core');
     });
 });
