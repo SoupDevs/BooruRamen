@@ -3,6 +3,11 @@ name: "Android Build"
 # Builds and signs the universal Android APK and uploads it as a workflow
 # artifact. Shared by the release workflow and the test-build workflow so
 # both produce the same APK.
+#
+# With play-store: true it builds the Google Play flavour instead: an app
+# bundle (AAB) signed with the same key (Play's upload key), without the
+# `sideload-updates` Cargo feature, so the app has no install permission and
+# leaves updates to the store.
 
 on:
   workflow_call:
@@ -22,6 +27,10 @@ on:
         description: Dev build number to show beside the version (empty = none)
         type: string
         default: ''
+      play-store:
+        description: Build the Google Play bundle (AAB, no sideload updater) instead of the APK
+        type: boolean
+        default: false
 
 jobs:
   build-android:
@@ -60,6 +69,16 @@ jobs:
           # Read by vite.config.mjs when Tauri runs the frontend build.
           echo "BOORURAMEN_BUILD=$BUILD" >> "$GITHUB_ENV"
           echo "Build #$BUILD"
+
+      - name: Turn off sideload updates (Google Play build)
+        if: ${{ inputs.play-store }}
+        run: |
+          # Play owns updates. Dropping the feature from the default set is
+          # what both cargo and scripts/android/patch_android_project.mjs read,
+          # so the updater code, REQUEST_INSTALL_PACKAGES and the FileProvider
+          # path all leave the build. Nothing is committed.
+          sed -i 's/^default = \["sideload-updates"\]$/default = []/' src-tauri/Cargo.toml
+          grep -q '^default = \[\]$' src-tauri/Cargo.toml || { echo "Could not turn off sideload-updates in Cargo.toml"; exit 1; }
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -201,13 +220,16 @@ jobs:
           ls -la "$ANDROID_RES/mipmap-xxxhdpi/"
 
       - name: Build Android APK
+        env:
+          # The Play build is a bundle; everything else a universal APK.
+          BUNDLE_ARGS: ${{ inputs.play-store && '--aab true --apk false' || '--apk true' }}
         run: |
           # Retry logic for transient network failures (403 from Maven Central)
           MAX_RETRIES=3
           RETRY_COUNT=0
 
           # Build universal APK (all architectures) by not specifying --target
-          until npm run tauri android build -- --apk true; do
+          until npm run tauri android build -- $BUNDLE_ARGS; do
             RETRY_COUNT=$((RETRY_COUNT + 1))
             if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
               echo "Build failed after $MAX_RETRIES attempts"
@@ -221,6 +243,7 @@ jobs:
           done
 
       - name: Sign APK
+        if: ${{ !inputs.play-store }}
         run: |
           echo "=== All APK files before signing ==="
           find src-tauri/gen/android -name "*.apk" -type f -ls
@@ -290,7 +313,70 @@ jobs:
             exit 1
           fi
 
+      - name: Sign app bundle
+        if: ${{ inputs.play-store }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          # Bundles are signed with jarsigner (apksigner is for APKs). The key
+          # is the same release key the APKs use, registered with Google Play
+          # as the upload key.
+          AAB=$(find src-tauri/gen/android/app/build/outputs/bundle -name "*release*.aab" -type f | head -1)
+          if [ -z "$AAB" ]; then
+            echo "No release AAB found:"
+            find src-tauri/gen/android -name "*.aab" -type f -ls
+            exit 1
+          fi
+          echo "Signing $AAB"
+
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          mkdir -p dist-android
+          jarsigner -sigalg SHA256withRSA -digestalg SHA-256 \
+            -keystore "$RUNNER_TEMP/keystore.jks" \
+            -storepass:env STORE_PASSWORD -keypass:env KEY_PASSWORD \
+            -signedjar dist-android/app-release.aab \
+            "$AAB" "$KEY_ALIAS"
+          rm -f "$RUNNER_TEMP/keystore.jks"
+
+          jarsigner -verify dist-android/app-release.aab | tail -1
+          ls -la dist-android
+
+      - name: Check 16 KB page alignment (Google Play requirement)
+        if: ${{ inputs.play-store }}
+        run: |
+          # Play rejects apps targeting Android 15+ whose native libraries
+          # are not aligned for 16 KB memory pages.
+          mkdir -p "$RUNNER_TEMP/aab"
+          unzip -q -o dist-android/app-release.aab 'base/lib/*' -d "$RUNNER_TEMP/aab"
+          bad=0
+          for so in $(find "$RUNNER_TEMP/aab" -name '*.so'); do
+            abi=$(basename "$(dirname "$so")")
+            # 32-bit ABIs are exempt; only arm64-v8a and x86_64 must align.
+            case "$abi" in arm64-v8a|x86_64) ;; *) continue ;; esac
+            align=$(readelf -lW "$so" | awk '$1=="LOAD"{print $NF}' | sort -u | tr '\n' ' ')
+            echo "$abi/$(basename "$so"): LOAD alignment $align"
+            for a in $align; do
+              [ $((a)) -ge 16384 ] || bad=1
+            done
+          done
+          if [ "$bad" = 1 ]; then
+            echo "::error::A native library is not 16 KB aligned; Google Play will reject this bundle."
+            exit 1
+          fi
+
+      - name: Upload app bundle
+        if: ${{ inputs.play-store }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: dist-android/app-release.aab
+          if-no-files-found: error
+
       - name: Find APK files
+        if: ${{ !inputs.play-store }}
         id: find_apk
         run: |
           echo "Looking for APK files..."
@@ -299,6 +385,7 @@ jobs:
           echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
 
       - name: Upload Android Artifacts
+        if: ${{ !inputs.play-store }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact-name }}

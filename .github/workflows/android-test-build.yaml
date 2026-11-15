@@ -8,12 +8,19 @@ name: "Android Test Build"
 # On a release/vX.Y.Z branch the build is labelled X.Y.Z, the version that
 # branch will ship as, plus a build number (scripts/ci/build-number.sh)
 # that counts up with each push and starts again at 1 on the next version.
+# Run it by hand with "Google Play bundle" ticked to get the Play flavour
+# instead (android-test-aab artifact: an AAB without the sideload updater).
 
 on:
   push:
     branches:
       - 'release/**'
   workflow_dispatch:
+    inputs:
+      play-store:
+        description: Google Play bundle (AAB) instead of the sideload APK
+        type: boolean
+        default: false
 
 concurrency:
   group: android-test-build-${{ github.ref }}
@@ -47,7 +54,8 @@ jobs:
       contents: read
     uses: ./.github/workflows/android-build.yaml
     with:
-      artifact-name: android-test-apk
+      artifact-name: ${{ inputs.play-store && 'android-test-aab' || 'android-test-apk' }}
+      play-store: ${{ inputs.play-store == true }}
       version: ${{ needs.version.outputs.version }}
       build: ${{ needs.version.outputs.build }}
     secrets: inherit
