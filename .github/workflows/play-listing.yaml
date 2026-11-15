@@ -15,6 +15,11 @@ on:
         description: Also upload the icon, feature graphic and screenshots
         type: boolean
         default: true
+      track:
+        description: A track that has the latest release on it (fastlane needs one to attach the edit to)
+        type: choice
+        options: [internal, alpha, beta, production]
+        default: internal
 
 concurrency:
   group: play-store-upload
@@ -37,6 +42,23 @@ jobs:
             exit 1
           fi
 
+      - name: Find the latest release's version code
+        id: code
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # fastlane supply refuses a listing-only upload unless it is given
+          # the version code of a release on the track, so use the latest
+          # GitHub release (vX.Y.Z -> X*1000000 + Y*1000 + Z).
+          TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::Latest release '$TAG' is not a vX.Y.Z tag"
+            exit 1
+          fi
+          CODE=$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 1000 + BASH_REMATCH[3] ))
+          echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Using $TAG (versionCode $CODE)"
+
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'
@@ -48,10 +70,14 @@ jobs:
         env:
           PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           SKIP_IMAGES: ${{ !inputs.images }}
+          TRACK: ${{ inputs.track }}
+          CODE: ${{ steps.code.outputs.version_code }}
         run: |
           fastlane supply \
             --package_name com.booruramen.app \
             --json_key_data "$PLAY_JSON" \
+            --track "$TRACK" \
+            --version_code "$CODE" \
             --metadata_path fastlane/metadata/android \
             --skip_upload_apk true \
             --skip_upload_aab true \
