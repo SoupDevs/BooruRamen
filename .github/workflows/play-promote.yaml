@@ -1,0 +1,89 @@
+name: "Google Play: Promote"
+
+# Moves the release that is on one Play track to another without rebuilding,
+# e.g. internal -> production once it has been tried on a phone. A rollout
+# below 100% starts a staged rollout, which you widen or finish in Play
+# Console (Release > Production).
+#
+# Needs the PLAY_SERVICE_ACCOUNT_JSON secret (see docs/PLAY_STORE.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Track the release is on now
+        type: choice
+        options: [internal, alpha, beta, production]
+        default: internal
+      to:
+        description: Track to put it on
+        type: choice
+        options: [production, beta, alpha, internal]
+        default: production
+      rollout:
+        description: Share of users who get it, in percent (100 = everyone)
+        type: string
+        default: '100'
+
+concurrency:
+  group: play-store-upload
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check inputs
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          ROLLOUT: ${{ inputs.rollout }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+        run: |
+          if [ "$FROM" = "$TO" ]; then
+            echo "::error::Pick two different tracks"
+            exit 1
+          fi
+          if [ -z "$PLAY_JSON" ]; then
+            echo "::error::The PLAY_SERVICE_ACCOUNT_JSON secret is not set. See docs/PLAY_STORE.md."
+            exit 1
+          fi
+          if ! [[ "$ROLLOUT" =~ ^[0-9]+(\.[0-9]+)?$ ]] || (( $(echo "$ROLLOUT > 100" | bc) )) || (( $(echo "$ROLLOUT <= 0" | bc) )); then
+            echo "::error::Rollout must be a number above 0 and at most 100"
+            exit 1
+          fi
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install fastlane
+        run: gem install fastlane -N
+
+      - name: Promote
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          ROLLOUT: ${{ inputs.rollout }}
+        run: |
+          if [ "$ROLLOUT" = "100" ]; then
+            STATUS_ARGS=(--track_promote_release_status completed)
+          else
+            STATUS_ARGS=(--track_promote_release_status inProgress --rollout "$(echo "scale=4; $ROLLOUT / 100" | bc)")
+          fi
+          fastlane supply \
+            --package_name com.booruramen.app \
+            --json_key_data "$PLAY_JSON" \
+            --track "$FROM" \
+            --track_promote_to "$TO" \
+            "${STATUS_ARGS[@]}" \
+            --skip_upload_apk true \
+            --skip_upload_aab true \
+            --skip_upload_metadata true \
+            --skip_upload_changelogs true \
+            --skip_upload_images true \
+            --skip_upload_screenshots true
+          echo "Moved the $FROM release to **$TO** at $ROLLOUT%." >> "$GITHUB_STEP_SUMMARY"
