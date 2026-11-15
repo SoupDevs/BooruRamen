@@ -33,14 +33,39 @@ export const useUpdaterStore = defineStore('updater', {
         error: '',
         // Full result of the last successful check, kept for installUpdate()
         lastCheck: null,
+        // True in a build whose updates come from an app store (no
+        // `sideload-updates` feature): no GitHub checks, no update splash.
+        // null until detectStoreManaged() has run.
+        storeManaged: null,
     }),
     actions: {
+        /**
+         * Whether an app store owns updates for this build. Only an installed
+         * Android app without the sideload feature counts; desktop and
+         * sideloaded builds keep checking GitHub.
+         */
+        async detectStoreManaged() {
+            if (this.storeManaged !== null) return this.storeManaged;
+            let managed = false;
+            try {
+                managed = UpdateService.isAndroid()
+                    && !(await UpdateService.isSideloadUpdatesSupported());
+            } catch (e) {
+                console.warn('[Updater] Could not tell how this build updates:', e);
+            }
+            this.storeManaged = managed;
+            return managed;
+        },
+
         /**
          * Check for a new release. Silent checks (app open) only surface the
          * splash when an update exists; manual checks always show a result.
          */
         async checkForUpdates({ manual = false } = {}) {
             if (['checking', 'downloading', 'installing'].includes(this.status)) return;
+            // A store build is updated by the store; it never looks for or
+            // offers releases from anywhere else.
+            if (await this.detectStoreManaged()) return;
             this.error = '';
             this.status = 'checking';
             if (manual) this.showSplash = true;
