@@ -1,0 +1,185 @@
+name: "Google Play: Upload"
+
+# Builds the Google Play app bundle for a release tag and uploads it to a
+# Play track. The release workflow calls it after every release once the
+# repository variable PLAY_STORE_ENABLED is "true" (internal track by
+# default, PLAY_TRACK overrides). Run it by hand from the Actions tab to
+# upload any release to any track, or with track "none" to only build the
+# signed AAB (the "play-aab" artifact) for a manual upload in Play Console.
+#
+# Needs the repository secret PLAY_SERVICE_ACCOUNT_JSON (a Google Cloud
+# service account key with release access in Play Console) for uploads,
+# plus the ANDROID_* signing secrets the APK build already uses.
+# docs/PLAY_STORE.md walks through the one-time setup.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build, e.g. v0.19.0 (empty = latest release)
+        type: string
+        default: ''
+      track:
+        description: Play track to upload to ("none" = build the AAB only)
+        type: choice
+        options: [internal, alpha, beta, production, none]
+        default: internal
+      status:
+        description: Release status on the track
+        type: choice
+        options: [completed, draft]
+        default: completed
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+      track:
+        type: string
+        default: internal
+      status:
+        type: string
+        default: completed
+      build:
+        description: Dev build number to show beside the version (empty = none)
+        type: string
+        default: ''
+
+concurrency:
+  group: play-store-upload
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      version-code: ${{ steps.tag.outputs.version_code }}
+    steps:
+      - id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          fi
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "::error::'$TAG' is not a vX.Y.Z release tag"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          # Tauri's own rule: major * 1000000 + minor * 1000 + patch. Every
+          # release bumps the version, so every upload gets a new code.
+          CODE=$(( BASH_REMATCH[1] * 1000000 + BASH_REMATCH[2] * 1000 + BASH_REMATCH[3] ))
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "Building $TAG (version $VERSION, versionCode $CODE)"
+
+  build:
+    needs: resolve
+    permissions:
+      contents: read
+    uses: ./.github/workflows/android-build.yaml
+    with:
+      ref: ${{ needs.resolve.outputs.tag }}
+      # The tag is made before the release workflow syncs tauri.conf.json,
+      # so stamp the version explicitly.
+      version: ${{ needs.resolve.outputs.version }}
+      build: ${{ inputs.build || '' }}
+      artifact-name: play-aab
+      play-store: true
+    secrets: inherit
+
+  upload:
+    needs: [resolve, build]
+    if: ${{ inputs.track != 'none' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: play-aab
+          path: play-aab
+
+      - name: Check the Play credentials
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_JSON" ]; then
+            echo "::error::The PLAY_SERVICE_ACCOUNT_JSON secret is not set. See docs/PLAY_STORE.md."
+            exit 1
+          fi
+
+      - name: Write release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+          CODE: ${{ needs.resolve.outputs.version-code }}
+        run: |
+          # A hand-written fastlane/metadata/android/en-US/changelogs/<code>.txt
+          # wins. Otherwise the GitHub release's PR titles become the notes,
+          # cut to Play's 500-character limit.
+          DIR=fastlane/metadata/android/en-US/changelogs
+          mkdir -p "$DIR"
+          if [ ! -f "$DIR/$CODE.txt" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .body 2>/dev/null \
+              | sed -nE 's/^\* (.+) by @[^ ]+ in https:.*$/• \1/p' \
+              | grep -viE 'release v[0-9]|version bump|sync tauri' > notes.txt || true
+            if [ ! -s notes.txt ]; then
+              echo "Bug fixes and improvements." > notes.txt
+            fi
+            python3 - "$DIR/$CODE.txt" <<'PY'
+          import sys
+          lines, out = open('notes.txt', encoding='utf-8').read().splitlines(), ''
+          for line in lines:
+              if len(out) + len(line) + 1 > 500:
+                  break
+              out += line + '\n'
+          open(sys.argv[1], 'w', encoding='utf-8').write(out.strip() + '\n')
+          PY
+          fi
+          echo "What's new ($CODE):"
+          cat "$DIR/$CODE.txt"
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install fastlane
+        run: gem install fastlane -N
+
+      - name: Upload to Google Play
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          TRACK: ${{ inputs.track }}
+          STATUS: ${{ inputs.status }}
+        run: |
+          fastlane supply \
+            --package_name com.booruramen.app \
+            --json_key_data "$PLAY_JSON" \
+            --aab play-aab/app-release.aab \
+            --track "$TRACK" \
+            --release_status "$STATUS" \
+            --metadata_path fastlane/metadata/android \
+            --skip_upload_apk true \
+            --skip_upload_metadata true \
+            --skip_upload_images true \
+            --skip_upload_screenshots true
+
+      - name: Summary
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          TRACK: ${{ inputs.track }}
+          STATUS: ${{ inputs.status }}
+        run: |
+          echo "Uploaded **$TAG** to the Google Play **$TRACK** track ($STATUS)." >> "$GITHUB_STEP_SUMMARY"

@@ -835,8 +835,8 @@
               </div>
             </div>
 
-            <!-- Check for Updates -->
-            <button @click="checkForUpdates" class="w-full text-center bg-blue-700 hover:bg-blue-600 py-3 rounded-md text-lg transition">
+            <!-- Check for Updates (a store build is updated by the store) -->
+            <button v-if="!updatesFromStore" @click="checkForUpdates" class="w-full text-center bg-blue-700 hover:bg-blue-600 py-3 rounded-md text-lg transition">
               Check for Updates
             </button>
 
@@ -1001,6 +1001,7 @@ export default {
       neverIncludeOptions: NEVER_INCLUDE_OPTIONS,
       neverIncludeSelection: [],
       overrideSaveMessage: '',
+      updatesFromStore: false,
 
       // Navigation
       navigationStack: [],
@@ -1119,6 +1120,7 @@ export default {
     },
   },
   async mounted() {
+    useUpdaterStore().detectStoreManaged().then(managed => { this.updatesFromStore = managed; });
     // Ensure the settings store is loaded before reading override tags
     await useSettingsStore().initialize();
     this.alwaysIncludeInput = (this.tagAlwaysInclude || []).join(' ');
