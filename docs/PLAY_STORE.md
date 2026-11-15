@@ -63,6 +63,11 @@ Console.
    - Variables tab → new variable `PLAY_STORE_ENABLED` = `true`.
    - Optional variable `PLAY_TRACK` (`internal` by default; `alpha` is the
      closed testing track).
+   - Variable `PLAY_RELEASE_STATUS` = `draft` while the dashboard still says
+     **Draft app** (until the first production release is live): Google
+     rejects any other status for an unpublished app. Each upload then waits
+     as a draft on its track; open it in the Console and roll it out. Delete
+     the variable once the app is published.
    Then delete the downloaded JSON file.
 
 ### 5. Store listing
@@ -108,8 +113,10 @@ Category: **All other app types**. Answer honestly for what the app shows:
 - Personal account: create a **Closed testing** release (promote internal →
   alpha), add 12+ testers by e-mail or Google Group, keep it running 14 days,
   then **Apply for production** on the dashboard.
-- Then **Actions → Google Play: Promote**, from `internal` (or `alpha`) to
-  `production`. Google reviews the first production release (a few days).
+- Before production access, promote by hand in the Console (the Promote
+  workflow, like every API release, can only make drafts on an unpublished
+  app). Once the app is published, **Actions → Google Play: Promote**, from
+  `internal` (or `alpha`) to `production`. Google reviews the first production release (a few days).
 
 ## Every release after that
 1. Merge the release branch into master. The release workflow tags it,
