@@ -162,3 +162,19 @@ jobs:
             artifacts/android/**/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Google Play: upload the new release's app bundle to a test track. Off
+  # until the repository variable PLAY_STORE_ENABLED is "true" (set it after
+  # the first manual upload, see docs/PLAY_STORE.md). PLAY_TRACK picks the
+  # track (default internal); promote it with "Google Play: Promote".
+  play-store:
+    needs: [prepare, release]
+    if: ${{ vars.PLAY_STORE_ENABLED == 'true' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/play-store.yaml
+    with:
+      tag: v${{ needs.prepare.outputs.new_version }}
+      track: ${{ vars.PLAY_TRACK || 'internal' }}
+      build: ${{ needs.prepare.outputs.build }}
+    secrets: inherit
