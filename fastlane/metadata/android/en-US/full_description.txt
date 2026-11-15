@@ -1,0 +1,37 @@
+BooruRamen turns image boards into one endless, personalized feed of anime art. Just scroll: every like, skip, favorite and second of watch time quietly teaches the feed what you enjoy, and it reshapes itself around your taste while still showing you something new.
+
+Everything it learns stays on your phone. No account, no sign-up, no ads and no tracking.
+
+<b>A feed that learns as you scroll</b>
+• Personalized recommendations computed entirely on your device
+• Adapts within the current session and grows smarter over time
+• Keeps exploring trending posts you are likely to love, so your feed never goes stale
+• "Because you liked…" hints show why a post was picked
+
+<b>Deep Dive</b>
+Found something great? Dive into it and the feed fills with closely related posts until you choose to come back up. Your main feed stays balanced.
+
+<b>All your favorite boards in one place</b>
+• Mix several image board sites in a single feed
+• Add your own compatible sources
+• Optional account keys for sites that offer them, stored only on your device
+
+<b>Safe, all-ages content</b>
+• The feed shows only general-rated (all-ages) posts
+• Block any tag and posts with it are never shown
+
+<b>A proper viewer</b>
+• Full-screen images and videos with smooth swiping
+• Tags, comments, downloads and sharing
+• Optional on-device AI tagging helps the feed understand images beyond their tags. Nothing is uploaded.
+
+<b>Make it yours</b>
+• Theme presets or your own colors and fonts
+• Separate profiles, each with its own sources, filters and learned taste
+• Export a profile to move it to another device
+• Analytics of your top tags, favorites and watch time
+
+<b>Open source</b>
+BooruRamen is free software under the GPLv3. The source code is on GitHub at github.com/SoupDevs/BooruRamen.
+
+BooruRamen is an independent viewer. It is not affiliated with or endorsed by any of the sites it can browse; all images belong to their respective artists and are loaded directly from the sites that host them.

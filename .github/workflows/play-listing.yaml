@@ -1,0 +1,62 @@
+name: "Google Play: Update store listing"
+
+# Pushes the store listing kept in fastlane/metadata/android to Google Play:
+# title, short and full description, app icon, feature graphic and phone
+# screenshots. Edit those files in a PR, merge, then run this from the
+# Actions tab. Release notes are not touched (the upload workflow writes
+# them per release).
+#
+# Needs the PLAY_SERVICE_ACCOUNT_JSON secret (see docs/PLAY_STORE.md).
+
+on:
+  workflow_dispatch:
+    inputs:
+      images:
+        description: Also upload the icon, feature graphic and screenshots
+        type: boolean
+        default: true
+
+concurrency:
+  group: play-store-upload
+  cancel-in-progress: false
+
+jobs:
+  listing:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the Play credentials
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$PLAY_JSON" ]; then
+            echo "::error::The PLAY_SERVICE_ACCOUNT_JSON secret is not set. See docs/PLAY_STORE.md."
+            exit 1
+          fi
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install fastlane
+        run: gem install fastlane -N
+
+      - name: Upload the listing
+        env:
+          PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          SKIP_IMAGES: ${{ !inputs.images }}
+        run: |
+          fastlane supply \
+            --package_name com.booruramen.app \
+            --json_key_data "$PLAY_JSON" \
+            --metadata_path fastlane/metadata/android \
+            --skip_upload_apk true \
+            --skip_upload_aab true \
+            --skip_upload_changelogs true \
+            --skip_upload_images "$SKIP_IMAGES" \
+            --skip_upload_screenshots "$SKIP_IMAGES" \
+            --sync_image_upload true
+          echo "Store listing updated from fastlane/metadata/android." >> "$GITHUB_STEP_SUMMARY"
