@@ -34,6 +34,25 @@ your taste. Everything it learns stays on your device.
   sources, filters and learned preferences, and export them to move between
   devices.
 
+## Help bring BooruRamen to Google Play
+
+BooruRamen is in closed testing on Google Play. Google needs at least 12
+testers to stay in the test for 14 days before the app can go public. If you
+have an Android phone, you can help:
+
+1. Join the tester group:
+   [groups.google.com/g/booruramen-closed-alpha-01](https://groups.google.com/g/booruramen-closed-alpha-01)
+2. Become a tester:
+   [play.google.com/apps/testing/com.booruramen.app](https://play.google.com/apps/testing/com.booruramen.app)
+3. Install it from
+   [Google Play](https://play.google.com/store/apps/details?id=com.booruramen.app)
+   and open it every few days.
+
+Use the same Google account for all three steps. The Play version updates
+through Google Play. It is signed differently from the APK below, so
+uninstall the APK first (export your profile under Profile → Profiles to keep
+your taste profile).
+
 ## Getting started
 
 Download the latest version from the
