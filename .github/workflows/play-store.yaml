@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to build, e.g. v0.19.0 (empty = latest release)
+        description: Release tag to build, e.g. v1.0.0 (empty = newest version tag)
         type: string
         default: ''
       track:
@@ -65,7 +65,11 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           if [ -z "$TAG" ]; then
-            TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+            # The newest vX.Y.Z tag, not the newest GitHub release: the
+            # release workflow tags first and publishes the release about 15
+            # minutes later, and in between "latest release" is the old one.
+            TAG=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" --paginate --jq '.[].ref' \
+              | sed 's#^refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
           fi
           if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             echo "::error::'$TAG' is not a vX.Y.Z release tag"

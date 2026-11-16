@@ -166,7 +166,8 @@ jobs:
   # Google Play: upload the new release's app bundle to a test track. Off
   # until the repository variable PLAY_STORE_ENABLED is "true" (set it after
   # the first manual upload, see docs/PLAY_STORE.md). PLAY_TRACK picks the
-  # track (default internal); promote it with "Google Play: Promote".
+  # track (default internal), PLAY_RELEASE_STATUS the status (default
+  # completed); promote it with "Google Play: Promote".
   play-store:
     needs: [prepare, release]
     if: ${{ vars.PLAY_STORE_ENABLED == 'true' }}
@@ -176,5 +177,8 @@ jobs:
     with:
       tag: v${{ needs.prepare.outputs.new_version }}
       track: ${{ vars.PLAY_TRACK || 'internal' }}
+      # Google only takes draft releases until the app is published, so set
+      # PLAY_RELEASE_STATUS to "draft" until then (roll them out in the Console).
+      status: ${{ vars.PLAY_RELEASE_STATUS || 'completed' }}
       build: ${{ needs.prepare.outputs.build }}
     secrets: inherit
